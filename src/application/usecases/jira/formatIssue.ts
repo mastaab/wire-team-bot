@@ -3,7 +3,10 @@ import type { IssueReply, IssueSnapshot, IssueStatusCategory, SlaSummary } from 
 const REPLY_BODY_MAX = 500;
 
 /** The footer ReplyToServiceDesk appends to replies it sends. */
-const OWN_REPLY_FOOTER = /\s*Sent from Wire \(ACT-\d+\)\.\s*$/;
+export const REPLY_FOOTER = "Sent from Wire.";
+
+/** The current footer and the older one naming an action, as found on replies already in the tracker. */
+const OWN_REPLY_FOOTER = /\s*Sent from Wire(?: \(ACT-\d+\))?\.\s*$/;
 
 /** English label for a status category. Tracker status names are localised, so they are never shown. */
 export function statusLabel(category: IssueStatusCategory): string {
@@ -75,9 +78,9 @@ function formatReplyTime(date: Date, timeZone: string): string {
 
 export function formatResolution(snapshot: IssueSnapshot): string {
   if (snapshot.statusCategory !== "done") {
-    return `I'm afraid I couldn't move **${snapshot.key}** to Done in Jira; it is now ${statusLabel(snapshot.statusCategory)}.`;
+    return `I'm afraid I couldn't resolve **${snapshot.key}** with the service desk; it is now ${statusLabel(snapshot.statusCategory)}.`;
   }
-  return [`Closed **${snapshot.key}** in Jira.`, ...snapshot.slas.map(formatSla)].join("\n");
+  return [`Resolved **${snapshot.key}** with the service desk.`, ...snapshot.slas.map(formatSla)].join("\n");
 }
 
 /** Jira rounds durations under a minute down to "0m"; say so plainly instead. */

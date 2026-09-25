@@ -4,7 +4,6 @@ import type { ConfirmOfferHandlers } from "../../src/application/usecases/jira/C
 import { InMemoryPendingOfferStore } from "../../src/infrastructure/services/InMemoryPendingOfferStore";
 import type { OfferCommand, PendingOfferStore } from "../../src/application/services/offers";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
-import type { Action } from "../../src/domain/entities/Action";
 
 const convId: QualifiedId = { id: "conv-1", domain: "wire.com" };
 const alice: QualifiedId = { id: "user-1", domain: "wire.com" };
@@ -27,7 +26,7 @@ describe("classifyConfirmation", () => {
   });
 
   it.each([
-    "", "   ", "yes but change the owner first", "no, raise ACT-0002 instead", "maybe", "thanks", "please",
+    "", "   ", "yes but change the summary first", "no, resolve DS-7 instead", "maybe", "thanks", "please",
     "yes yes", "what is the status of DS-42?", "okay so what's next", "yesterday", "ok ok",
     "ok", "okay", "sure", "ok thanks", "ok, thanks", "sure please", "y", "OK!",
   ])("does not treat %j as a confirmation", (text) => {
@@ -37,48 +36,21 @@ describe("classifyConfirmation", () => {
     expect(isAcknowledgement(text)).toBe(true);
   });
 
-  it.each(["yes", "no", "what is due today?", "ok so what's next", "okay raise ACT-2 instead"])("does not treat %j as a bare acknowledgement", (text) => {
+  it.each(["yes", "no", "what is due today?", "ok so what's next", "okay resolve DS-7 instead"])("does not treat %j as a bare acknowledgement", (text) => {
     expect(isAcknowledgement(text)).toBe(false);
   });
 });
 
-function makeAction(overrides: Partial<Action> = {}): Action {
-  return {
-    id: "ACT-0010",
-    description: "Send the security questionnaire",
-    rawMessageId: "",
-    assigneeId: bob,
-    assigneeName: "Bob",
-    creatorId: alice,
-    authorName: "Alice",
-    conversationId: convId,
-    deadline: null,
-    status: "open",
-    linkedIds: ["jira:DS-42"],
-    reminderAt: [],
-    completionNote: null,
-    timestamp: now,
-    updatedAt: now,
-    tags: [],
-    deleted: false,
-    version: 1,
-    ...overrides,
-  };
-}
+const SUPPORT: OfferCommand = { kind: "support", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes." };
+const REPLY: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops after the reset." };
+const RESOLVE: OfferCommand = { kind: "resolve", issueKey: "DS-6" };
 
-function setup(options: { store?: PendingOfferStore; clock?: () => Date; found?: Action | null } = {}) {
+function setup(options: { store?: PendingOfferStore; clock?: () => Date } = {}) {
   const store = options.store ?? new InMemoryPendingOfferStore();
   const handlers = {
-    actions: {
-      findById: vi.fn().mockResolvedValue(options.found === undefined ? makeAction() : options.found),
-      query: vi.fn(),
-      update: vi.fn(),
-      create: vi.fn(),
-      nextId: vi.fn(),
-    },
-    pushActionToJira: { execute: vi.fn().mockResolvedValue(null) },
-    updateActionStatus: { execute: vi.fn().mockResolvedValue(null) },
+    raiseSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
     replyToServiceDesk: { execute: vi.fn().mockResolvedValue(true) },
+    resolveSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
   };
   const sent: string[] = [];
   const wire = {
@@ -94,12 +66,12 @@ function setup(options: { store?: PendingOfferStore; clock?: () => Date; found?:
   return { store, handlers, wire, sent, useCase, offer };
 }
 
-const input = { conversationId: convId, requesterId: alice, timezone: "Europe/Berlin", replyToMessageId: "msg-9" };
+const input = { conversationId: convId, requesterId: alice, requesterName: "Alice", replyToMessageId: "msg-9" };
 
 function expectNothingDispatched(handlers: ReturnType<typeof setup>["handlers"]): void {
-  expect(handlers.pushActionToJira.execute).not.toHaveBeenCalled();
-  expect(handlers.updateActionStatus.execute).not.toHaveBeenCalled();
+  expect(handlers.raiseSupportRequest.execute).not.toHaveBeenCalled();
   expect(handlers.replyToServiceDesk.execute).not.toHaveBeenCalled();
+  expect(handlers.resolveSupportRequest.execute).not.toHaveBeenCalled();
 }
 
 describe("ConfirmOffer", () => {
@@ -107,7 +79,7 @@ describe("ConfirmOffer", () => {
     const store = { put: vi.fn(), take: vi.fn(), has: vi.fn(), clearConversation: vi.fn() };
     const { handlers, wire, useCase } = setup({ store });
 
-    expect(await useCase.execute({ ...input, text: "yes but change the owner first" })).toBe(false);
+    expect(await useCase.execute({ ...input, text: "yes but change the summary first" })).toBe(false);
 
     expect(store.has).not.toHaveBeenCalled();
     expect(store.take).not.toHaveBeenCalled();
@@ -124,101 +96,74 @@ describe("ConfirmOffer", () => {
     expect(wire.sendPlainText).not.toHaveBeenCalled();
   });
 
-  it("raises the action with the requester as actor", async () => {
+  it("raises the offered support request for the requester, with their display name", async () => {
     const { handlers, useCase, offer } = setup();
-    offer({ kind: "raise", actionId: "ACT-0010" });
+    offer(SUPPORT);
 
     expect(await useCase.execute({ ...input, text: "Yes please" })).toBe(true);
 
-    expect(handlers.pushActionToJira.execute).toHaveBeenCalledWith({
-      actionId: "ACT-0010", conversationId: convId, actorId: alice, timezone: "Europe/Berlin", replyToMessageId: "msg-9",
+    expect(handlers.raiseSupportRequest.execute).toHaveBeenCalledWith({
+      summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes.",
+      conversationId: convId, requesterId: alice, requesterName: "Alice", replyToMessageId: "msg-9",
     });
-    expect(handlers.updateActionStatus.execute).not.toHaveBeenCalled();
+    expect(handlers.replyToServiceDesk.execute).not.toHaveBeenCalled();
+    expect(handlers.resolveSupportRequest.execute).not.toHaveBeenCalled();
+  });
+
+  it("passes no display name through when none was resolved", async () => {
+    const { handlers, useCase, offer } = setup();
+    offer(SUPPORT);
+
+    await useCase.execute({ conversationId: convId, requesterId: alice, text: "yes" });
+
+    expect(handlers.raiseSupportRequest.execute).toHaveBeenCalledWith(expect.objectContaining({ requesterName: undefined }));
+  });
+
+  it("sends the offered reply with the requester as actor", async () => {
+    const { handlers, useCase, offer } = setup();
+    offer(REPLY);
+
+    expect(await useCase.execute({ ...input, text: "go ahead" })).toBe(true);
+
+    expect(handlers.replyToServiceDesk.execute).toHaveBeenCalledWith({
+      reference: "DS-6", body: "It still drops after the reset.", conversationId: convId, actorId: alice, replyToMessageId: "msg-9",
+    });
+    expect(handlers.raiseSupportRequest.execute).not.toHaveBeenCalled();
+    expect(handlers.resolveSupportRequest.execute).not.toHaveBeenCalled();
+  });
+
+  it("resolves the offered support request with the requester as actor", async () => {
+    const { handlers, useCase, offer } = setup();
+    offer(RESOLVE);
+
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+    expect(handlers.resolveSupportRequest.execute).toHaveBeenCalledWith({
+      issueKey: "DS-6", conversationId: convId, actorId: alice, replyToMessageId: "msg-9",
+    });
+    expect(handlers.raiseSupportRequest.execute).not.toHaveBeenCalled();
     expect(handlers.replyToServiceDesk.execute).not.toHaveBeenCalled();
   });
 
-  it("closes the action by marking it done with the requester as actor", async () => {
-    const { handlers, useCase, offer } = setup();
-    offer({ kind: "close", actionId: "ACT-0010" });
-
-    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-
-    expect(handlers.actions.findById).toHaveBeenCalledWith("ACT-0010");
-    expect(handlers.updateActionStatus.execute).toHaveBeenCalledWith({
-      actionId: "ACT-0010", newStatus: "done", conversationId: convId, actorId: alice, replyToMessageId: "msg-9",
-    });
-    expect(handlers.pushActionToJira.execute).not.toHaveBeenCalled();
-  });
-
   it.each([
-    ["missing", null],
-    ["deleted", makeAction({ deleted: true })],
-    ["in another conversation", makeAction({ conversationId: { id: "conv-2", domain: "wire.com" } })],
-    ["in the same conversation ID on another domain", makeAction({ conversationId: { id: "conv-1", domain: "other.example" } })],
-  ])("does not close an action that is %s and consumes the offer", async (_label, found) => {
-    const { handlers, wire, sent, store, useCase, offer } = setup({ found });
-    offer({ kind: "close", actionId: "ACT-0010" });
-
-    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-
-    expect(sent).toEqual(["I'm afraid I can't find **ACT-0010** in this conversation."]);
-    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
-    expectNothingDispatched(handlers);
-    expect(store.has(convId, alice, now)).toBe(false);
-  });
-
-  it.each([
-    ["already done", makeAction({ status: "done" })],
-    ["cancelled", makeAction({ status: "cancelled" })],
-    ["no longer linked to Jira", makeAction({ linkedIds: ["DEC-0001"] })],
-  ])("does not close an action that is %s since the offer and consumes the offer", async (_label, found) => {
-    const { handlers, wire, sent, store, useCase, offer } = setup({ found });
-    offer({ kind: "close", actionId: "ACT-0010" });
-
-    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-
-    expect(sent).toEqual(["I'm afraid **ACT-0010** has changed since I asked, so I haven't changed anything."]);
-    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
-    expectNothingDispatched(handlers);
-    expect(store.has(convId, alice, now)).toBe(false);
-  });
-
-  it("does not read the action for a raise or a reply", async () => {
-    const { handlers, useCase, offer } = setup();
-    offer({ kind: "raise", actionId: "ACT-0010" });
-    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-    offer({ kind: "reply", issueKey: "DS-42", body: "Hello" });
-    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-
-    expect(handlers.actions.findById).not.toHaveBeenCalled();
-  });
-
-  it("does not confirm on a casual acknowledgement and keeps the offer", async () => {
+    [SUPPORT, "I need a clear yes or no, so I haven't raised anything with the service desk yet. Shall I raise it (yes or no)?"],
+    [REPLY, "I need a clear yes or no, so I haven't sent the reply to **DS-6** yet. Shall I send it (yes or no)?"],
+    [RESOLVE, "I need a clear yes or no, so I haven't resolved **DS-6** yet. Shall I resolve it with the service desk (yes or no)?"],
+  ])("asks again after an acknowledgement for a %j offer, keeps it, and a following yes still confirms it", async (command, question) => {
     const { handlers, wire, store, useCase, offer } = setup();
-    offer({ kind: "close", actionId: "ACT-0010" });
-
-    expect(await useCase.execute({ ...input, text: "ok thanks" })).toBe(true);
-
-    expectNothingDispatched(handlers);
-    expect(wire.sendPlainText).toHaveBeenCalledWith(convId,
-      "I need a clear yes or no, so I haven't closed anything yet. Shall I mark **ACT-0010** done and close its Jira ticket (yes or no)?",
-      { replyToMessageId: input.replyToMessageId });
-    expect(store.has(convId, alice, now)).toBe(true);
-  });
-
-  it.each([
-    [{ kind: "raise", actionId: "ACT-0010" } as const, "I need a clear yes or no, so I haven't raised **ACT-0010** in Jira yet. Shall I raise it (yes or no)?"],
-    [{ kind: "reply", issueKey: "DS-42", body: "Attached." } as const, "I need a clear yes or no, so I haven't sent the reply to **DS-42** yet. Shall I send it (yes or no)?"],
-  ])("asks again after an acknowledgement for a %j offer, and a following yes still confirms it", async (command, question) => {
-    const { handlers, wire, useCase, offer } = setup();
     offer(command);
 
-    expect(await useCase.execute({ ...input, text: "ok" })).toBe(true);
+    expect(await useCase.execute({ ...input, text: "ok thanks" })).toBe(true);
     expect(wire.sendPlainText).toHaveBeenCalledWith(convId, question, { replyToMessageId: input.replyToMessageId });
     expectNothingDispatched(handlers);
+    expect(store.has(convId, alice, now)).toBe(true);
 
     expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-    const dispatched = command.kind === "raise" ? handlers.pushActionToJira.execute : handlers.replyToServiceDesk.execute;
+    const dispatched = {
+      support: handlers.raiseSupportRequest.execute,
+      reply: handlers.replyToServiceDesk.execute,
+      resolve: handlers.resolveSupportRequest.execute,
+    }[command.kind];
     expect(dispatched).toHaveBeenCalledTimes(1);
   });
 
@@ -229,20 +174,9 @@ describe("ConfirmOffer", () => {
     expect(wire.sendPlainText).not.toHaveBeenCalled();
   });
 
-  it("sends the offered reply with the requester as actor", async () => {
-    const { handlers, useCase, offer } = setup();
-    offer({ kind: "reply", issueKey: "DS-42", body: "Section 3 is attached." });
-
-    expect(await useCase.execute({ ...input, text: "go ahead" })).toBe(true);
-
-    expect(handlers.replyToServiceDesk.execute).toHaveBeenCalledWith({
-      reference: "DS-42", body: "Section 3 is attached.", conversationId: convId, actorId: alice, replyToMessageId: "msg-9",
-    });
-  });
-
-  it("cancels on no and consumes the offer", async () => {
+  it.each([SUPPORT, REPLY, RESOLVE])("cancels a %j offer on no and consumes it", async (command) => {
     const { handlers, wire, sent, store, useCase, offer } = setup();
-    offer({ kind: "raise", actionId: "ACT-0010" });
+    offer(command);
 
     expect(await useCase.execute({ ...input, text: "no thanks" })).toBe(true);
 
@@ -256,17 +190,17 @@ describe("ConfirmOffer", () => {
 
   it("consumes the offer once", async () => {
     const { handlers, useCase, offer } = setup();
-    offer({ kind: "raise", actionId: "ACT-0010" });
+    offer(SUPPORT);
 
     expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
     expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
 
-    expect(handlers.pushActionToJira.execute).toHaveBeenCalledTimes(1);
+    expect(handlers.raiseSupportRequest.execute).toHaveBeenCalledTimes(1);
   });
 
   it("ignores another member's yes and keeps the requester's offer", async () => {
     const { handlers, store, useCase, offer } = setup();
-    offer({ kind: "raise", actionId: "ACT-0010" });
+    offer(RESOLVE);
 
     expect(await useCase.execute({ ...input, requesterId: bob, text: "yes" })).toBe(false);
     expect(await useCase.execute({ ...input, requesterId: { id: alice.id, domain: "other.example" }, text: "yes" })).toBe(false);
@@ -274,12 +208,12 @@ describe("ConfirmOffer", () => {
     expectNothingDispatched(handlers);
     expect(store.has(convId, alice, now)).toBe(true);
     expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
-    expect(handlers.pushActionToJira.execute).toHaveBeenCalledTimes(1);
+    expect(handlers.resolveSupportRequest.execute).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a yes in another conversation", async () => {
     const { handlers, useCase, offer } = setup();
-    offer({ kind: "raise", actionId: "ACT-0010" });
+    offer(SUPPORT);
 
     expect(await useCase.execute({ ...input, conversationId: { id: "conv-2", domain: "wire.com" }, text: "yes" })).toBe(false);
 
@@ -290,11 +224,12 @@ describe("ConfirmOffer", () => {
     const expiresAt = new Date(now.getTime() + 60_000);
     let clock = now;
     const { handlers, wire, useCase, offer } = setup({ clock: () => clock });
-    offer({ kind: "raise", actionId: "ACT-0010" }, alice, expiresAt);
+    offer(SUPPORT, alice, expiresAt);
 
     clock = expiresAt;
     expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
     expect(await useCase.execute({ ...input, text: "no" })).toBe(false);
+    expect(await useCase.execute({ ...input, text: "ok" })).toBe(false);
 
     expectNothingDispatched(handlers);
     expect(wire.sendPlainText).not.toHaveBeenCalled();
@@ -302,7 +237,7 @@ describe("ConfirmOffer", () => {
 
   it("does nothing after the conversation's offers are cleared", async () => {
     const { handlers, store, useCase, offer } = setup();
-    offer({ kind: "close", actionId: "ACT-0010" });
+    offer(RESOLVE);
     store.clearConversation(convId);
 
     expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);

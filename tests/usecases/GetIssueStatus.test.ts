@@ -1,112 +1,92 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
 import { formatIssueStatus, formatReplies, formatResolution, formatSla, statusLabel } from "../../src/application/usecases/jira/formatIssue";
-import type { IssueSnapshot, IssueTrackerPort } from "../../src/application/ports/IssueTrackerPort";
-import type { ActionRepository } from "../../src/domain/repositories/ActionRepository";
-import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
-import type { Action } from "../../src/domain/entities/Action";
+import type { IssueSnapshot } from "../../src/application/ports/IssueTrackerPort";
+import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
+import { OUT_OF_SCOPE, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
 
-const convId: QualifiedId = { id: "conv-1", domain: "wire.com" };
+const snapshot = makeSnapshot();
 
-function makeAction(overrides: Partial<Action> = {}): Action {
-  return {
-    id: "ACT-0004",
-    description: "Prepare the security questionnaire",
-    rawMessageId: "",
-    assigneeId: { id: "user-2", domain: "wire.com" },
-    assigneeName: "Bob",
-    creatorId: { id: "user-1", domain: "wire.com" },
-    authorName: "Alice",
-    conversationId: convId,
-    deadline: null,
-    status: "open",
-    linkedIds: ["jira:DS-42"],
-    reminderAt: [],
-    completionNote: null,
-    timestamp: new Date(),
-    updatedAt: new Date(),
-    tags: [],
-    deleted: false,
-    version: 1,
-    ...overrides,
-  };
-}
-
-const snapshot: IssueSnapshot = {
-  key: "DS-42",
-  url: "https://jira.test/browse/DS-42",
-  summary: "Prepare the security questionnaire",
-  statusCategory: "in_progress",
-  slas: [
-    { name: "Time to first response", state: "met", elapsed: "3m", goal: "4h" },
-    { name: "Time to done", state: "running", remaining: "15h", goal: "16h" },
-  ],
-};
-
-function setup(options: { found?: Action | null; queried?: Action[]; tracker?: Partial<IssueTrackerPort> } = {}) {
-  const repo = {
-    findById: vi.fn().mockResolvedValue(options.found === undefined ? makeAction() : options.found),
-    query: vi.fn().mockResolvedValue(options.queried ?? [makeAction()]),
-    update: vi.fn(),
-    create: vi.fn(),
-    nextId: vi.fn(),
-  } satisfies ActionRepository;
-  const tracker = {
-    projectKey: "DS",
-    createIssue: vi.fn(),
-    getIssue: vi.fn().mockResolvedValue(snapshot),
-    resolveIssue: vi.fn(),
-    listCustomerReplies: vi.fn().mockResolvedValue([]),
-    ...options.tracker,
-  };
-  const sent: string[] = [];
-  const wire = {
-    sendPlainText: vi.fn(async (_c: QualifiedId, text: string) => { sent.push(text); }),
-    getUserProfile: vi.fn(),
-    sendCompositePrompt: vi.fn(),
-    sendReaction: vi.fn(),
-    sendFile: vi.fn(),
-  };
-  const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: vi.fn() };
-  const useCase = new GetIssueStatus(repo, tracker, wire, logger);
-  return { repo, tracker, wire, sent, logger, useCase };
+function setup(records: SupportRequest[] = [makeRequest()]) {
+  const requests = makeRequests(records);
+  const tracker = makeTracker();
+  const { wire, sent } = makeWire();
+  const audit = makeAudit();
+  const logger = makeLogger();
+  const useCase = new GetIssueStatus(requests, tracker, wire, audit, logger);
+  return { requests, tracker, wire, sent, audit, logger, useCase };
 }
 
 describe("GetIssueStatus", () => {
-  it("reads the ticket linked from an action reference", async () => {
+  it("reads a support request of this conversation and replies once", async () => {
     const { tracker, wire, sent, useCase } = setup();
 
-    const result = await useCase.execute({ reference: "ACT-0004", conversationId: convId, replyToMessageId: "msg-1" });
+    const result = await useCase.execute({ reference: "ds-6", conversationId: convId, replyToMessageId: "msg-1" });
 
-    expect(result).toBe(snapshot);
-    expect(tracker.getIssue).toHaveBeenCalledWith("DS-42");
+    expect(result).toEqual(snapshot);
+    expect(tracker.getIssue).toHaveBeenCalledWith("DS-6");
     expect(sent).toEqual([formatIssueStatus(snapshot, "No replies from the service desk yet.")]);
     expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-1" });
   });
 
+  it("stores and audits a changed status category", async () => {
+    const { requests, audit, useCase } = setup();
+
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
+
+    expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "in_progress", expect.any(Date));
+    expect(audit.append).toHaveBeenCalledTimes(1);
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: { id: "wire-team-bot", domain: "wire.com" }, conversationId: convId,
+      action: "entity_updated", entityType: "SupportRequest", entityId: "DS-6", details: { statusCategory: "in_progress" },
+    }));
+  });
+
+  it("writes nothing when the status category is unchanged", async () => {
+    const { requests, audit, useCase } = setup([makeRequest({ statusCategory: "in_progress" })]);
+
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
+
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
+  it("still replies when the status refresh fails", async () => {
+    const { requests, sent, logger, useCase } = setup();
+    requests.updateStatusCategory.mockRejectedValue(new Error("db down"));
+
+    expect(await useCase.execute({ reference: "DS-6", conversationId: convId })).toEqual(snapshot);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Status: In progress");
+    expect(logger.warn).toHaveBeenCalledWith("Support request status refresh failed", { key: "DS-6", err: "Error" });
+  });
+
   it("shows the three latest customer replies in the conversation's timezone", async () => {
     const replies = [
-      { author: "Dana Agent", created: new Date("2026-09-25T14:55:00Z"), body: "We have attached the template.\nPlease fill in section 3." },
+      { author: "Dana Agent", created: new Date("2026-09-25T14:55:00Z"), body: "We have reset your VPN profile.\nPlease try again." },
     ];
-    const { tracker, sent, useCase } = setup({ tracker: { listCustomerReplies: vi.fn().mockResolvedValue(replies) } });
+    const { tracker, sent, useCase } = setup();
+    tracker.listCustomerReplies.mockResolvedValue(replies);
 
-    await useCase.execute({ reference: "DS-42", conversationId: convId, timezone: "Europe/Berlin" });
+    await useCase.execute({ reference: "DS-6", conversationId: convId, timezone: "Europe/Berlin" });
 
-    expect(tracker.listCustomerReplies).toHaveBeenCalledWith("DS-42", 3);
+    expect(tracker.listCustomerReplies).toHaveBeenCalledWith("DS-6", 3);
     expect(sent[0]).toContain([
       "Latest reply on the ticket:",
       "",
       "**Dana Agent**, 25 Sept, 16:55",
-      "> We have attached the template.",
-      "> Please fill in section 3.",
+      "> We have reset your VPN profile.",
+      "> Please try again.",
     ].join("\n"));
-    expect(sent[0].endsWith(snapshot.url)).toBe(true);
+    expect(sent[0]!.endsWith(snapshot.url)).toBe(true);
   });
 
   it("keeps the status and says so when the replies cannot be read", async () => {
-    const { sent, logger, useCase } = setup({ tracker: { listCustomerReplies: vi.fn().mockRejectedValue(new Error("SECRET-REPLY-BODY")) } });
+    const { tracker, sent, logger, useCase } = setup();
+    tracker.listCustomerReplies.mockRejectedValue(new Error("SECRET-REPLY-BODY"));
 
-    await useCase.execute({ reference: "DS-42", conversationId: convId });
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
 
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain("Status: In progress");
@@ -114,96 +94,39 @@ describe("GetIssueStatus", () => {
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("SECRET-REPLY-BODY");
   });
 
-  it("does not read replies when the lookup is refused", async () => {
-    const { tracker, useCase } = setup();
+  it.each(OUT_OF_SCOPE)("refuses a key %s with the scope wording, without calling the tracker", async (_label, records, key) => {
+    const { tracker, sent, audit, useCase } = setup(records);
 
-    await useCase.execute({ reference: "OPS-42", conversationId: convId });
+    expect(await useCase.execute({ reference: key, conversationId: convId })).toBeNull();
 
+    expect(sent).toEqual([`I'm afraid **${key}** isn't a support request in this conversation.`]);
+    expect(tracker.getIssue).not.toHaveBeenCalled();
     expect(tracker.listCustomerReplies).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["missing", null],
-    ["deleted", makeAction({ deleted: true })],
-    ["in another conversation", makeAction({ conversationId: { id: "conv-2", domain: "wire.com" } })],
-  ])("gives the identical not-found reply when the action is %s", async (_label, found) => {
-    const { tracker, sent, useCase } = setup({ found });
-
-    expect(await useCase.execute({ reference: "ACT-0004", conversationId: convId })).toBeNull();
-
-    expect(sent).toEqual(["I'm afraid I can't find **ACT-0004** in this conversation."]);
-    expect(tracker.getIssue).not.toHaveBeenCalled();
-  });
-
-  it("explains how to raise a ticket for an unlinked action", async () => {
-    const { tracker, sent, useCase } = setup({ found: makeAction({ linkedIds: ["DEC-0001"] }) });
-
-    expect(await useCase.execute({ reference: "ACT-0004", conversationId: convId })).toBeNull();
-
-    expect(sent).toEqual(["**ACT-0004** isn't linked to a Jira ticket yet. Use `ACT-0004 to jira` to raise one."]);
-    expect(tracker.getIssue).not.toHaveBeenCalled();
-  });
-
-  it("reads a ticket key linked from an action in this conversation", async () => {
-    const { repo, tracker, sent, useCase } = setup();
-
-    expect(await useCase.execute({ reference: "DS-42", conversationId: convId })).toBe(snapshot);
-
-    expect(repo.query).toHaveBeenCalledWith({ conversationId: convId, linkedIdsHas: "jira:DS-42", limit: 20 });
-    expect(tracker.getIssue).toHaveBeenCalledWith("DS-42");
-    expect(sent).toHaveLength(1);
-  });
-
-  it("explains when an action is linked to a ticket outside the configured project", async () => {
-    const { tracker, sent, useCase } = setup({ found: makeAction({ linkedIds: ["jira:SD-9"] }) });
-
-    expect(await useCase.execute({ reference: "ACT-0004", conversationId: convId })).toBeNull();
-
-    expect(sent).toEqual(["I'm afraid **ACT-0004** is linked to **SD-9**, which is outside the DS project I can look up."]);
-    expect(tracker.getIssue).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
   });
 
   it("exposes the configured project key for command matching", () => {
     expect(setup().useCase.projectKey).toBe("DS");
   });
 
-  it("refuses keys from other projects without calling the tracker", async () => {
-    const { repo, tracker, sent, useCase } = setup();
+  it("reports a ticket Jira cannot find without refreshing", async () => {
+    const { tracker, requests, sent, useCase } = setup();
+    tracker.getIssue.mockResolvedValue(null);
 
-    expect(await useCase.execute({ reference: "OPS-42", conversationId: convId })).toBeNull();
+    expect(await useCase.execute({ reference: "DS-6", conversationId: convId })).toBeNull();
 
-    expect(sent).toEqual(["I'm afraid I can only look up tickets in the DS project."]);
-    expect(repo.query).not.toHaveBeenCalled();
-    expect(tracker.getIssue).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["no action links it", [makeAction({ linkedIds: ["jira:DS-7"] })]],
-    ["only a deleted action links it", [makeAction({ deleted: true })]],
-    ["only another conversation's action links it", [makeAction({ conversationId: { id: "conv-2", domain: "wire.com" } })]],
-  ])("refuses an in-project key when %s, without calling the tracker", async (_label, queried) => {
-    const { tracker, sent, useCase } = setup({ queried });
-
-    expect(await useCase.execute({ reference: "DS-42", conversationId: convId })).toBeNull();
-
-    expect(sent).toEqual(["I'm afraid **DS-42** isn't linked to an action in this conversation."]);
-    expect(tracker.getIssue).not.toHaveBeenCalled();
-  });
-
-  it("reports a ticket Jira cannot find", async () => {
-    const { sent, useCase } = setup({ tracker: { getIssue: vi.fn().mockResolvedValue(null) } });
-
-    expect(await useCase.execute({ reference: "DS-42", conversationId: convId })).toBeNull();
-
-    expect(sent).toEqual(["I'm afraid I couldn't find **DS-42** in Jira."]);
+    expect(sent).toEqual(["I'm afraid I couldn't find **DS-6** in Jira."]);
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
   });
 
   it("reports an unreachable tracker", async () => {
-    const { sent, useCase } = setup({ tracker: { getIssue: vi.fn().mockRejectedValue(new Error("timeout")) } });
+    const { tracker, sent, logger, useCase } = setup();
+    tracker.getIssue.mockRejectedValue(new Error("timeout"));
 
-    expect(await useCase.execute({ reference: "ACT-0004", conversationId: convId })).toBeNull();
+    expect(await useCase.execute({ reference: "DS-6", conversationId: convId })).toBeNull();
 
     expect(sent).toEqual(["I'm afraid I couldn't reach Jira just now."]);
+    expect(logger.warn).toHaveBeenCalledWith("GetIssueStatus: getIssue failed", { err: "Error" });
   });
 });
 
@@ -252,20 +175,21 @@ describe("formatIssue", () => {
 
   it("formats an issue status without the tracker's localised status name", () => {
     expect(formatIssueStatus(snapshot)).toBe([
-      "**DS-42** Prepare the security questionnaire",
+      "**DS-6** VPN drops every ten minutes",
       "Status: In progress",
       "Time to first response: met in 3m (target 4h)",
       "Time to done: running, 15h left of 16h",
-      "https://jira.test/browse/DS-42",
+      "https://jira.test/browse/DS-6",
     ].join("\n"));
   });
 
   it("formats a successful resolution with its SLA outcome", () => {
     const done: IssueSnapshot = { ...snapshot, statusCategory: "done", slas: [{ name: "Time to done", state: "met", elapsed: "3m", goal: "16h" }] };
-    expect(formatResolution(done)).toBe("Closed **DS-42** in Jira.\nTime to done: met in 3m (target 16h)");
+    expect(formatResolution(done)).toBe("Resolved **DS-6** with the service desk.\nTime to done: met in 3m (target 16h)");
   });
 
   it("reports the actual state when Done was not reached", () => {
-    expect(formatResolution(snapshot)).toBe("I'm afraid I couldn't move **DS-42** to Done in Jira; it is now In progress.");
+    expect(formatResolution(snapshot)).toBe("I'm afraid I couldn't resolve **DS-6** with the service desk; it is now In progress.");
   });
 });
+
