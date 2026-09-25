@@ -2,7 +2,8 @@ import type { QueryPlan } from "./QueryAnalysisPort";
 
 export interface RetrievalResult {
   id: string;
-  type: "decision" | "action" | "entity" | "signal" | "summary";
+  /** `jira_ticket` carries live ticket data and is only produced when sharing it with the model is enabled. */
+  type: "decision" | "action" | "entity" | "signal" | "summary" | "jira_ticket";
   content: string;
   sourceChannel: string;
   sourceDate: Date;

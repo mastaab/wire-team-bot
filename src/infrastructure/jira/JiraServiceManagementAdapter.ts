@@ -234,6 +234,11 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
     return replies.slice(-limit);
   }
 
+  async addCustomerReply(key: string, _body: string): Promise<void> {
+    this.assertInProject(key);
+    throw new IssueTrackerError("Adding replies is not implemented yet");
+  }
+
   private async requireIssue(key: string): Promise<IssueSnapshot> {
     const snapshot = await this.getIssue(key);
     if (!snapshot) throw new IssueTrackerError("Jira request failed (404)", 404);

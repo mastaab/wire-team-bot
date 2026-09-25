@@ -1682,7 +1682,7 @@ Found on 2026-09-25 in the Wire staging session: "whats the status of DS-4" and 
 - **Natural status questions:** `matchIssueStatusRequest` keeps the exact commands and, only when the bot is addressed, also accepts natural phrasing that names exactly one key of the configured project (or one action ID with "jira" or "ticket") with a status word or a question mark. Change requests ("close", "mark", "reply to", "raise") are left to Q&A, so the read-only lookup never answers them.
 - **Integration awareness:** when Jira is configured, the answer model's system prompt states the integration and its commands, forbids denying it, and forbids stating or guessing a ticket's status. Retrieved actions show their linked key as `Jira: DS-NN`. No ticket content, status or reply reaches the model; the answer path stays read-only.
 - **Evidence:** 569 tests pass. Real-model CLI check: the natural question returned the live DS-2 status and replies; "can you put the questionnaire action into Jira?" answered that ACT-0005 is already linked to DS-2 and gave `status of DS-2`; asking by name found the link without guessing its status; "what can you do with Jira?" listed the commands.
-- **Next options (not started):** give the answer model live ticket status and customer replies (decided below); confirmed conversational writes ("Shall I raise ACT-0010 in Jira?", then yes, running the existing audited use case after code validates the ID and scope); resolving names and "it" to records within the channel; and replying to the service desk from Wire.
+- **Next options:** now being built, see the second step below. They were: give the answer model live ticket status and customer replies (decided below); confirmed conversational writes ("Shall I raise ACT-0010 in Jira?", then yes, running the existing audited use case after code validates the ID and scope); resolving names and "it" to records within the channel; and replying to the service desk from Wire.
 
 ### Decision: ticket content and the answer model (2026-09-25)
 
@@ -1696,6 +1696,25 @@ Requirements when this is built:
 - README documents the setting next to the model configuration and states plainly that, with a remote provider, ticket status and customer replies are sent to that provider.
 - For production, prefer a local model endpoint when the setting is on, or leave it off and keep the command-based lookups, which show ticket content in Wire without passing it to a model.
 - Revisit this decision before any production or customer-hosted deployment, together with the provider's data-handling terms and the customer's own policy.
+
+### Conversational Jira, second step
+
+Requested 2026-09-25: build the recorded next options. Resolving names and "it" is covered by the offers below: the model proposes a record ID from the channel's records, code validates it, and a person confirms.
+
+**A. Live ticket data for the answer model.** Only with `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on` (default off; see the decision above). For actions in the retrieval results that are linked to a ticket in the configured project, and for ticket keys named in the question that are linked from this conversation, `AnswerQuestion` fetches status, SLAs and up to three customer replies and passes them as `jira_ticket` results under a "Linked Jira tickets" heading. Internal notes never appear, because the adapter excludes them. Without the setting, the model sees ticket keys only, as today. Ticket content is never stored or logged.
+
+**B. Confirmed actions from plain language.** When the requester asks the bot to raise an action in Jira, close an action and its ticket, or send a reply to a linked ticket, the answer model may end its answer with one machine-readable line, `OFFER: {"kind":"raise","actionId":"ACT-0010"}` (kinds `raise`, `close`, `reply`). Code, not the model, then:
+- parses and strips the line (`parseOfferMarker`), so a raw marker is never shown;
+- validates it: the action exists in this qualified conversation and is not deleted; `raise` needs an open, unlinked action; `close` needs an action that is not done and is linked to a ticket in the project; `reply` needs a project key linked from this conversation and a non-empty body within the length limit. Anything invalid is dropped;
+- writes the question itself from the validated data, for example `Shall I raise **ACT-0010** "Write the customer proposal" in Jira? Reply yes or no.`, and stores the offer for that requester in that conversation for ten minutes.
+
+A later `yes` from the same requester runs the existing audited use case (`PushActionToJira`, `UpdateActionStatus` to done, or `ReplyToServiceDesk`), which re-checks scope and state at that moment. `no` cancels. The router checks for a pending offer before its existing follow-up handling, which would otherwise send the `yes` to the read-only Q&A path. Offers are in memory, one per requester per conversation, and are cleared when the channel is paused or put in secure mode. The model never performs or claims a write.
+
+**C. Replying to the service desk from Wire.** `reply to DS-NN: <text>` or `reply to ACT-NNNN: <text>` sends a customer-facing reply (a public comment through the Service Management API) to a ticket linked from this conversation, with the footer `Sent from Wire (ACT-NNNN).` and no requester name, and audits it. The same is available as a confirmed offer. In `status of`, replies sent by the bot's service account are labelled "Your team (via Wire)".
+
+**Work split.** Main session: this contract (setting, port additions, offer types and marker parser, `jira_ticket` result type), then router integration (offer confirmation before follow-ups, the reply command, clearing offers on pause and secure, multi-command guard), wiring and docs. Three subagents in parallel worktrees: the answer side (A and offer creation in `AnswerQuestion` and the answer adapter), the action side (offer store, `ConfirmOffer`, `ReplyToServiceDesk`, reply labelling), and the adapter (`addCustomerReply`, identifying the bot's own replies). Then an independent review and live checks; writes to DS need operator approval.
+
+**Acceptance.** Unit tests for each part, including: the setting off sends no ticket content; invalid, cross-conversation, deleted, already-linked or out-of-project offers are dropped; a `yes` from another member, an expired offer, or after pause does nothing; confirmation re-validates state; replies carry no requester name; the bot's own replies are labelled. Real-model CLI checks for offers and ticket-aware answers. A live DS check of one reply sent from Wire, with approval.
 
 ### Out of scope for the demo
 

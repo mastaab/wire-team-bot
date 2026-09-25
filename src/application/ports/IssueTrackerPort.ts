@@ -40,8 +40,13 @@ export interface CreateIssueRequest {
 export interface IssueReply {
   author: string;
   created: Date;
-  /** Plain text as entered in the tracker. Show it; never store, log or pass it to a model. */
+  /**
+   * Plain text as entered in the tracker. Show it; never store or log it. It reaches the
+   * answer model only when sharing ticket content with the model is explicitly enabled.
+   */
   body: string;
+  /** True when the reply was sent by this bot's own tracker account (from Wire). */
+  fromThisBot?: boolean;
 }
 
 export interface CreatedIssue {
@@ -68,6 +73,8 @@ export interface IssueTrackerPort {
    * internal notes even when the credential could read them.
    */
   listCustomerReplies(key: string, limit: number): Promise<IssueReply[]>;
+  /** Adds a customer-facing reply (never an internal note) to the issue. */
+  addCustomerReply(key: string, body: string): Promise<void>;
 }
 
 /** Tracker failure. Messages never include response bodies or credentials. */

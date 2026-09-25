@@ -97,6 +97,11 @@ export interface JiraConfig {
   serviceDeskId: string;
   requestTypeId: string;
   timeoutMs: number;
+  /**
+   * Whether live ticket status, SLAs and customer replies may be passed to the answer model.
+   * Off by default: with a remote model provider this sends ticket content to that provider.
+   */
+  shareWithModel: boolean;
 }
 
 const JIRA_REQUIRED_KEYS = [
@@ -137,6 +142,8 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
   const projectKey = value("WIRE_TEAM_BOT_JIRA_PROJECT_KEY")!.toUpperCase();
   if (!/^[A-Z][A-Z0-9]+$/.test(projectKey)) throw new Error("WIRE_TEAM_BOT_JIRA_PROJECT_KEY must be a Jira project key");
   const timeout = parseInt(value("WIRE_TEAM_BOT_JIRA_TIMEOUT_MS") ?? "", 10);
+  const share = (value("WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL") ?? "off").toLowerCase();
+  if (share !== "on" && share !== "off") throw new Error("WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL must be on or off");
 
   return {
     baseUrl: httpsUrl("WIRE_TEAM_BOT_JIRA_BASE_URL"),
@@ -147,6 +154,7 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
     serviceDeskId: numericId("WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID"),
     requestTypeId: numericId("WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID"),
     timeoutMs: Number.isFinite(timeout) ? Math.max(1000, timeout) : 15_000,
+    shareWithModel: share === "on",
   };
 }
 

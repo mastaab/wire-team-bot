@@ -39,6 +39,13 @@ describe("resolveJiraConfig", () => {
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_TIMEOUT_MS: "30000" })!.timeoutMs).toBe(30_000);
   });
 
+  it("does not share ticket content with the model unless explicitly enabled", () => {
+    expect(resolveJiraConfig(full)!.shareWithModel).toBe(false);
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "ON" })!.shareWithModel).toBe(true);
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "off" })!.shareWithModel).toBe(false);
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "yes" })).toThrow(/on or off/);
+  });
+
   it("switches to Basic auth when an email is configured", () => {
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_EMAIL: "bot@example.com" })!.email).toBe("bot@example.com");
   });
