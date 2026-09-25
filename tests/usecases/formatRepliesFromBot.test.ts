@@ -8,16 +8,15 @@ describe("formatReplies with the bot's own replies", () => {
     expect(formatReplies([
       { author: "WireTeamBotDemo", created, body: "Section 3 is attached.\n\nSent from Wire (ACT-0004).", fromThisBot: true },
     ], "UTC")).toBe([
-      "Latest reply from the service desk:",
+      "Latest reply on the ticket:",
+      "",
       "**Your team (via Wire)**, 25 Sept, 09:00",
       "> Section 3 is attached.",
-      "> ",
-      "> Sent from Wire (ACT-0004).",
     ].join("\n"));
   });
 
   it("keeps the account name for other replies", () => {
-    const expected = "Latest replies from the service desk:\n**Dana**, 25 Sept, 09:00\n> First\n**Lee**, 25 Sept, 09:00\n> Second";
+    const expected = "Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00\n> First\n\n**Lee**, 25 Sept, 09:00\n> Second";
     expect(formatReplies([
       { author: "Dana", created, body: "First" },
       { author: "Lee", created, body: "Second", fromThisBot: false },
@@ -33,4 +32,26 @@ describe("formatReplies with the bot's own replies", () => {
     expect(text).toContain("**Your team (via Wire)**, 25 Sept, 09:00");
     expect(text).not.toContain("WireTeamBotDemo");
   });
+
+  it("keeps every reply in one unbroken quote and starts each author line outside the quote", () => {
+    // Regression from the Wire staging tour: a blank line inside a reply produced an empty "> "
+    // line, which ended the quote, and the next author line was pulled into the quote above.
+    const text = formatReplies([
+      { author: "WireTeamBotDemo", created, body: "NDA is signed.\n\nSent from Wire (ACT-0012).", fromThisBot: true },
+      { author: "Dana", created, body: "Thanks.\n\nWe will countersign today." },
+    ], "UTC");
+    const lines = text.split("\n");
+    expect(lines).not.toContain("> ");
+    expect(lines).not.toContain(">");
+    for (const author of ["**Your team (via Wire)**, 25 Sept, 09:00", "**Dana**, 25 Sept, 09:00"]) {
+      expect(lines[lines.indexOf(author) - 1]).toBe("");
+    }
+    expect(text).toContain("> Thanks.\n> We will countersign today.");
+    expect(text).not.toContain("Sent from Wire");
+  });
+
+  it("keeps the footer text on replies that were not sent by the bot", () => {
+    expect(formatReplies([{ author: "Dana", created, body: "Quoting: Sent from Wire (ACT-1)." }], "UTC")).toContain("Sent from Wire (ACT-1).");
+  });
 });
+

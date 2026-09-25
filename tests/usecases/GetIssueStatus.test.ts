@@ -94,7 +94,8 @@ describe("GetIssueStatus", () => {
 
     expect(tracker.listCustomerReplies).toHaveBeenCalledWith("DS-42", 3);
     expect(sent[0]).toContain([
-      "Latest reply from the service desk:",
+      "Latest reply on the ticket:",
+      "",
       "**Dana Agent**, 25 Sept, 16:55",
       "> We have attached the template.",
       "> Please fill in section 3.",
@@ -212,7 +213,7 @@ describe("formatIssue", () => {
       { author: "Dana", created: new Date("2026-09-25T09:00:00Z"), body: "First" },
       { author: "Lee", created: new Date("2026-09-25T10:00:00Z"), body: "x".repeat(600) },
     ], "Not/AZone");
-    expect(text.startsWith("Latest replies from the service desk:\n**Dana**, 25 Sept, 09:00\n> First\n**Lee**, 25 Sept, 10:00\n> ")).toBe(true);
+    expect(text.startsWith("Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00\n> First\n\n**Lee**, 25 Sept, 10:00\n> ")).toBe(true);
     expect(text.endsWith(`${"x".repeat(497)}...`)).toBe(true);
   });
 

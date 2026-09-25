@@ -2,6 +2,9 @@ import type { IssueReply, IssueSnapshot, IssueStatusCategory, SlaSummary } from 
 
 const REPLY_BODY_MAX = 500;
 
+/** The footer ReplyToServiceDesk appends to replies it sends. */
+const OWN_REPLY_FOOTER = /\s*Sent from Wire \(ACT-\d+\)\.\s*$/;
+
 /** English label for a status category. Tracker status names are localised, so they are never shown. */
 export function statusLabel(category: IssueStatusCategory): string {
   switch (category) {
@@ -46,13 +49,17 @@ export function formatIssueStatus(snapshot: IssueSnapshot, replies?: string): st
 export function formatReplies(replies: readonly IssueReply[], timeZone: string): string {
   if (replies.length === 0) return "No replies from the service desk yet.";
   const blocks = replies.map((reply) => {
-    const body = reply.body.trim();
+    // The bot's own replies carry a "Sent from Wire" footer; the label already says so.
+    const raw = reply.fromThisBot ? reply.body.replace(OWN_REPLY_FOOTER, "") : reply.body;
+    const body = raw.trim();
     const text = body.length <= REPLY_BODY_MAX ? body : `${body.slice(0, REPLY_BODY_MAX - 3).trimEnd()}...`;
-    const quoted = text.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
+    // Every quoted line is non-empty: an empty "> " line ends the quote in Markdown.
+    const quoted = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`).join("\n");
     const author = reply.fromThisBot ? "Your team (via Wire)" : reply.author;
     return `**${author}**, ${formatReplyTime(reply.created, timeZone)}\n${quoted}`;
   });
-  return [replies.length === 1 ? "Latest reply from the service desk:" : "Latest replies from the service desk:", ...blocks].join("\n");
+  // Blank lines between blocks, so a following author line is not pulled into the quote above.
+  return [replies.length === 1 ? "Latest reply on the ticket:" : "Latest replies on the ticket:", ...blocks].join("\n\n");
 }
 
 function formatReplyTime(date: Date, timeZone: string): string {
