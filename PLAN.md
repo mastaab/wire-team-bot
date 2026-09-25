@@ -1615,18 +1615,18 @@ reason; an implementation or historical passing count alone does not close a rel
 
 ## 6. Customer demo: Jira Service Management integration
 
-This work lives on the `demo/jira` branch. It is a customer demo, not part of the pilot scope in §4, and merging it upstream is the owner's decision. **The action-linked product design described in this section is to be replaced by support requests; see "Rework: support requests replace action tracking in Jira" and the handover at the end of this section.** The integration is off unless every required setting is present, so a deployment without Jira configuration behaves exactly as before.
+This work lives on the `demo/jira` branch. It is a customer demo, not part of the pilot scope in §4, and merging it upstream is the owner's decision. The product is support requests: a team member raises a problem with the service desk from Wire and follows it from Wire. Actions stay internal to the bot. The dated subsections from "Jira replies in Wire" to "Second step: status and evidence" record the earlier build, which linked actions to tickets; its technical layer (adapter, replies, offers, sharing setting, guardrails) carries over, and the rework subsections below define the current product layer. The integration is off unless every required setting is present, so a deployment without Jira configuration behaves exactly as before.
 
 ### Demo story
 
-A service team works in an encrypted Wire channel and escalates agreed work into its Jira Service Management queue without leaving the conversation.
+A team works in an encrypted Wire channel and raises its problems with the Jira Service Management desk without leaving the conversation.
 
-1. **Capture:** `action: Bob to prepare the security questionnaire by Friday` creates `ACT-0004` as today.
-2. **Escalate:** `ACT-0004 to jira` raises a request in the DS service desk, sets its due date, links it to `ACT-0004` and replies with the ticket link. Both SLA clocks start.
-3. **Close from Wire:** `ACT-0004 done` confirms the action as done straight away, then moves the ticket to Done and reports the SLA outcome in a follow-up message, for example "Time to done: met in 3m (target 16h)".
-4. **Ask:** `status of DS-42` (or `jira status of ACT-0004`) reads the live ticket and its SLAs.
+1. **Raise:** `@Wire Team Bot support: My VPN drops every ten minutes` (or in plain language, "my VPN keeps dropping, can you raise it with the service desk?", confirmed with yes) raises DS-6 with the summary, the description and the requester's name, and replies with the link. Both SLA clocks start.
+2. **Follow:** `status of DS-6` or "any news on my VPN issue?" shows the live status, SLAs and the latest replies from the desk; `support requests` and `my support requests` list the open ones.
+3. **Reply:** `@Wire Team Bot reply to DS-6: It happens on the office Wi-Fi only.` sends a customer-facing reply, or the bot offers to send one.
+4. **Resolve:** `@Wire Team Bot resolve DS-6` (or "the VPN works again, please close my request", confirmed with yes) resolves the request and reports the SLA outcome.
 
-The message for security-minded customers: the team's work stays in Wire, and only the actions someone explicitly escalates are sent to Jira, with nothing from the surrounding conversation.
+The message for security-minded customers: the conversation stays in Wire; only what someone explicitly raises or replies is sent to the service desk, never the surrounding messages.
 
 ### Jira environment (verified 2026-09-25)
 
@@ -1645,25 +1645,23 @@ The message for security-minded customers: the team's work stays in Wire, and on
 
 ### Design
 
-- **Port:** `src/application/ports/IssueTrackerPort.ts` (`createIssue`, `getIssue`, `resolveIssue`, `projectKey`). Use cases never call Jira directly.
-- **Adapter:** `src/infrastructure/jira/JiraServiceManagementAdapter.ts` using built-in `fetch`, no new dependency. It creates the request through `POST /rest/servicedeskapi/request` so it is a proper service request in the queues and SLAs, then sets `duedate` and the `wire-team-bot` label with `PUT /rest/api/3/issue/{key}`, because the Service Management API only accepts fields on the customer form. A failed follow-up edit is reported, not hidden.
+- **Port:** `src/application/ports/IssueTrackerPort.ts` (`createIssue`, `getIssue`, `resolveIssue`, `listCustomerReplies`, `addCustomerReply`, `projectKey`). Use cases never call Jira directly.
+- **Adapter:** `src/infrastructure/jira/JiraServiceManagementAdapter.ts` using built-in `fetch`, no new dependency. It creates the request through `POST /rest/servicedeskapi/request` so it is a proper service request in the queues and SLAs, then sets the `wire-team-bot` label (and a due date, when one is given) with `PUT /rest/api/3/issue/{key}`, because the Service Management API only accepts fields on the customer form. A failed follow-up edit is reported, not hidden.
 - **Resolving:** follow transitions by status category, never by name: prefer a `done` target, otherwise an in-progress one, at most three hops. Then poll the SLA endpoint briefly so the reply reports the stopped clock rather than a stale running one. If Done is not reached, report the actual state.
-- **Links:** stored in the existing `Action.linkedIds` as `jira:DS-42` (no migration). The prefix is required because a bare key pattern also matches `DEC-0001`. Helpers in `src/domain/ids/jiraLink.ts`.
-- **Use cases:** `PushActionToJira`, `GetIssueStatus`, and an optional tracker in `UpdateActionStatus` that resolves the linked ticket when an action changes to done (repeating `done` does not touch the ticket). The Wire confirmation is sent before the tracker call, and only the SLA endpoint is re-read while waiting for the clocks to stop.
-- **Concurrency:** `PushActionToJira` re-reads the action after the tracker call so changes made meanwhile are kept, and an in-process guard stops two concurrent requests for the same action creating two tickets (one bot process serves all conversations). A bare Jira key is checked against the conversation with an exact `linkedIdsHas` repository filter.
-- **Commands:** `ACT-NNNN to jira` (also `raise`, `push` or `send ACT-NNNN in jira`), `status of DS-NN` and `jira status of ACT-NNNN`, added to the router and to multi-command detection. Status lookups match only keys of the configured project, so ticket references from other projects in ordinary chat, the bot's own record IDs and a bare `status of ACT-NNNN` keep their existing handling. The multi-command guard recognises the Jira forms only when the integration is configured.
+- **Records:** `SupportRequest` (`support_requests` table), keyed by the Jira key, with the qualified conversation and requester, the requester's display name, the summary and the last known status category. The description is sent to Jira and not stored. See "Rework contract" below.
+- **Use cases:** `RaiseSupportRequest`, `ListSupportRequests`, `GetIssueStatus`, `ReplyToServiceDesk`, `ResolveSupportRequest` and `ConfirmOffer`, each resolving keys through `findSupportRequestInConversation`, so a key is accepted only for a support request raised in the same qualified conversation. Actions are never sent to Jira.
+- **Concurrency:** an in-process guard per conversation and requester stops a double submit from creating two tickets (one bot process serves all conversations).
+- **Commands:** `@Wire Team Bot support: <problem>`, `support requests`, `my support requests`, `status of DS-NN`, `@Wire Team Bot reply to DS-NN: <text>` and `@Wire Team Bot resolve DS-NN` (also `close DS-NN`). Writes need the bot to be addressed. Only keys of the configured project match, so other projects' keys and the bot's own record IDs keep their existing handling; the Jira forms, including the multi-command guard, apply only when the integration is configured.
 - **Configuration:** `WIRE_TEAM_BOT_JIRA_BASE_URL`, `_SITE_URL`, `_API_TOKEN`, `_PROJECT_KEY`, `_SERVICE_DESK_ID`, `_REQUEST_TYPE_ID`, optional `_EMAIL` (Basic auth with a classic token, for rehearsal only) and `_TIMEOUT_MS`. Partial configuration fails at startup.
-- **Due dates:** the action deadline is sent as a calendar date in the conversation's timezone, so an evening deadline does not move to the next day.
 
 ### Guardrails
 
-- Only an explicit `to jira` command sends data to Jira. Passive extraction and the read-only Q&A path never write to it.
-- Only the action's description, owner name, deadline and ID are sent, never surrounding messages.
-- Action lookups keep the qualified-conversation check. A Jira key is accepted only if it belongs to the configured project and is linked from an action in the same conversation, so one channel cannot read another channel's tickets.
+- Only an explicit, addressed command or a confirmed offer writes to Jira. Passive extraction and the read-only Q&A path never write to it.
+- A new request carries the summary, the description the requester gave and `Requested by <display name> via Wire.`, never surrounding messages.
+- A Jira key is accepted only if it belongs to the configured project and is a support request of the same qualified conversation, so one channel cannot read or change another channel's requests.
 - Jira status names are never shown in Wire; replies use English labels derived from the status category.
-- Response bodies and credentials are never logged. A Jira failure never rolls back or blocks the Wire-side change, and the reply says what did and did not happen.
-- Every Jira write is audited through `AuditLogRepository` with the ticket key, including a failed close attempt, since some transitions may already have been applied. Failures are logged with the error name and status only.
-- The requester's name is not sent to Jira; the audit log records who ran the command.
+- Response bodies, reply texts, descriptions and credentials are never logged. Failures are logged with the error name and status only, and the reply says what did and did not happen.
+- Every write is audited through `AuditLogRepository` with the key and the actor, including a failed resolve attempt, since some transitions may already have been applied.
 
 ### Jira replies in Wire (on request)
 
