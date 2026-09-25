@@ -1615,7 +1615,7 @@ reason; an implementation or historical passing count alone does not close a rel
 
 ## 6. Customer demo: Jira Service Management integration
 
-This work lives on the `demo/jira` branch. It is a customer demo, not part of the pilot scope in §4, and merging it upstream is the owner's decision. The integration is off unless every required setting is present, so a deployment without Jira configuration behaves exactly as before.
+This work lives on the `demo/jira` branch. It is a customer demo, not part of the pilot scope in §4, and merging it upstream is the owner's decision. **The action-linked product design described in this section is to be replaced by support requests; see "Rework: support requests replace action tracking in Jira" and the handover at the end of this section.** The integration is off unless every required setting is present, so a deployment without Jira configuration behaves exactly as before.
 
 ### Demo story
 
@@ -1758,6 +1758,68 @@ Choosing among several done-category transitions (the adapter takes the first; D
 - `npx tsc --noEmit`, `npm run lint` and `npm test` pass; new code has unit tests with mocked ports and HTTP, per AGENTS.md.
 - Live run: `ACT-NNNN to jira` creates a DS request with the expected summary, description, due date and label and replies with its link; `status of` reads it; `ACT-NNNN done` reaches Done and reports both SLAs as met; a key from another project and an unlinked DS key are refused.
 - No token, response body or surrounding message text appears in logs or in Jira.
+
+### Rework: support requests replace action tracking in Jira (planned 2026-09-25)
+
+**Why.** The staging tour showed that escalating ACT actions into Jira is not the fitting use of a service desk. The real use case is filing support requests: a team member has a problem and raises it with the service desk from Wire, then follows the conversation with the desk from Wire. Actions stay purely internal again. The rework keeps the whole Jira technical layer (adapter, credentials, SLAs, replies, offers, sharing setting, guardrails) and replaces the action-linked product layer with a new record type.
+
+**The new record: `SupportRequest`.** One record per service-desk request raised from Wire, identified by its Jira key (for example `DS-6`): the key is the record's ID, so there is no separate `SR-` numbering. Fields:
+- `key` (primary key, a Jira key of the configured project);
+- qualified `conversationId` and qualified `requesterId` (the member who raised it; it stays in the bot's database);
+- `summary` (one line, what the requester said the problem is);
+- `statusCategory` (last known `todo`, `in_progress` or `done`, refreshed whenever the bot reads the ticket; the live value always comes from Jira);
+- `createdAt`, `updatedAt`, `deleted`, `version`.
+The full problem description is sent to Jira and not stored; the summary is the extract kept for recall and listing, in line with extract-and-forget. New Prisma model and migration `support_requests`, domain entity `src/domain/entities/SupportRequest.ts`, repository contract `src/domain/repositories/SupportRequestRepository.ts` (`create`, `findByKey`, `listByConversation(conversationId, { openOnly })`, `updateStatusCategory`), Prisma implementation, audit on every write.
+
+**User journeys.**
+1. **Raise:** `@Wire Team Bot support: <problem>` (first line becomes the summary, the full text the description), or in plain language, "my VPN drops every ten minutes, can you raise it with the service desk?", which produces a code-written offer `Shall I raise this with the service desk? > <summary> (yes or no)?`. On yes: create the Jira request, store the `SupportRequest`, reply `Raised **DS-6** with the service desk: <link>`. Both SLA clocks start.
+2. **Follow:** `status of DS-6` and natural questions ("any news on my VPN issue?") as today, now scoped to support requests of this conversation. With `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on`, the answer model gets live status, SLAs and service-desk replies of this conversation's support requests.
+3. **List:** `@Wire Team Bot support requests` (open ones in this channel, with key, summary and live status) and `@Wire Team Bot my support requests` (raised by the caller).
+4. **Reply:** `@Wire Team Bot reply to DS-6: <text>` or a confirmed plain-language offer, as today, scoped to support requests of this conversation.
+5. **Resolve:** `@Wire Team Bot resolve DS-6` or a confirmed plain-language offer ("the VPN works again, please close my request"): follow the workflow to done, refresh `statusCategory`, report the SLA outcome.
+
+**Keep unchanged:** `JiraServiceManagementAdapter` and its tests, `IssueTrackerPort` (createIssue, getIssue, resolveIssue, listCustomerReplies, addCustomerReply), configuration and the sharing setting, `Accept-Language: en-GB`, category-based status handling, SLA polling, reply formatting and the "Your team (via Wire)" label, the offer mechanism (`offers.ts`, `PendingOfferPort`, `InMemoryPendingOfferStore`, `ConfirmOffer` flow, explicit yes forms, acknowledgement re-ask, next-message rule, clearing on pause and secure), `matchIssueStatusRequest` for DS keys, the addressing rule for writes, and every guardrail in this section.
+
+**Remove or rework:**
+- Remove `PushActionToJira`, the `ACT-NNNN to jira` / `raise|push|send ACT-NNNN in jira` commands, the Jira step in `UpdateActionStatus` (its optional tracker and logger parameters), `jira status of ACT-NNNN`, `reply to ACT-NNNN`, the `Jira: <KEY>` line on retrieved actions, `ActionQuery.linkedIdsHas` and its Prisma filter, and the `jira:` link helpers `toJiraLink` / `jiraKeyFromLinks` (keep `JIRA_KEY_PATTERN` and `isKeyInProject`).
+- Offer kinds become `support` (`{ summary, description }`), `reply` (`{ issueKey, body }`) and `resolve` (`{ issueKey }`); `raise` and `close` go. The change-intent check, validation (support request exists in this conversation, not done for resolve, body limits, requester-name check) and code-written questions follow the new kinds.
+- `GetIssueStatus`, `ReplyToServiceDesk` and the ticket context in `AnswerQuestion` resolve keys through `SupportRequestRepository` (this conversation, not deleted) instead of action links. Retrieval gains a `support_request` result type (key, summary, last known status) so Q&A can recall "the VPN request is DS-6" with sharing off.
+- The answer model's integration prompt lists the new commands and offer kinds; the reply footer becomes `Sent from Wire.`; `StatusCommand` adds "Open support requests: N".
+- README, `.env.example` and the demo story in this section are rewritten for support requests.
+
+**Decisions to confirm with the operator before building:**
+1. **Requester identity in the ticket.** The earlier guardrail kept the requester's name out of Jira because actions carried team work. A support request needs a person the desk can help. Recommendation: include `Requested by <Wire display name> via Wire` in the description, and later use Jira's "raise on behalf of" once Wire users can be mapped to Jira accounts by email. The alternative is to keep names out and let the desk reply through Wire only.
+2. **Existing demo data.** Four actions carry `jira:` links (ACT-0005 → DS-2 in the CLI channel; ACT-0008 → DS-3, ACT-0010 → DS-4, ACT-0012 → DS-5 in the staging channel). Recommendation: leave them inert (nothing reads the links after the rework) and resolve or delete DS-1 to DS-5 in Jira; optionally a one-off script creates `SupportRequest` rows for them. The probe ticket DS-1 has no record.
+3. **Who may resolve.** Recommendation: any member of the channel, by command or confirmed offer, audited with the actor.
+
+**Work split.** The same pattern that worked for the second step: the main session writes the contract (entity, repository contract, Prisma model and migration, offer-kind types, retrieval type) and commits it; then parallel subagents in worktrees for (a) persistence (Prisma repository, migration check against a throwaway database, integration test), (b) use cases (`RaiseSupportRequest`, `ListSupportRequests`, rework of status, reply, resolve and `ConfirmOffer`), (c) the answer side (`AnswerQuestion` context and offers, prompt); the main session does removals, router, wiring and docs; then an independent review (`code-review` skill) and real-model CLI checks; finally a live Wire and DS check with operator approval for every Jira write.
+
+**Acceptance.** Unit tests for each part; the removed commands no longer route (and `ACT-NNNN done` never touches Jira); support requests are scoped to their conversation (another channel's key is refused for status, reply, resolve and model context); offers for all three kinds validated, confirmed, re-asked and dropped as today; migration applied to a throwaway database; real-model checks for raising, following, replying and resolving in plain language with sharing off and on; one live journey on Wire staging and DS.
+
+### Handover for the next session (2026-09-25)
+
+**Start here.** Read AGENTS.md, then this section 6. The next task is the rework above. Its three decisions need the operator's answer first.
+
+**State.**
+- Branch `demo/jira` at `501ef9d`, 24 commits beyond `main`, working tree clean, not pushed. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
+- 845 tests pass; `npx tsc --noEmit` and `npm run lint` are clean.
+- The staging bot runs from this checkout on macOS (not Docker): `npm run build && npm start` in the repository, loading `.env` (Wire staging credentials, Claude API, all Jira keys, `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on`). It was started as a background task of a Claude Code session, so it stops when that session ends; restart it after any rebuild.
+- Postgres 17 with pgvector runs via `brew services` (`postgres://wirebot:wirebot@localhost:5432/wire_team_bot`). The staging channel's timezone was set to `Europe/Berlin` by hand; the CLI channel is `UTC`.
+- Jira: site `wearezeta.atlassian.net`, project DS (service desk `184`, request type `11808`), service account `WireTeamBotDemo` with a scoped token and the Agent role. Tickets DS-1 to DS-5 are test tickets.
+
+**How to validate.**
+- Unit gate: `npx tsc --noEmit; echo $?`, `npm run lint >/dev/null 2>&1; echo $?`, `npm test > log 2>&1; echo $?`. Check exit codes; never pipe the checked command into `tail`, and in zsh `PIPESTATUS` is not available.
+- Real-model checks without Wire: `printf '%s\n' "<line>" ... | LOG_LEVEL=warn node -r dotenv/config dist/app/cli.js`. The CLI does not load `.env` by itself, hence the preload. Offers live in memory, so an offer and its yes or no must run in the same process. Answer offers with `no` unless the operator approved the Jira write.
+- Jira reads and writes during development can use the Atlassian connector in the session (`cloudId` `wearezeta.atlassian.net`); the `wire-confluence-jira` skill requires the operator's explicit approval before any write. Reads through the bot's own token belong in a short `node -e` script that never prints the token.
+
+**Pitfalls learned.**
+- Subagent worktrees start from `main`, not from the current branch. Brief every subagent to check `git log -1` against the contract commit and fast-forward first, symlink `node_modules` from the main checkout, and remove that symlink before deleting the worktree.
+- Jira localises status names from the request's `Accept-Language`; the service account has no language preference. Match statuses by category only.
+- The agent-level token receives internal notes; only comments flagged `public: true` may reach Wire or the model.
+- SLA clocks stop a few seconds after the transition; poll the SLA endpoint only.
+- Claude Opus 5 rejects `temperature`; the factory learns this once per model.
+- Model output is untrusted: code validates every offer, writes the question, and acts only on an explicit yes from the same requester as their next message.
+- Writing rules for all text: British English, no em-dashes, no hard-wrapped paragraphs, no Co-Authored-By or AI attribution in commits or PRs.
 
 The former v1/v2 plans, SDK migration plan and V3 gap list are superseded by this document.
 Their historical text remains in Git. SDK operational cutover steps are retained in README;
