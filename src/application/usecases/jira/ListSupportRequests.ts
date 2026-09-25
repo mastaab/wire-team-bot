@@ -1,5 +1,6 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import { isKeyInProject } from "../../../domain/ids/jiraLink";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
@@ -19,9 +20,11 @@ export interface ListSupportRequestsInput {
 const LISTED_MAX = 10;
 
 /**
- * Lists the open support requests of this conversation with their live status. A request
- * the tracker reports as done is refreshed and left out; when the tracker cannot be read,
- * the last known status is shown and marked as such.
+ * Lists the open support requests of this conversation with their live status. The newest
+ * requests are read whatever their last known category, so one the desk has reopened shows
+ * again. Every changed category is refreshed and a request the tracker reports as done is
+ * left out; when the tracker cannot be read, the last known status is shown, marked as such,
+ * unless it is done.
  */
 export class ListSupportRequests {
   constructor(
@@ -34,11 +37,10 @@ export class ListSupportRequests {
 
   /** The requests shown, in the order listed. */
   async execute(input: ListSupportRequestsInput): Promise<SupportRequest[]> {
-    const stored = await this.requests.listByConversation(input.conversationId, {
-      openOnly: true,
+    const stored = (await this.requests.listByConversation(input.conversationId, {
       requesterId: input.requesterId,
       limit: LISTED_MAX,
-    });
+    })).filter((request) => isKeyInProject(request.key, this.tracker.projectKey));
     const live = await Promise.all(stored.map((request) => this.readLive(request)));
 
     const shown: SupportRequest[] = [];
@@ -51,6 +53,8 @@ export class ListSupportRequests {
           this.requests, this.auditLog, request, snapshot.statusCategory, botActor(input.conversationId), this.logger,
         );
         if (snapshot.statusCategory === "done") continue;
+      } else if (request.statusCategory === "done") {
+        continue;
       }
       const status = snapshot ? statusLabel(snapshot.statusCategory) : `${statusLabel(request.statusCategory)} (last known)`;
       const requester = request.requesterName ? ` (${request.requesterName})` : "";

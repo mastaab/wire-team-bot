@@ -184,6 +184,19 @@ describe("AnswerQuestion with Jira: stored support requests", () => {
     expect(ofType("support_request").map((r) => r.id)).toEqual(["DS-6"]);
   });
 
+  it("drops stored records whose key is outside the configured project, and never fetches them", async () => {
+    const foreign = makeRequest("WPB-7");
+    const { tracker, run, ofType } = setup({
+      requests: [makeRequest("DS-6")],
+      shareWithModel: true,
+      repo: { listByConversation: vi.fn(async () => [foreign, makeRequest("DS-6")]) },
+    });
+    await run("Any news on my ticket?");
+    expect(ofType("support_request").map((r) => r.id)).toEqual(["DS-6"]);
+    expect(tracker.getIssue).toHaveBeenCalledTimes(1);
+    expect(tracker.getIssue).toHaveBeenCalledWith("DS-6");
+  });
+
   it("adds nothing and makes no repository call without Jira support", async () => {
     const { repo, run, passedResults } = setup({ withJira: false, requests: [makeRequest("DS-6")] });
     await run("What about DS-6?");
@@ -426,7 +439,7 @@ describe("AnswerQuestion with Jira: offers", () => {
   const support = 'OFFER: {"kind":"support","summary":"VPN  drops\\nevery ten minutes","description":"My VPN drops every ten minutes since Monday."}';
   const reply = 'OFFER: {"kind":"reply","issueKey":"DS-6","body":"Alice here: it still drops.\\nThanks"}';
   const resolve = 'OFFER: {"kind":"resolve","issueKey":"DS-6"}';
-  const supportQuestion = "Shall I raise this with the service desk?\n> VPN drops every ten minutes\n\n(yes or no)?";
+  const supportQuestion = "Shall I raise this with the service desk?\n> **VPN drops every ten minutes**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
   const replyQuestion = "Here is the reply for **DS-6**:\n> Alice here: it still drops.\n> Thanks\n\nShall I send it (yes or no)?";
   const resolveQuestion = 'Shall I resolve **DS-6** "VPN drops every ten minutes" with the service desk (yes or no)?';
   const vpn = (): SupportRequest => makeRequest("DS-6", { summary: "VPN drops  every\nten minutes", statusCategory: "in_progress" });
@@ -444,6 +457,20 @@ describe("AnswerQuestion with Jira: offers", () => {
     expect(sent).toEqual([supportQuestion]);
     expect(answer).toBe(supportQuestion);
     expect(repo.findByKey).not.toHaveBeenCalled();
+  });
+
+  it("quotes a multi-line description line by line with no empty quoted line", async () => {
+    const marker = `OFFER: ${JSON.stringify({ kind: "support", summary: "Printer jammed", description: "The printer is jammed.\n\n  It shows error E4.  \n" })}`;
+    const { sent, run } = setup({ modelAnswer: marker });
+    await run("Please raise it with the service desk");
+    expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer jammed**\n> The printer is jammed.\n> It shows error E4.\n\n(yes or no)?"]);
+  });
+
+  it("leaves out a description that only repeats the summary", async () => {
+    const marker = `OFFER: ${JSON.stringify({ kind: "support", summary: "Printer jammed", description: "printer  jammed" })}`;
+    const { sent, run } = setup({ modelAnswer: marker });
+    await run("Please raise it with the service desk");
+    expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer jammed**\n\n(yes or no)?"]);
   });
 
   it("writes the reply question with the body quoted line by line, and keeps the requester's name (decision 1)", async () => {
@@ -473,13 +500,13 @@ describe("AnswerQuestion with Jira: offers", () => {
 
   it("stores the offer only after the question was sent", async () => {
     const { offers, wire, run } = setup({ modelAnswer: support });
-    await run("Raise my VPN problem");
+    await run("Raise my VPN problem with support");
     expect(wire.sendPlainText.mock.invocationCallOrder[0]!).toBeLessThan((offers.put as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
   });
 
   it("stores no offer when sending the question fails", async () => {
     const { stored, offers, run } = setup({ modelAnswer: support, sendFails: true });
-    await expect(run("Raise my VPN problem")).rejects.toThrow("send failed");
+    await expect(run("Raise my VPN problem with support")).rejects.toThrow("send failed");
     expect(stored).toHaveLength(0);
     expect(offers.put).not.toHaveBeenCalled();
   });
@@ -511,16 +538,21 @@ describe("AnswerQuestion with Jira: offers", () => {
     const markers = { support, reply, resolve } as const;
     type Kind = keyof typeof markers;
     const accepted: Array<[Kind, string]> = [
-      ["support", "Can you raise my VPN problem?"],
-      ["support", "Escalate this please"],
+      ["support", "Can you raise my VPN problem with support?"],
+      ["support", "My VPN drops, can you raise it with the service desk?"],
+      ["support", "Please open a ticket with support"],
+      ["support", "Escalate this to the service desk please"],
       ["support", "Open a support request for the printer"],
       ["support", "Please report this to the service desk"],
-      ["support", "I need a ticket for this"],
-      ["support", "Get me some support with the VPN"],
+      ["support", "Create a Jira ticket for the printer"],
+      ["support", "Can you log a request for a new laptop?"],
+      ["support", "Put this into Jira"],
+      ["support", "Raise it"],
+      ["support", "The printer is jammed again, report it"],
       ["resolve", "Please close my request"],
       ["resolve", "Resolve DS-6"],
       ["resolve", "The VPN works again"],
-      ["resolve", "It's fixed now"],
+      ["resolve", "It's working again, close it"],
       ["resolve", "That request is no longer needed"],
       ["reply", "Let the service desk know it still drops"],
       ["reply", "Message DS-6 that it still drops"],
@@ -539,6 +571,13 @@ describe("AnswerQuestion with Jira: offers", () => {
     const rejected: Array<[Kind, string]> = [
       ["support", "What did we decide about lunch?"],
       ["support", "My VPN drops every ten minutes"],
+      ["support", "Any news on my ticket?"],
+      ["support", "What's the status of my support request?"],
+      ["support", "Has support replied?"],
+      ["support", "Is my ticket still open?"],
+      ["support", "I can't log in to Jira"],
+      ["support", "Can you raise my VPN problem?"],
+      ["resolve", "It's fixed now"],
       ["resolve", "What did we decide about lunch?"],
       ["resolve", "Is the VPN request done?"],
       ["resolve", "When will DS-6 be finished?"],
@@ -581,7 +620,6 @@ describe("AnswerQuestion with Jira: offers", () => {
     ["resolve: request from another conversation", [makeRequest("DS-6", { conversationId: otherConv })], resolve, resolveAsk],
     ["resolve: request from another domain", [makeRequest("DS-6", { conversationId: otherDomain })], resolve, resolveAsk],
     ["resolve: deleted request", [makeRequest("DS-6", { deleted: true })], resolve, resolveAsk],
-    ["resolve: done request", [makeRequest("DS-6", { statusCategory: "done" })], resolve, resolveAsk],
     ["resolve: out-of-project key", [makeRequest("WPB-6")], 'OFFER: {"kind":"resolve","issueKey":"WPB-6"}', resolveAsk],
   ];
 
@@ -595,6 +633,13 @@ describe("AnswerQuestion with Jira: offers", () => {
       expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(/DS-6|WPB-6|Alice here|Hello/);
     });
   }
+
+  it("keeps a resolve offer for a request last known as done, since the use case checks live", async () => {
+    const { stored, sent, run } = setup({ requests: [makeRequest("DS-6", { statusCategory: "done" })], modelAnswer: resolve });
+    await run(resolveAsk);
+    expect(stored).toHaveLength(1);
+    expect(sent).toEqual(['Shall I resolve **DS-6** "Problem DS-6" with the service desk (yes or no)?']);
+  });
 
   it("allows a reply to a done request", async () => {
     const { stored, run } = setup({ requests: [makeRequest("DS-6", { statusCategory: "done" })], modelAnswer: reply });
@@ -663,14 +708,14 @@ describe("AnswerQuestion with Jira: offers", () => {
 
   it("sends only the question when the model wrote nothing but the marker", async () => {
     const { sent, run } = setup({ modelAnswer: support });
-    await run("Raise my VPN problem");
+    await run("Raise my VPN problem with support");
     expect(sent).toEqual([supportQuestion]);
   });
 
   it("creates offers whether or not ticket sharing is on", async () => {
     for (const shareWithModel of [false, true]) {
       const { stored, tracker, run } = setup({ modelAnswer: support, shareWithModel });
-      await run("Raise my VPN problem");
+      await run("Raise my VPN problem with support");
       expect(stored).toHaveLength(1);
       expect(tracker.createIssue).not.toHaveBeenCalled();
     }

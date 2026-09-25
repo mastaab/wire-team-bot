@@ -24,7 +24,7 @@ describe("ListSupportRequests", () => {
 
     const shown = await useCase.execute({ conversationId: convId, replyToMessageId: "msg-1" });
 
-    expect(requests.listByConversation).toHaveBeenCalledWith(convId, { openOnly: true, requesterId: undefined, limit: 10 });
+    expect(requests.listByConversation).toHaveBeenCalledWith(convId, { requesterId: undefined, limit: 10 });
     expect(shown.map((r) => r.key)).toEqual(["DS-6", "DS-7"]);
     expect(sent).toEqual([[
       "Open support requests in this channel:",
@@ -39,7 +39,7 @@ describe("ListSupportRequests", () => {
 
     await useCase.execute({ conversationId: convId, requesterId: alice });
 
-    expect(requests.listByConversation).toHaveBeenCalledWith(convId, { openOnly: true, requesterId: alice, limit: 10 });
+    expect(requests.listByConversation).toHaveBeenCalledWith(convId, { requesterId: alice, limit: 10 });
     expect(sent[0]!.startsWith("Your open support requests in this channel:\n")).toBe(true);
   });
 
@@ -84,6 +84,39 @@ describe("ListSupportRequests", () => {
     ].join("\n")]);
     expect(requests.updateStatusCategory).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith("ListSupportRequests: getIssue failed", { key: "DS-6", err: "IssueTrackerError", status: 503 });
+  });
+
+  it("shows a request the desk reopened and refreshes its stored category", async () => {
+    const { requests, tracker, sent, audit, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+    tracker.getIssue.mockResolvedValue(makeSnapshot({ statusCategory: "in_progress" }));
+
+    const shown = await useCase.execute({ conversationId: convId });
+
+    expect(shown.map((r) => r.key)).toEqual(["DS-6"]);
+    expect(sent).toEqual(["Open support requests in this channel:\n- **DS-6** VPN drops every ten minutes (Alice): In progress"]);
+    expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "in_progress", expect.any(Date));
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({ entityId: "DS-6", details: { statusCategory: "in_progress" } }));
+  });
+
+  it("leaves out a request last known as done when its live read fails", async () => {
+    const { tracker, sent, useCase } = setup([makeRequest({ statusCategory: "done" }), printer]);
+    tracker.getIssue.mockRejectedValue(new IssueTrackerError("unavailable", 503));
+
+    const shown = await useCase.execute({ conversationId: convId });
+
+    expect(shown.map((r) => r.key)).toEqual(["DS-7"]);
+    expect(sent).toEqual(["Open support requests in this channel:\n- **DS-7** Printer is jammed (Bob): In progress (last known)"]);
+  });
+
+  it("skips a stored record whose key is outside the configured project, without reading it", async () => {
+    const { tracker, sent, useCase } = setup([makeRequest({ key: "OPS-6" }), printer]);
+
+    const shown = await useCase.execute({ conversationId: convId });
+
+    expect(shown.map((r) => r.key)).toEqual(["DS-7"]);
+    expect(tracker.getIssue).toHaveBeenCalledTimes(1);
+    expect(tracker.getIssue).toHaveBeenCalledWith("DS-7");
+    expect(sent[0]).not.toContain("OPS-6");
   });
 
   it.each([

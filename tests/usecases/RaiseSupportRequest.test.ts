@@ -131,17 +131,65 @@ describe("RaiseSupportRequest", () => {
     expect(await useCase.execute(base)).toMatchObject({ key: "DS-8" });
   });
 
-  it("releases the guard after a tracker failure and says nothing was raised", async () => {
+  it.each([400, 403, 422])("says nothing was raised after a refused create (%i), audits it and releases the guard", async (status) => {
     const { tracker, requests, sent, audit, logger, useCase } = setup();
-    tracker.createIssue.mockRejectedValueOnce(new IssueTrackerError(`failed ${BODY_MARKER}`, 500));
+    tracker.createIssue.mockRejectedValueOnce(new IssueTrackerError(`failed ${BODY_MARKER}`, status));
 
     expect(await useCase.execute(base)).toBeNull();
 
     expect(sent).toEqual(["I'm afraid I couldn't raise the request with the service desk just now."]);
     expect(requests.create).not.toHaveBeenCalled();
-    expect(audit.append).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith("RaiseSupportRequest: createIssue failed", { err: "IssueTrackerError", status: 500 });
+    expect(audit.append).toHaveBeenCalledTimes(1);
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: alice, conversationId: convId, action: "entity_created", entityType: "JiraIssue", entityId: "unknown",
+      details: { outcome: "create_refused" },
+    }));
+    expect(logger.warn).toHaveBeenCalledWith("RaiseSupportRequest: createIssue failed", { err: "IssueTrackerError", status });
     expect(await useCase.execute(base)).toMatchObject({ key: "DS-6" });
+  });
+
+  it.each([
+    ["a 5xx", new IssueTrackerError("server error", 500)],
+    ["a 3xx", new IssueTrackerError("unexpected response", 302)],
+    ["a tracker error with no status", new IssueTrackerError("timed out")],
+    ["a network error", new TypeError("fetch failed")],
+    ["a non-error value", "boom"],
+  ])("asks to check the queue after %s, because the ticket may exist, and audits it", async (_label, error) => {
+    const { tracker, requests, sent, audit, useCase } = setup();
+    tracker.createIssue.mockRejectedValueOnce(error);
+
+    expect(await useCase.execute(base)).toBeNull();
+
+    expect(sent).toEqual(["I'm afraid I couldn't confirm that the request reached the service desk. Please check the DS queue before raising it again."]);
+    expect(requests.create).not.toHaveBeenCalled();
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: alice, action: "entity_created", entityType: "JiraIssue", entityId: "unknown", details: { outcome: "create_unconfirmed" },
+    }));
+  });
+
+  it("keeps the failure reply when auditing a failed create fails", async () => {
+    const { tracker, sent, audit, logger, useCase } = setup();
+    tracker.createIssue.mockRejectedValueOnce(new IssueTrackerError("server error", 500));
+    audit.append.mockRejectedValueOnce(new Error("audit down"));
+
+    expect(await useCase.execute(base)).toBeNull();
+
+    expect(sent).toEqual(["I'm afraid I couldn't confirm that the request reached the service desk. Please check the DS queue before raising it again."]);
+    expect(logger.error).toHaveBeenCalledWith("RaiseSupportRequest: audit append failed", { err: "Error" });
+  });
+
+  it("does not store a created key outside the project, audits it and gives the link", async () => {
+    const { tracker, requests, sent, audit, useCase } = setup();
+    tracker.createIssue.mockResolvedValueOnce({ key: "OPS-3", url: "https://jira.test/browse/OPS-3", fieldsApplied: true });
+
+    expect(await useCase.execute(base)).toBeNull();
+
+    expect(requests.create).not.toHaveBeenCalled();
+    expect(audit.append).toHaveBeenCalledTimes(1);
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: alice, action: "entity_created", entityType: "JiraIssue", entityId: "OPS-3", details: { outcome: "unexpected_key" },
+    }));
+    expect(sent).toEqual(["Raised the request with the service desk (https://jira.test/browse/OPS-3), but I'm afraid I can't track it from Wire."]);
   });
 
   it("gives the link and says so when storing fails after the ticket was created", async () => {

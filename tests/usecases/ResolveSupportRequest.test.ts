@@ -47,13 +47,58 @@ describe("ResolveSupportRequest", () => {
     expect(sent).toEqual(["I'm afraid I couldn't resolve **DS-6** with the service desk; it is now In progress."]);
   });
 
-  it("says a request already done by its last known category is resolved, without calling the tracker", async () => {
-    const { tracker, sent, audit, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+  it("says a request done by its last known category and live is already resolved, without resolving", async () => {
+    const { requests, tracker, sent, audit, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+    tracker.getIssue.mockResolvedValue(done);
 
     expect(await useCase.execute(base)).toBeNull();
 
+    expect(tracker.getIssue).toHaveBeenCalledWith("DS-6");
     expect(sent).toEqual(["**DS-6** is already resolved."]);
     expect(tracker.resolveIssue).not.toHaveBeenCalled();
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
+  it("does not read live for a request not last known as done", async () => {
+    const { tracker, useCase } = setup();
+
+    await useCase.execute(base);
+
+    expect(tracker.getIssue).not.toHaveBeenCalled();
+    expect(tracker.resolveIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a request the desk reopened, refreshing the stored category first", async () => {
+    const { requests, tracker, sent, audit, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+    tracker.getIssue.mockResolvedValue(makeSnapshot({ statusCategory: "in_progress" }));
+
+    expect(await useCase.execute(base)).toEqual(done);
+
+    expect(requests.updateStatusCategory.mock.calls.map((call) => call[1])).toEqual(["in_progress", "done"]);
+    expect(audit.append).toHaveBeenCalledTimes(2);
+    expect(audit.append).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      actorId: { id: "wire-team-bot", domain: "wire.com" }, entityId: "DS-6", details: { statusCategory: "in_progress" },
+    }));
+    expect(audit.append).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      actorId: bob, action: "entity_updated", entityType: "SupportRequest", entityId: "DS-6", details: { statusCategory: "done" },
+    }));
+    expect(tracker.resolveIssue).toHaveBeenCalledWith("DS-6");
+    expect(sent).toEqual(["Resolved **DS-6** with the service desk.\nTime to done: met in 3m (target 16h)"]);
+  });
+
+  it.each([
+    ["the read fails", (tracker: ReturnType<typeof makeTracker>) => tracker.getIssue.mockRejectedValue(new IssueTrackerError("unavailable", 503))],
+    ["the ticket is not found", (tracker: ReturnType<typeof makeTracker>) => tracker.getIssue.mockResolvedValue(null)],
+  ])("says Jira could not be reached for a request last known as done when %s", async (_label, arrange) => {
+    const { requests, tracker, sent, audit, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+    arrange(tracker);
+
+    expect(await useCase.execute(base)).toBeNull();
+
+    expect(sent).toEqual(["I'm afraid I couldn't reach Jira to check **DS-6** just now; please try again later."]);
+    expect(tracker.resolveIssue).not.toHaveBeenCalled();
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
 
@@ -89,7 +134,7 @@ describe("ResolveSupportRequest", () => {
     expect(await useCase.execute(base)).toEqual(done);
 
     expect(sent).toEqual(["Resolved **DS-6** with the service desk.\nTime to done: met in 3m (target 16h)"]);
-    expect(logger.warn).toHaveBeenCalledWith("ResolveSupportRequest: storing the status failed", { key: "DS-6", err: "Error" });
+    expect(logger.warn).toHaveBeenCalledWith("Support request status refresh failed", { key: "DS-6", err: "Error" });
     expect(logger.error).toHaveBeenCalledWith("ResolveSupportRequest: audit append failed", { err: "Error" });
   });
 });

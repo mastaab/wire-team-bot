@@ -1,6 +1,6 @@
 import type { OfferCommand } from "../ports/PendingOfferPort";
 import { JIRA_KEY_PATTERN } from "../../domain/ids/jiraLink";
-import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
+import { SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
 
 /**
  * Offers let the answer model propose a supported Jira change in plain language. The model
@@ -15,6 +15,12 @@ export const OFFER_TTL_MS = 10 * 60 * 1000;
 
 /** Longest reply the bot will send to a ticket. */
 export const REPLY_BODY_MAX = 2000;
+
+/**
+ * Longest description a `support` offer may carry. The confirmation question quotes it in
+ * full, so it stays well under the `support:` command limit (`SUPPORT_DESCRIPTION_MAX`).
+ */
+export const OFFER_DESCRIPTION_MAX = 1000;
 
 /** The single line the answer model may end with. Everything after the prefix is JSON. */
 export const OFFER_MARKER_PREFIX = "OFFER:";
@@ -68,7 +74,7 @@ function toCommand(json: string): OfferCommand | null {
       const summary = typeof v.summary === "string" ? v.summary.replace(/\s+/g, " ").trim() : "";
       const description = typeof v.description === "string" ? v.description.trim() : "";
       if (!summary || summary.length > SUPPORT_SUMMARY_MAX) return null;
-      if (!description || description.length > SUPPORT_DESCRIPTION_MAX) return null;
+      if (!description || description.length > OFFER_DESCRIPTION_MAX) return null;
       return { kind: "support", summary, description };
     }
     case "reply": {

@@ -1,12 +1,14 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../../domain/entities/SupportRequest";
 import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import { isKeyInProject } from "../../../domain/ids/jiraLink";
 import type { AuditLogEntry, AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { CreateIssueRequest, CreatedIssue, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
+import { appendAuditSafely, wasRefused } from "./supportRequestStatus";
 
 export interface RaiseSupportRequestInput {
   /** One line; becomes the ticket title and the stored summary. */
@@ -83,11 +85,31 @@ export class RaiseSupportRequest {
       created = await this.tracker.createIssue(buildRequest(summary, description, requesterName));
     } catch (err) {
       this.logger?.warn("RaiseSupportRequest: createIssue failed", trackerErrorFields(err));
-      await reply("I'm afraid I couldn't raise the request with the service desk just now.");
+      const refused = wasRefused(err);
+      // No key is known, but a ticket may exist after an unconfirmed create, so the attempt is recorded.
+      await this.appendAudit({
+        timestamp: new Date(), actorId: input.requesterId, conversationId: input.conversationId,
+        action: "entity_created", entityType: "JiraIssue", entityId: "unknown",
+        details: { outcome: refused ? "create_refused" : "create_unconfirmed" },
+      });
+      await reply(refused
+        ? "I'm afraid I couldn't raise the request with the service desk just now."
+        : `I'm afraid I couldn't confirm that the request reached the service desk. Please check the ${this.tracker.projectKey} queue before raising it again.`);
       return null;
     }
     const key = created.key.toUpperCase();
     const now = new Date();
+
+    if (!isKeyInProject(key, this.tracker.projectKey)) {
+      // A key outside the project would never pass the scope helper, so it is not stored.
+      this.logger?.warn("RaiseSupportRequest: created key is outside the project");
+      await this.appendAudit({
+        timestamp: now, actorId: input.requesterId, conversationId: input.conversationId,
+        action: "entity_created", entityType: "JiraIssue", entityId: key, details: { outcome: "unexpected_key" },
+      });
+      await reply(`Raised the request with the service desk (${created.url}), but I'm afraid I can't track it from Wire.`);
+      return null;
+    }
 
     let stored: SupportRequest;
     try {
@@ -125,13 +147,9 @@ export class RaiseSupportRequest {
     return stored;
   }
 
-  /** The ticket and record exist by now, so an audit failure must not suggest otherwise. */
-  private async appendAudit(entry: AuditLogEntry): Promise<void> {
-    try {
-      await this.auditLog.append(entry);
-    } catch (err) {
-      this.logger?.error("RaiseSupportRequest: audit append failed", { err: err instanceof Error ? err.name : "UnknownError" });
-    }
+  /** The tracker may have changed by now, so an audit failure must not suggest otherwise. */
+  private appendAudit(entry: AuditLogEntry): Promise<void> {
+    return appendAuditSafely(this.auditLog, entry, "RaiseSupportRequest", this.logger);
   }
 }
 

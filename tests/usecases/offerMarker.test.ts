@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseOfferMarker, REPLY_BODY_MAX } from "../../src/application/services/offers";
+import { OFFER_DESCRIPTION_MAX, parseOfferMarker, REPLY_BODY_MAX } from "../../src/application/services/offers";
 import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 
 const marker = (value: unknown): string => `OFFER: ${JSON.stringify(value)}`;
@@ -25,7 +25,7 @@ describe("parseOfferMarker", () => {
 
   it("accepts a summary and description at their limits", () => {
     const summary = "s".repeat(SUPPORT_SUMMARY_MAX);
-    const description = "d".repeat(SUPPORT_DESCRIPTION_MAX);
+    const description = "d".repeat(OFFER_DESCRIPTION_MAX);
     expect(parseOfferMarker(marker({ kind: "support", summary, description })).command).toEqual({ kind: "support", summary, description });
     const body = "b".repeat(REPLY_BODY_MAX);
     expect(parseOfferMarker(marker({ kind: "reply", issueKey: "DS-4", body })).command).toEqual({ kind: "reply", issueKey: "DS-4", body });
@@ -49,7 +49,8 @@ describe("parseOfferMarker", () => {
     ["a support offer without a description", marker({ kind: "support", summary: "It breaks", description: " " })],
     ["a support offer with a non-string summary", marker({ kind: "support", summary: 42, description: "It breaks." })],
     ["a summary that is too long", marker({ kind: "support", summary: "s".repeat(SUPPORT_SUMMARY_MAX + 1), description: "It breaks." })],
-    ["a description that is too long", marker({ kind: "support", summary: "It breaks", description: "d".repeat(SUPPORT_DESCRIPTION_MAX + 1) })],
+    ["a description that is too long for an offer", marker({ kind: "support", summary: "It breaks", description: "d".repeat(OFFER_DESCRIPTION_MAX + 1) })],
+    ["a description at the command limit", marker({ kind: "support", summary: "It breaks", description: "d".repeat(SUPPORT_DESCRIPTION_MAX) })],
     ["a reply without a body", marker({ kind: "reply", issueKey: "DS-4", body: "   " })],
     ["a reply with a malformed key", marker({ kind: "reply", issueKey: "DS4", body: "hi" })],
     ["a reply that is too long", marker({ kind: "reply", issueKey: "DS-4", body: "x".repeat(REPLY_BODY_MAX + 1) })],
