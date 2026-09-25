@@ -14,7 +14,7 @@ export function formatSla(sla: SlaSummary): string {
   const target = sla.goal ? ` (target ${sla.goal})` : "";
   switch (sla.state) {
     case "met":
-      return `${sla.name}: met${sla.elapsed ? ` in ${sla.elapsed}` : ""}${target}`;
+      return `${sla.name}: met${sla.elapsed ? ` in ${readableDuration(sla.elapsed)}` : ""}${target}`;
     case "breached":
       return `${sla.name}: breached${target}`;
     case "running":
@@ -39,4 +39,9 @@ export function formatResolution(snapshot: IssueSnapshot): string {
     return `I'm afraid I couldn't move **${snapshot.key}** to Done in Jira; it is now ${statusLabel(snapshot.statusCategory)}.`;
   }
   return [`Closed **${snapshot.key}** in Jira.`, ...snapshot.slas.map(formatSla)].join("\n");
+}
+
+/** Jira rounds durations under a minute down to "0m"; say so plainly instead. */
+function readableDuration(friendly: string): string {
+  return friendly.trim() === "0m" ? "under a minute" : friendly;
 }

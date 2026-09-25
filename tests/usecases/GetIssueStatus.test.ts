@@ -168,6 +168,11 @@ describe("GetIssueStatus", () => {
 });
 
 describe("formatIssue", () => {
+  it("says 'under a minute' instead of Jira's rounded 0m", () => {
+    expect(formatSla({ name: "Time to done", state: "met", elapsed: "0m", goal: "16h" })).toBe("Time to done: met in under a minute (target 16h)");
+    expect(formatSla({ name: "Time to done", state: "met", elapsed: "3m", goal: "16h" })).toBe("Time to done: met in 3m (target 16h)");
+  });
+
   it("labels status categories in English", () => {
     expect(statusLabel("todo")).toBe("To do");
     expect(statusLabel("in_progress")).toBe("In progress");

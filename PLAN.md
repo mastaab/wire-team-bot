@@ -1678,7 +1678,8 @@ Choosing among several done-category transitions (the adapter takes the first; D
 | Use cases and tests with mocked ports | subagent | done: 59 tests |
 | Router commands, multi-command detection, container and CLI wiring, contract tests | main session | done: 15 routing tests; full suite 504 passed, type-check and lint clean |
 | Independent review of the complete branch | subagent | done: 10 findings, all fixed (stale write-back and duplicate tickets on concurrent pushes, unconfigured-routing regressions, requester name in tickets, blocking `done` reply, unlogged close failures, capped link lookup, repeat-close claims, project check on the ACT path, duplicated helpers) |
-| Live run on Wire staging and DS | operator and main session | pending |
+| Live run, CLI stage (2026-09-25, macOS arm64, Node 26.8.2, service-account token) | main session | passed: `ACT-0005 to jira` created DS-2 in 3s; Jira shows reporter WireTeamBotDemo, description with only the action's fields and no requester name, due date 2026-09-25 and the `wire-team-bot` label; `status of DS-2` returned English labels and running SLAs; `status of DS-1` was refused as unlinked; `ACT-0005 done` confirmed first, then closed DS-2 with both SLAs met. Summary capitalisation and "under a minute" wording added afterwards |
+| Live run, Wire stage | operator | pending |
 
 ### Acceptance
 

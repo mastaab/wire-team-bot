@@ -184,8 +184,18 @@ describe("PushActionToJira", () => {
     await useCase.execute(input);
 
     const request = tracker.createIssue.mock.calls[0][0];
-    expect(request.summary).toBe("a".repeat(300));
+    expect(request.summary).toBe(`A${"a".repeat(299)}`);
     expect(request.description.startsWith(`${"a".repeat(300)}\n`)).toBe(true);
+  });
+
+  it("starts the ticket summary with a capital letter and leaves the description as captured", async () => {
+    const { tracker, useCase } = setup(makeAction({ description: "prepare the security questionnaire" }));
+
+    await useCase.execute(input);
+
+    const request = tracker.createIssue.mock.calls[0][0];
+    expect(request.summary).toBe("Prepare the security questionnaire");
+    expect(request.description.startsWith("prepare the security questionnaire\n")).toBe(true);
   });
 
   it("never sends the requester's name to Jira", async () => {

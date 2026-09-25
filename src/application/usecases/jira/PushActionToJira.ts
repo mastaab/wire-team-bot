@@ -149,7 +149,8 @@ function buildRequest(action: Action, timezone: string): CreateIssueRequest {
   if (dueDate) lines.push(`Due: ${dueDate}`);
   lines.push(`Raised from Wire (${action.id}).`);
   return {
-    summary: description,
+    // Parsed descriptions often start lower-case ("prepare the report"); a ticket title should not.
+    summary: description.charAt(0).toUpperCase() + description.slice(1),
     description: lines.join("\n"),
     ...(dueDate ? { dueDate } : {}),
     labels: [LABEL],
