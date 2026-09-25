@@ -1,28 +1,25 @@
-import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
-import { jiraKeyFromLinks } from "../../../domain/ids/jiraLink";
-import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { OfferCommand, PendingOfferStore } from "../../services/offers";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
-import type { PushActionToJira } from "./PushActionToJira";
+import type { RaiseSupportRequest } from "./RaiseSupportRequest";
 import type { ReplyToServiceDesk } from "./ReplyToServiceDesk";
-import type { UpdateActionStatus } from "../actions/UpdateActionStatus";
+import type { ResolveSupportRequest } from "./ResolveSupportRequest";
 
 export type Confirmation = "yes" | "no";
 
+/** Each use case re-validates scope, state and bounds at the moment the offer is confirmed. */
 export interface ConfirmOfferHandlers {
-  /** Re-reads an action before a close; raise and reply re-validate inside their use cases. */
-  actions: ActionRepository;
-  pushActionToJira: PushActionToJira;
-  updateActionStatus: UpdateActionStatus;
+  raiseSupportRequest: RaiseSupportRequest;
   replyToServiceDesk: ReplyToServiceDesk;
+  resolveSupportRequest: ResolveSupportRequest;
 }
 
 export interface ConfirmOfferInput {
   text: string;
   conversationId: QualifiedId;
   requesterId: QualifiedId;
-  timezone: string;
+  /** Wire display name of the requester, for the requester line of a `support` offer. */
+  requesterName?: string;
   replyToMessageId?: string;
 }
 
@@ -115,15 +112,10 @@ export class ConfirmOffer {
 
     const command = offer.command;
     switch (command.kind) {
-      case "raise":
-        await this.handlers.pushActionToJira.execute({
-          actionId: command.actionId, conversationId, actorId, timezone: input.timezone, replyToMessageId,
-        });
-        break;
-      case "close":
-        if (!(await this.closeStillApplies(command.actionId, conversationId, replyToMessageId))) break;
-        await this.handlers.updateActionStatus.execute({
-          actionId: command.actionId, newStatus: "done", conversationId, actorId, replyToMessageId,
+      case "support":
+        await this.handlers.raiseSupportRequest.execute({
+          summary: command.summary, description: command.description, conversationId, requesterId: actorId,
+          requesterName: input.requesterName, replyToMessageId,
         });
         break;
       case "reply":
@@ -131,27 +123,11 @@ export class ConfirmOffer {
           reference: command.issueKey, body: command.body, conversationId, actorId, replyToMessageId,
         });
         break;
-    }
-    return true;
-  }
-
-  /**
-   * The action may have changed since the offer was made. A close only proceeds for a
-   * visible, still-active action that is still linked to a ticket; otherwise it explains why.
-   */
-  private async closeStillApplies(actionId: string, conversationId: QualifiedId, replyToMessageId?: string): Promise<boolean> {
-    const action = await this.handlers.actions.findById(actionId);
-    if (!action || action.deleted || !sameQualifiedId(action.conversationId, conversationId)) {
-      await this.wireOutbound.sendPlainText(
-        conversationId, `I'm afraid I can't find **${actionId}** in this conversation.`, { replyToMessageId },
-      );
-      return false;
-    }
-    if (action.status === "done" || action.status === "cancelled" || !jiraKeyFromLinks(action.linkedIds)) {
-      await this.wireOutbound.sendPlainText(
-        conversationId, `I'm afraid **${action.id}** has changed since I asked, so I haven't changed anything.`, { replyToMessageId },
-      );
-      return false;
+      case "resolve":
+        await this.handlers.resolveSupportRequest.execute({
+          issueKey: command.issueKey, conversationId, actorId, replyToMessageId,
+        });
+        break;
     }
     return true;
   }
@@ -160,10 +136,10 @@ export class ConfirmOffer {
 /** The code-written re-ask after an acknowledgement; it ends with a question like the offer itself. */
 function askAgain(command: OfferCommand): string {
   switch (command.kind) {
-    case "raise":
-      return `I need a clear yes or no, so I haven't raised **${command.actionId}** in Jira yet. Shall I raise it (yes or no)?`;
-    case "close":
-      return `I need a clear yes or no, so I haven't closed anything yet. Shall I mark **${command.actionId}** done and close its Jira ticket (yes or no)?`;
+    case "support":
+      return "I need a clear yes or no, so I haven't raised anything with the service desk yet. Shall I raise it (yes or no)?";
+    case "resolve":
+      return `I need a clear yes or no, so I haven't resolved **${command.issueKey}** yet. Shall I resolve it with the service desk (yes or no)?`;
     case "reply":
       return `I need a clear yes or no, so I haven't sent the reply to **${command.issueKey}** yet. Shall I send it (yes or no)?`;
   }

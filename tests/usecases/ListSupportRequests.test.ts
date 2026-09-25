@@ -1,0 +1,109 @@
+import { describe, it, expect } from "vitest";
+import { ListSupportRequests } from "../../src/application/usecases/jira/ListSupportRequests";
+import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
+import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
+import { alice, bob, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
+
+function setup(records: SupportRequest[]) {
+  const requests = makeRequests(records);
+  const tracker = makeTracker();
+  const { wire, sent } = makeWire();
+  const audit = makeAudit();
+  const logger = makeLogger();
+  const useCase = new ListSupportRequests(requests, tracker, wire, audit, logger);
+  return { requests, tracker, wire, sent, audit, logger, useCase };
+}
+
+const vpn = makeRequest();
+const printer = makeRequest({ key: "DS-7", summary: "Printer is jammed", requesterId: bob, requesterName: "Bob", statusCategory: "in_progress" });
+
+describe("ListSupportRequests", () => {
+  it("lists the open requests of the channel with key, summary, requester and live status", async () => {
+    const { requests, tracker, wire, sent, useCase } = setup([vpn, printer]);
+    tracker.getIssue.mockImplementation(async (key: string) => makeSnapshot({ key, statusCategory: key === "DS-6" ? "todo" : "in_progress" }));
+
+    const shown = await useCase.execute({ conversationId: convId, replyToMessageId: "msg-1" });
+
+    expect(requests.listByConversation).toHaveBeenCalledWith(convId, { openOnly: true, requesterId: undefined, limit: 10 });
+    expect(shown.map((r) => r.key)).toEqual(["DS-6", "DS-7"]);
+    expect(sent).toEqual([[
+      "Open support requests in this channel:",
+      "- **DS-6** VPN drops every ten minutes (Alice): To do",
+      "- **DS-7** Printer is jammed (Bob): In progress",
+    ].join("\n")]);
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-1" });
+  });
+
+  it("lists only the caller's requests for 'my support requests'", async () => {
+    const { requests, sent, useCase } = setup([vpn]);
+
+    await useCase.execute({ conversationId: convId, requesterId: alice });
+
+    expect(requests.listByConversation).toHaveBeenCalledWith(convId, { openOnly: true, requesterId: alice, limit: 10 });
+    expect(sent[0]!.startsWith("Your open support requests in this channel:\n")).toBe(true);
+  });
+
+  it("omits the requester when no name was resolved", async () => {
+    const { sent, useCase } = setup([makeRequest({ requesterName: "" })]);
+
+    await useCase.execute({ conversationId: convId });
+
+    expect(sent[0]).toContain("- **DS-6** VPN drops every ten minutes: In progress");
+  });
+
+  it("refreshes a changed status, leaves out a request found done live and audits only changes", async () => {
+    const { requests, tracker, sent, audit, useCase } = setup([vpn, printer]);
+    tracker.getIssue.mockImplementation(async (key: string) => makeSnapshot({ key, statusCategory: key === "DS-6" ? "done" : "in_progress" }));
+
+    const shown = await useCase.execute({ conversationId: convId });
+
+    expect(shown.map((r) => r.key)).toEqual(["DS-7"]);
+    expect(sent).toEqual(["Open support requests in this channel:\n- **DS-7** Printer is jammed (Bob): In progress"]);
+    expect(requests.updateStatusCategory).toHaveBeenCalledTimes(1);
+    expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "done", expect.any(Date));
+    expect(audit.append).toHaveBeenCalledTimes(1);
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      action: "entity_updated", entityType: "SupportRequest", entityId: "DS-6", details: { statusCategory: "done" },
+    }));
+  });
+
+  it("shows the last known status, marked as such, when a read fails or the ticket is gone", async () => {
+    const { requests, tracker, sent, logger, useCase } = setup([vpn, printer]);
+    tracker.getIssue.mockImplementation(async (key: string) => {
+      if (key === "DS-6") throw new IssueTrackerError("unavailable", 503);
+      return null;
+    });
+
+    const shown = await useCase.execute({ conversationId: convId });
+
+    expect(shown).toHaveLength(2);
+    expect(sent).toEqual([[
+      "Open support requests in this channel:",
+      "- **DS-6** VPN drops every ten minutes (Alice): To do (last known)",
+      "- **DS-7** Printer is jammed (Bob): In progress (last known)",
+    ].join("\n")]);
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith("ListSupportRequests: getIssue failed", { key: "DS-6", err: "IssueTrackerError", status: 503 });
+  });
+
+  it.each([
+    [undefined, "There are no open support requests in this channel."],
+    [alice, "You have no open support requests in this channel."],
+  ])("says when there is nothing open (requester %j)", async (requesterId, expected) => {
+    const { tracker, sent, useCase } = setup([]);
+
+    expect(await useCase.execute({ conversationId: convId, requesterId })).toEqual([]);
+
+    expect(sent).toEqual([expected]);
+    expect(tracker.getIssue).not.toHaveBeenCalled();
+  });
+
+  it("says nothing is open when every stored request turns out done", async () => {
+    const { tracker, sent, useCase } = setup([vpn]);
+    tracker.getIssue.mockResolvedValue(makeSnapshot({ statusCategory: "done" }));
+
+    await useCase.execute({ conversationId: convId });
+
+    expect(sent).toEqual(["There are no open support requests in this channel."]);
+  });
+});

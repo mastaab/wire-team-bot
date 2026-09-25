@@ -1,16 +1,17 @@
-import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
-import { isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/ids/jiraLink";
-import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
-import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
+import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { IssueTrackerError, trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { REPLY_BODY_MAX } from "../../services/offers";
+import { REPLY_FOOTER } from "./formatIssue";
+import { findSupportRequestInConversation } from "./supportRequestScope";
+import { notInConversation } from "./supportRequestStatus";
 
 export interface ReplyToServiceDeskInput {
-  /** Either an action ID (ACT-NNNN) or a tracker key. */
+  /** A tracker key, e.g. "DS-6". */
   reference: string;
   /** Reply text. Sent to the ticket; never stored, logged or audited. */
   body: string;
@@ -18,15 +19,6 @@ export interface ReplyToServiceDeskInput {
   actorId: QualifiedId;
   replyToMessageId?: string;
 }
-
-type Reply = (text: string) => Promise<void>;
-
-interface LinkedTicket {
-  key: string;
-  actionId: string;
-}
-
-const ACTION_ID_RE = /^ACT-\d+$/;
 
 /**
  * Only a 4xx response means Jira refused the reply. A timeout, network error, 5xx or
@@ -37,12 +29,12 @@ function wasRejected(err: unknown): boolean {
 }
 
 /**
- * Sends one customer-facing reply to a ticket linked from this conversation. The reply
- * carries a footer naming the action, never the requester: the bot speaks for the team.
+ * Sends one customer-facing reply to a support request of this conversation. The reply
+ * carries a footer saying it came from Wire; the bot speaks for the team.
  */
 export class ReplyToServiceDesk {
   constructor(
-    private readonly actions: ActionRepository,
+    private readonly requests: SupportRequestRepository,
     private readonly tracker: IssueTrackerPort,
     private readonly wireOutbound: WireOutboundPort,
     private readonly auditLog: AuditLogRepository,
@@ -51,14 +43,17 @@ export class ReplyToServiceDesk {
 
   /** True when the reply was sent. Exactly one Wire message is sent either way. */
   async execute(input: ReplyToServiceDeskInput): Promise<boolean> {
-    const reply: Reply = text =>
+    const reply = (text: string): Promise<void> =>
       this.wireOutbound.sendPlainText(input.conversationId, text, { replyToMessageId: input.replyToMessageId });
 
-    const reference = input.reference.trim().toUpperCase();
-    const ticket = ACTION_ID_RE.test(reference)
-      ? await this.ticketFromAction(reference, input.conversationId, reply)
-      : await this.ticketFromIssueReference(reference, input.conversationId, reply);
-    if (!ticket) return false;
+    const request = await findSupportRequestInConversation(
+      this.requests, input.reference, input.conversationId, this.tracker.projectKey,
+    );
+    if (!request) {
+      await reply(notInConversation(input.reference));
+      return false;
+    }
+    const key = request.key;
 
     const body = input.body.trim();
     if (!body) {
@@ -71,12 +66,12 @@ export class ReplyToServiceDesk {
     }
 
     try {
-      await this.tracker.addCustomerReply(ticket.key, `${body}\n\nSent from Wire (${ticket.actionId}).`);
+      await this.tracker.addCustomerReply(key, `${body}\n\n${REPLY_FOOTER}`);
     } catch (err) {
       this.logger?.warn("ReplyToServiceDesk: addCustomerReply failed", trackerErrorFields(err));
       await reply(wasRejected(err)
-        ? `I'm afraid I couldn't send the reply to **${ticket.key}** just now.`
-        : `I'm afraid I couldn't confirm that the reply reached **${ticket.key}**. Please check the ticket before sending it again.`);
+        ? `I'm afraid I couldn't send the reply to **${key}** just now.`
+        : `I'm afraid I couldn't confirm that the reply reached **${key}**. Please check the ticket before sending it again.`);
       return false;
     }
 
@@ -88,48 +83,13 @@ export class ReplyToServiceDesk {
         conversationId: input.conversationId,
         action: "entity_created",
         entityType: "JiraComment",
-        entityId: ticket.key,
-        details: { actionId: ticket.actionId },
+        entityId: key,
+        details: { supportRequest: key },
       });
     } catch (err) {
       this.logger?.error("ReplyToServiceDesk: audit append failed", { err: err instanceof Error ? err.name : "UnknownError" });
     }
-    await reply(`Sent your reply to **${ticket.key}** in Jira.`);
+    await reply(`Sent your reply to **${key}** in Jira.`);
     return true;
-  }
-
-  private async ticketFromAction(actionId: string, conversationId: QualifiedId, reply: Reply): Promise<LinkedTicket | null> {
-    const action = await this.actions.findById(actionId);
-    if (!action || action.deleted || !sameQualifiedId(action.conversationId, conversationId)) {
-      await reply(`I'm afraid I can't find **${actionId}** in this conversation.`);
-      return null;
-    }
-    const key = jiraKeyFromLinks(action.linkedIds);
-    if (!key) {
-      await reply(`**${action.id}** isn't linked to a Jira ticket yet. Use \`${action.id} to jira\` to raise one.`);
-      return null;
-    }
-    if (!isKeyInProject(key, this.tracker.projectKey)) {
-      await reply(`I'm afraid **${action.id}** is linked to **${key}**, which is outside the ${this.tracker.projectKey} project I can reply to.`);
-      return null;
-    }
-    return { key, actionId: action.id };
-  }
-
-  /** A bare key must be in the configured project and linked from an action in this conversation. */
-  private async ticketFromIssueReference(key: string, conversationId: QualifiedId, reply: Reply): Promise<LinkedTicket | null> {
-    if (!isKeyInProject(key, this.tracker.projectKey)) {
-      await reply(`I'm afraid I can only reply to tickets in the ${this.tracker.projectKey} project.`);
-      return null;
-    }
-    const link = toJiraLink(key);
-    const candidates = await this.actions.query({ conversationId, linkedIdsHas: link, limit: 20 });
-    const linking = candidates.find(a =>
-      !a.deleted && sameQualifiedId(a.conversationId, conversationId) && a.linkedIds.includes(link));
-    if (!linking) {
-      await reply(`I'm afraid **${key}** isn't linked to an action in this conversation.`);
-      return null;
-    }
-    return { key, actionId: linking.id };
   }
 }

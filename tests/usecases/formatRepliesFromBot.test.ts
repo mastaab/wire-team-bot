@@ -6,7 +6,7 @@ const created = new Date("2026-09-25T09:00:00Z");
 describe("formatReplies with the bot's own replies", () => {
   it("labels a reply sent from Wire as the team's", () => {
     expect(formatReplies([
-      { author: "WireTeamBotDemo", created, body: "Section 3 is attached.\n\nSent from Wire (ACT-0004).", fromThisBot: true },
+      { author: "WireTeamBotDemo", created, body: "Section 3 is attached.\n\nSent from Wire.", fromThisBot: true },
     ], "UTC")).toBe([
       "Latest reply on the ticket:",
       "",
@@ -50,8 +50,22 @@ describe("formatReplies with the bot's own replies", () => {
     expect(text).not.toContain("Sent from Wire");
   });
 
+  it.each([
+    ["the current footer", "Sent from Wire."],
+    ["the older footer naming an action", "Sent from Wire (ACT-0004)."],
+  ])("strips %s from the bot's own replies", (_label, footer) => {
+    expect(formatReplies([{ author: "WireTeamBotDemo", created, body: `It still drops.\n\n${footer}\n`, fromThisBot: true }], "UTC"))
+      .toBe("Latest reply on the ticket:\n\n**Your team (via Wire)**, 25 Sept, 09:00\n> It still drops.");
+  });
+
+  it("strips only a trailing footer", () => {
+    expect(formatReplies([{ author: "WireTeamBotDemo", created, body: "Sent from Wire. Then more text.", fromThisBot: true }], "UTC"))
+      .toContain("> Sent from Wire. Then more text.");
+  });
+
   it("keeps the footer text on replies that were not sent by the bot", () => {
     expect(formatReplies([{ author: "Dana", created, body: "Quoting: Sent from Wire (ACT-1)." }], "UTC")).toContain("Sent from Wire (ACT-1).");
+    expect(formatReplies([{ author: "Dana", created, body: "Quoting: Sent from Wire." }], "UTC")).toContain("Sent from Wire.");
   });
 });
 

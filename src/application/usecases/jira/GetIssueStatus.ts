@@ -1,15 +1,16 @@
-import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
-import { isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/ids/jiraLink";
-import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
+import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { formatIssueStatus, formatReplies } from "./formatIssue";
+import { findSupportRequestInConversation } from "./supportRequestScope";
+import { botActor, notInConversation, refreshStatusCategory } from "./supportRequestStatus";
 
 export interface GetIssueStatusInput {
-  /** Either an action ID (ACT-NNNN) or a tracker key. */
+  /** A tracker key, e.g. "DS-6". */
   reference: string;
   conversationId: QualifiedId;
   /** Conversation timezone for reply times; UTC when absent. */
@@ -17,17 +18,15 @@ export interface GetIssueStatusInput {
   replyToMessageId?: string;
 }
 
-type Reply = (text: string) => Promise<void>;
-
-const ACTION_ID_RE = /^ACT-\d+$/;
 const REPLIES_SHOWN = 3;
 
-/** Reads a linked ticket's live status, restricted to tickets linked from this conversation. */
+/** Reads a support request's live status, restricted to support requests of this conversation. */
 export class GetIssueStatus {
   constructor(
-    private readonly actions: ActionRepository,
+    private readonly requests: SupportRequestRepository,
     private readonly tracker: IssueTrackerPort,
     private readonly wireOutbound: WireOutboundPort,
+    private readonly auditLog: AuditLogRepository,
     private readonly logger?: Logger,
   ) {}
 
@@ -37,14 +36,17 @@ export class GetIssueStatus {
   }
 
   async execute(input: GetIssueStatusInput): Promise<IssueSnapshot | null> {
-    const reply: Reply = text =>
+    const reply = (text: string): Promise<void> =>
       this.wireOutbound.sendPlainText(input.conversationId, text, { replyToMessageId: input.replyToMessageId });
 
-    const reference = input.reference.trim().toUpperCase();
-    const key = ACTION_ID_RE.test(reference)
-      ? await this.keyFromAction(reference, input.conversationId, reply)
-      : await this.keyFromIssueReference(reference, input.conversationId, reply);
-    if (!key) return null;
+    const request = await findSupportRequestInConversation(
+      this.requests, input.reference, input.conversationId, this.tracker.projectKey,
+    );
+    if (!request) {
+      await reply(notInConversation(input.reference));
+      return null;
+    }
+    const key = request.key;
 
     let snapshot: IssueSnapshot | null;
     try {
@@ -58,6 +60,9 @@ export class GetIssueStatus {
       await reply(`I'm afraid I couldn't find **${key}** in Jira.`);
       return null;
     }
+    await refreshStatusCategory(
+      this.requests, this.auditLog, request, snapshot.statusCategory, botActor(input.conversationId), this.logger,
+    );
     await reply(formatIssueStatus(snapshot, await this.repliesBlock(key, input.timezone ?? "UTC")));
     return snapshot;
   }
@@ -70,40 +75,5 @@ export class GetIssueStatus {
       this.logger?.warn("GetIssueStatus: listCustomerReplies failed", trackerErrorFields(err));
       return "I'm afraid I couldn't load the replies from Jira just now.";
     }
-  }
-
-  private async keyFromAction(actionId: string, conversationId: QualifiedId, reply: Reply): Promise<string | null> {
-    const action = await this.actions.findById(actionId);
-    if (!action || action.deleted || !sameQualifiedId(action.conversationId, conversationId)) {
-      await reply(`I'm afraid I can't find **${actionId}** in this conversation.`);
-      return null;
-    }
-    const key = jiraKeyFromLinks(action.linkedIds);
-    if (!key) {
-      await reply(`**${action.id}** isn't linked to a Jira ticket yet. Use \`${action.id} to jira\` to raise one.`);
-      return null;
-    }
-    if (!isKeyInProject(key, this.tracker.projectKey)) {
-      await reply(`I'm afraid **${action.id}** is linked to **${key}**, which is outside the ${this.tracker.projectKey} project I can look up.`);
-      return null;
-    }
-    return key;
-  }
-
-  /** A bare key must be in the configured project and linked from an action in this conversation. */
-  private async keyFromIssueReference(key: string, conversationId: QualifiedId, reply: Reply): Promise<string | null> {
-    if (!isKeyInProject(key, this.tracker.projectKey)) {
-      await reply(`I'm afraid I can only look up tickets in the ${this.tracker.projectKey} project.`);
-      return null;
-    }
-    const link = toJiraLink(key);
-    const candidates = await this.actions.query({ conversationId, linkedIdsHas: link, limit: 20 });
-    const linkedHere = candidates.some(a =>
-      !a.deleted && sameQualifiedId(a.conversationId, conversationId) && a.linkedIds.includes(link));
-    if (!linkedHere) {
-      await reply(`I'm afraid **${key}** isn't linked to an action in this conversation.`);
-      return null;
-    }
-    return key;
   }
 }
