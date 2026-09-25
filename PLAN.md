@@ -1728,6 +1728,15 @@ Built by three parallel subagents (answer side, action side, adapter) on the mai
 - **Marker parsing:** a marker spread over several lines is parsed and hidden; raw JSON is never shown.
 - **Evidence:** 843 tests pass, type-check and lint clean. Real-model CLI checks with sharing off and on: raise and reply offers phrased correctly and cancelled with no; "ok thanks" re-asked without writing; an unrelated question answered without ticket lookups; ticket status answered from live data only with sharing on; audit log shows no Jira writes from these checks. Pending: live Wire check of one service-desk reply and one confirmed raise, with operator approval.
 
+### Open items
+
+- **TODO: per-channel timezone setting (before a real customer team uses the bot).** Every channel gets `UTC` when the bot joins (hard-coded in `WireEventRouter`), and there is no command to change it. The channel timezone decides how deadlines ("by Friday") and reminder times are read, the calendar date sent to Jira as the due date, and the times shown in replies, so a German team in `UTC` is two hours off and can be a day off for late-evening deadlines. Stored deadlines are exact instants and do not move when the timezone changes; only their reading and display do. Planned fix:
+  - an addressed command such as `@Wire Team Bot timezone Europe/Berlin` that validates the IANA name, saves it to `channel_config.timezone` with a `config_changed` audit entry, and confirms;
+  - `WIRE_TEAM_BOT_DEFAULT_TIMEZONE` for channels the bot newly joins, defaulting to `UTC`;
+  - the zone shown with displayed times (for example "20:45 CEST");
+  - tests for validation, the default, and deadline, reminder and due-date behaviour across zones.
+- **Applied manually for the demo (2026-09-25):** the staging channel's `channel_config.timezone` was set to `Europe/Berlin` with a one-row SQL update and the bot restarted. The CLI test channel stays `UTC`. Revert with the same update to `'UTC'`.
+
 ### Out of scope for the demo
 
 Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due`, cancellations and passive (unmentioned) completions to Jira, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
