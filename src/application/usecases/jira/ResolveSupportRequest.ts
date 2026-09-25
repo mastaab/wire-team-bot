@@ -7,7 +7,7 @@ import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { formatResolution } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
-import { notInConversation } from "./supportRequestStatus";
+import { appendAuditSafely, botActor, notInConversation, refreshStatusCategory } from "./supportRequestStatus";
 
 export interface ResolveSupportRequestInput {
   issueKey: string;
@@ -19,7 +19,8 @@ export interface ResolveSupportRequestInput {
 
 /**
  * Moves a support request of this conversation to done with the service desk, stores the
- * resulting category and reports the SLA outcome. Every attempt that reaches the tracker is
+ * resulting category and reports the SLA outcome. A request last known as done is read live
+ * first, since the desk may have reopened it. Every attempt that reaches the tracker is
  * audited with the actor, because some transitions may apply before a failure.
  */
 export class ResolveSupportRequest {
@@ -44,9 +45,28 @@ export class ResolveSupportRequest {
       return null;
     }
     const key = request.key;
+    let current = request;
     if (request.statusCategory === "done") {
-      await reply(`**${key}** is already resolved.`);
-      return null;
+      // The desk may have reopened the ticket since, so the last known category is checked live.
+      let live: IssueSnapshot | null;
+      try {
+        live = await this.tracker.getIssue(key);
+      } catch (err) {
+        this.logger?.warn("ResolveSupportRequest: getIssue failed", { key, ...trackerErrorFields(err) });
+        live = null;
+      }
+      if (!live) {
+        await reply(`I'm afraid I couldn't reach Jira to check **${key}** just now; please try again later.`);
+        return null;
+      }
+      const refreshed = await refreshStatusCategory(
+        this.requests, this.auditLog, request, live.statusCategory, botActor(input.conversationId), this.logger,
+      );
+      if (live.statusCategory === "done") {
+        await reply(`**${key}** is already resolved.`);
+        return null;
+      }
+      current = refreshed ?? { ...request, statusCategory: live.statusCategory };
     }
 
     const entry: Omit<AuditLogEntry, "details"> = {
@@ -62,29 +82,20 @@ export class ResolveSupportRequest {
       snapshot = await this.tracker.resolveIssue(key);
     } catch (err) {
       this.logger?.warn("ResolveSupportRequest: resolveIssue failed", { key, ...trackerErrorFields(err) });
-      await this.appendAudit({ ...entry, details: { outcome: "resolve_failed" } });
+      await appendAuditSafely(this.auditLog, { ...entry, details: { outcome: "resolve_failed" } }, "ResolveSupportRequest", this.logger);
       await reply(`I'm afraid I couldn't resolve **${key}** with the service desk; please check the ticket.`);
       return null;
     }
 
-    if (snapshot.statusCategory !== request.statusCategory) {
-      try {
-        await this.requests.updateStatusCategory(key, snapshot.statusCategory, new Date());
-      } catch (err) {
-        this.logger?.warn("ResolveSupportRequest: storing the status failed", { key, err: err instanceof Error ? err.name : "UnknownError" });
-      }
+    // The refresh audits a changed category with the actor; an unchanged one is audited here,
+    // so every resolve attempt that reached the tracker has an entry.
+    const refreshed = await refreshStatusCategory(
+      this.requests, this.auditLog, current, snapshot.statusCategory, input.actorId, this.logger,
+    );
+    if (!refreshed) {
+      await appendAuditSafely(this.auditLog, { ...entry, details: { statusCategory: snapshot.statusCategory } }, "ResolveSupportRequest", this.logger);
     }
-    await this.appendAudit({ ...entry, details: { statusCategory: snapshot.statusCategory } });
     await reply(formatResolution(snapshot));
     return snapshot;
-  }
-
-  /** The tracker has changed by now, so an audit failure must not suggest otherwise. */
-  private async appendAudit(entry: AuditLogEntry): Promise<void> {
-    try {
-      await this.auditLog.append(entry);
-    } catch (err) {
-      this.logger?.error("ResolveSupportRequest: audit append failed", { err: err instanceof Error ? err.name : "UnknownError" });
-    }
   }
 }

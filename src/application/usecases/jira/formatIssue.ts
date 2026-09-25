@@ -1,6 +1,7 @@
 import type { IssueReply, IssueSnapshot, IssueStatusCategory, SlaSummary } from "../../ports/IssueTrackerPort";
 
-const REPLY_BODY_MAX = 500;
+/** Longest service-desk reply shown in Wire; the ticket has the full text. */
+const REPLY_DISPLAY_MAX = 500;
 
 /** The footer ReplyToServiceDesk appends to replies it sends. */
 export const REPLY_FOOTER = "Sent from Wire.";
@@ -55,7 +56,7 @@ export function formatReplies(replies: readonly IssueReply[], timeZone: string):
     // The bot's own replies carry a "Sent from Wire" footer; the label already says so.
     const raw = reply.fromThisBot ? reply.body.replace(OWN_REPLY_FOOTER, "") : reply.body;
     const body = raw.trim();
-    const text = body.length <= REPLY_BODY_MAX ? body : `${body.slice(0, REPLY_BODY_MAX - 3).trimEnd()}...`;
+    const text = body.length <= REPLY_DISPLAY_MAX ? body : `${body.slice(0, REPLY_DISPLAY_MAX - 3).trimEnd()}...`;
     // Every quoted line is non-empty: an empty "> " line ends the quote in Markdown.
     const quoted = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`).join("\n");
     const author = reply.fromThisBot ? "Your team (via Wire)" : reply.author;

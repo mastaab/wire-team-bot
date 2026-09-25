@@ -1,7 +1,8 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import type { SupportRequest, SupportRequestStatusCategory } from "../../../domain/entities/SupportRequest";
-import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
+import type { AuditLogEntry, AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
+import { IssueTrackerError } from "../../ports/IssueTrackerPort";
 import type { Logger } from "../../ports/Logger";
 
 /** Actor recorded for writes the bot makes on its own, such as a status refresh after a read. */
@@ -47,4 +48,26 @@ export async function refreshStatusCategory(
 /** The reply for a key that is not a support request of this conversation, whatever the reason. */
 export function notInConversation(reference: string): string {
   return `I'm afraid **${reference.trim().toUpperCase()}** isn't a support request in this conversation.`;
+}
+
+/**
+ * Only a 4xx response means Jira refused the write. A timeout, network error, 5xx or
+ * unexpected response may follow an accepted write, so it must not invite a retry.
+ */
+export function wasRefused(err: unknown): boolean {
+  return err instanceof IssueTrackerError && err.status !== undefined && err.status >= 400 && err.status < 500;
+}
+
+/**
+ * Appends an audit entry after a tracker write. The tracker may have changed by then, so a
+ * failure is logged with the error name only and never changes the reply.
+ */
+export async function appendAuditSafely(
+  auditLog: AuditLogRepository, entry: AuditLogEntry, source: string, logger?: Logger,
+): Promise<void> {
+  try {
+    await auditLog.append(entry);
+  } catch (err) {
+    logger?.error(`${source}: audit append failed`, { err: err instanceof Error ? err.name : "UnknownError" });
+  }
 }

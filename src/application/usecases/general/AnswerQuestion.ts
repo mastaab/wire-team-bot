@@ -95,10 +95,16 @@ const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|support|requests?|iss
  * so an offer on a question that asks for no change ("what did we decide about lunch?") is
  * dropped. A named project key also counts as a reply target (see `asksForChange`).
  */
-/** support: service-desk, support, Jira or ticket wording, "raise", "escalate", "open a (...) request", "report". */
-const SUPPORT_INTENT = /\b(?:service\s+desk|support|jira|tickets?|rais(?:e|es|ed|ing)|escalat(?:e|es|ed|ing)|open\s+(?:a|an)\s+(?:\w+\s+)?request|report(?:s|ed|ing)?)\b/i;
-/** resolve: "close", "resolve", "works again", "fixed", "no longer needed" and their inflections. */
-const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?|working)\s+again|fixed|no\s+longer\s+(?:needed|necessary|required))\b/i;
+/**
+ * support: a raising verb ("raise", "open", "create", "file", "log", "submit", "report",
+ * "escalate", "put ... into") followed by a service-desk target ("service desk", "support",
+ * "ticket", "request", "Jira", "it with"), or "raise it"/"report it". A question about an
+ * existing request ("any news on my ticket?", "is my ticket still open?") names no raising verb
+ * before the target, so it does not pass.
+ */
+const SUPPORT_INTENT = /\b(?:raise|open|create|file|log(?!\s+(?:in|into|on)\b)|submit|report|escalate|put\b[^.?!]*\binto)\b[^.?!]*\b(?:service\s+desk|support|tickets?|requests?|jira|it\s+with)\b|\b(?:raise|report)\s+(?:it|this)\b/i;
+/** resolve: "close", "resolve", "works again", "working again", "no longer needed" and their inflections. */
+const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?|working)\s+again|no\s+longer\s+(?:needed|necessary|required))\b/i;
 /** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
 const REPLY_VERB = /\b(?:repl(?:y|ies|ied|ying)|tell|send|let\b.*\bknow|message|answer)\b/i;
 /** reply, second part: the service desk as recipient. */
@@ -246,7 +252,7 @@ export class AnswerQuestion {
         const request = await findSupportRequestInConversation(jira.requests, key, input.conversationId, projectKey);
         if (request) named.push(request);
       }
-      recent = inConversation(await jira.requests.listByConversation(input.conversationId, { limit: STORED_REQUESTS_SHARED }), input.conversationId);
+      recent = inConversation(await jira.requests.listByConversation(input.conversationId, { limit: STORED_REQUESTS_SHARED }), input.conversationId, projectKey);
     } catch (err) {
       this.logger?.warn("AnswerQuestion: support request lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
     }
@@ -257,7 +263,7 @@ export class AnswerQuestion {
 
     let open: SupportRequest[] = [];
     try {
-      open = inConversation(await jira.requests.listByConversation(input.conversationId, { openOnly: true, limit: TICKETS_SHARED }), input.conversationId)
+      open = inConversation(await jira.requests.listByConversation(input.conversationId, { openOnly: true, limit: TICKETS_SHARED }), input.conversationId, projectKey)
         .filter((request) => request.statusCategory !== "done");
     } catch (err) {
       this.logger?.warn("AnswerQuestion: support request lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
@@ -353,8 +359,7 @@ export class AnswerQuestion {
    * Every question ends with "?" so the router treats a non-exact answer as a follow-up.
    */
   private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId): Promise<string | null> {
-    // The parser has already bounded the summary and description and collapsed the summary to one line.
-    if (command.kind === "support") return `Shall I raise this with the service desk?\n> ${command.summary}\n\n(yes or no)?`;
+    if (command.kind === "support") return supportQuestion(command.summary, command.description);
 
     const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
     if (!request) return null;
@@ -362,7 +367,7 @@ export class AnswerQuestion {
       const quoted = command.body.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
       return `Here is the reply for **${request.key}**:\n${quoted}\n\nShall I send it (yes or no)?`;
     }
-    if (request.statusCategory === "done") return null;
+    // A request last known as done is not dropped: the desk may have reopened it, and the use case checks live.
     return `Shall I resolve **${request.key}** "${oneLine(request.summary)}" with the service desk (yes or no)?`;
   }
 }
@@ -396,9 +401,10 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
   }
 }
 
-/** Only not-deleted records of this conversation, whatever the repository returned. */
-function inConversation(requests: readonly SupportRequest[], conversationId: QualifiedId): SupportRequest[] {
-  return requests.filter((request) => !request.deleted && sameQualifiedId(request.conversationId, conversationId));
+/** Only not-deleted records of this conversation and project, whatever the repository returned. */
+function inConversation(requests: readonly SupportRequest[], conversationId: QualifiedId, projectKey: string): SupportRequest[] {
+  return requests.filter((request) =>
+    !request.deleted && sameQualifiedId(request.conversationId, conversationId) && isKeyInProject(request.key, projectKey));
 }
 
 /** The first record per key, in order. */
@@ -409,6 +415,22 @@ function uniqueByKey(requests: readonly SupportRequest[]): SupportRequest[] {
     seen.add(request.key);
     return true;
   });
+}
+
+/**
+ * The support confirmation shows exactly what will be sent: the summary in bold and the
+ * description quoted line by line, left out when it only repeats the summary. The parser has
+ * already bounded both and collapsed the summary to one line.
+ */
+function supportQuestion(summary: string, description: string): string {
+  const lines = [`> **${summary}**`];
+  if (oneLine(description).toLowerCase() !== summary.toLowerCase()) lines.push(...quoteLines(description));
+  return `Shall I raise this with the service desk?\n${lines.join("\n")}\n\n(yes or no)?`;
+}
+
+/** Every quoted line is non-empty: an empty "> " line ends the quote in Markdown. */
+function quoteLines(text: string): string[] {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`);
 }
 
 function oneLine(text: string): string {

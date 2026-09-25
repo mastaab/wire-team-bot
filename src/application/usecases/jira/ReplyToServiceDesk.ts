@@ -1,14 +1,14 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
-import { IssueTrackerError, trackerErrorFields } from "../../ports/IssueTrackerPort";
+import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { REPLY_BODY_MAX } from "../../services/offers";
 import { REPLY_FOOTER } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
-import { notInConversation } from "./supportRequestStatus";
+import { appendAuditSafely, notInConversation, wasRefused } from "./supportRequestStatus";
 
 export interface ReplyToServiceDeskInput {
   /** A tracker key, e.g. "DS-6". */
@@ -18,14 +18,6 @@ export interface ReplyToServiceDeskInput {
   conversationId: QualifiedId;
   actorId: QualifiedId;
   replyToMessageId?: string;
-}
-
-/**
- * Only a 4xx response means Jira refused the reply. A timeout, network error, 5xx or
- * unexpected response may follow an accepted write, so it must not invite a resend.
- */
-function wasRejected(err: unknown): boolean {
-  return err instanceof IssueTrackerError && err.status !== undefined && err.status >= 400 && err.status < 500;
 }
 
 /**
@@ -69,27 +61,31 @@ export class ReplyToServiceDesk {
       await this.tracker.addCustomerReply(key, `${body}\n\n${REPLY_FOOTER}`);
     } catch (err) {
       this.logger?.warn("ReplyToServiceDesk: addCustomerReply failed", trackerErrorFields(err));
-      await reply(wasRejected(err)
-        ? `I'm afraid I couldn't send the reply to **${key}** just now.`
-        : `I'm afraid I couldn't confirm that the reply reached **${key}**. Please check the ticket before sending it again.`);
+      if (wasRefused(err)) {
+        await reply(`I'm afraid I couldn't send the reply to **${key}** just now.`);
+        return false;
+      }
+      // Jira may have accepted the reply, so the attempt is recorded.
+      await this.audit(input, key, { supportRequest: key, outcome: "reply_unconfirmed" });
+      await reply(`I'm afraid I couldn't confirm that the reply reached **${key}**. Please check the ticket before sending it again.`);
       return false;
     }
 
     // The reply is public in Jira now, so an audit failure must not suggest otherwise.
-    try {
-      await this.auditLog.append({
-        timestamp: new Date(),
-        actorId: input.actorId,
-        conversationId: input.conversationId,
-        action: "entity_created",
-        entityType: "JiraComment",
-        entityId: key,
-        details: { supportRequest: key },
-      });
-    } catch (err) {
-      this.logger?.error("ReplyToServiceDesk: audit append failed", { err: err instanceof Error ? err.name : "UnknownError" });
-    }
+    await this.audit(input, key, { supportRequest: key });
     await reply(`Sent your reply to **${key}** in Jira.`);
     return true;
+  }
+
+  private audit(input: ReplyToServiceDeskInput, key: string, details: Record<string, unknown>): Promise<void> {
+    return appendAuditSafely(this.auditLog, {
+      timestamp: new Date(),
+      actorId: input.actorId,
+      conversationId: input.conversationId,
+      action: "entity_created",
+      entityType: "JiraComment",
+      entityId: key,
+      details,
+    }, "ReplyToServiceDesk", this.logger);
   }
 }

@@ -105,8 +105,21 @@ describe("ReplyToServiceDesk", () => {
     expect(await useCase.execute({ ...base, reference: "DS-6", body: "Hello" })).toBe(false);
 
     expect(sent).toEqual(["I'm afraid I couldn't confirm that the reply reached **DS-6**. Please check the ticket before sending it again."]);
-    expect(audit.append).not.toHaveBeenCalled();
+    expect(audit.append).toHaveBeenCalledTimes(1);
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: bob, conversationId: convId, action: "entity_created", entityType: "JiraComment", entityId: "DS-6",
+      details: { supportRequest: "DS-6", outcome: "reply_unconfirmed" },
+    }));
     expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the unconfirmed reply wording when the audit fails", async () => {
+    const { sent, logger, useCase } = setup({ addCustomerReply: vi.fn().mockRejectedValue(new IssueTrackerError("server error", 500)), auditError: new Error("audit down") });
+
+    expect(await useCase.execute({ ...base, reference: "DS-6", body: "Hello" })).toBe(false);
+
+    expect(sent).toEqual(["I'm afraid I couldn't confirm that the reply reached **DS-6**. Please check the ticket before sending it again."]);
+    expect(logger.error).toHaveBeenCalledWith("ReplyToServiceDesk: audit append failed", { err: "Error" });
   });
 
   it("still reports success when the audit fails after the reply was sent, logging only the error name", async () => {
