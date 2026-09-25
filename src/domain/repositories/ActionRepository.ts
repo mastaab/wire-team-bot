@@ -10,6 +10,8 @@ export interface ActionQuery {
   searchText?: string;
   limit?: number;
   deadlineBefore?: Date;
+  /** Only actions whose linkedIds contain this exact value, e.g. "jira:DS-42". */
+  linkedIdsHas?: string;
 }
 
 export interface ActionRepository {

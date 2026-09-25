@@ -43,4 +43,19 @@ describe("combined-command guard", () => {
   it("ignores malformed mention spans", () => {
     expect(hasMultipleCommands("status", [{ offset: -1, length: 4, userId: botId }], botId)).toBe(false);
   });
+  it.each([
+    "ACT-0004 to jira and ACT-0005 done",
+    "status of DS-42\nACT-3 done",
+    "jira status of ACT-0004; list decisions",
+  ])("recognises Jira command starts when the integration is configured: %s", text => {
+    expect(hasMultipleCommands(text, [], botId, "DS")).toBe(true);
+  });
+
+  it.each([
+    ["ACT-0004 to jira and ACT-0005 done", undefined],
+    ["status of WPB-12\nACT-3 done", undefined],
+    ["status of WPB-12\nACT-3 done", "DS"],
+  ])("leaves Jira-like text alone when it is not a configured command: %s (project %s)", (text, project) => {
+    expect(hasMultipleCommands(text, [], botId, project)).toBe(false);
+  });
 });

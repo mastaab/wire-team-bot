@@ -115,7 +115,7 @@ describe("JiraServiceManagementAdapter.createIssue", () => {
     expect(result).toEqual({ key: "DS-2", url: "https://site.test/browse/DS-2", fieldsApplied: true });
     const [create, edit] = fetch.mock.calls.map(([, init]) => JSON.parse(init.body as string));
     expect(create).toEqual({
-      serviceDeskId: "184", requestTypeId: "11808", requestFieldValues: { summary: "x".repeat(255), description: "Owner: Bob" },
+      serviceDeskId: "184", requestTypeId: "11808", requestFieldValues: { summary: `${"x".repeat(252)}...`, description: "Owner: Bob" },
     });
     expect(edit).toEqual({ fields: { duedate: "2026-09-30", labels: ["wire-team-bot"] } });
     expect((fetch.mock.calls[0][1].headers as Record<string, string>)["Content-Type"]).toBe("application/json");
@@ -278,6 +278,8 @@ describe("JiraServiceManagementAdapter.resolveIssue", () => {
     const result = await adapter().resolveIssue("DS-1");
     expect(result.slas.map((s) => s.state)).toEqual(["met", "met"]);
     expect(calls(fetch).filter((c) => c === `GET ${SLA_PATH}`)).toHaveLength(3);
+    // Once the issue is done only the SLAs are re-read, not the issue itself.
+    expect(calls(fetch).filter((c) => c === `GET ${ISSUE_PATH}`)).toHaveLength(1);
   });
 
   it("gives up polling after the attempt limit", async () => {

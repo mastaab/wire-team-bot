@@ -34,6 +34,11 @@ describe("resolveJiraConfig", () => {
     expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_PROJECT_KEY: "D-S" })).toThrow(/project key/);
   });
 
+  it("raises a timeout below the documented minimum to 1000 ms", () => {
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_TIMEOUT_MS: "200" })!.timeoutMs).toBe(1000);
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_TIMEOUT_MS: "30000" })!.timeoutMs).toBe(30_000);
+  });
+
   it("switches to Basic auth when an email is configured", () => {
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_EMAIL: "bot@example.com" })!.email).toBe("bot@example.com");
   });

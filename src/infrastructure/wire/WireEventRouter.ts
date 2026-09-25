@@ -313,7 +313,7 @@ export class WireEventRouter extends WireEventsHandler {
     }
 
     // Reject a command bundle before any write, buffering or model work.
-    if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId)) {
+    if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {
       await this.deps.wireOutbound.sendPlainText(convId,
         "Please send one command per message. I have not run any commands from this message.",
         { replyToMessageId: wireMessage.id });
@@ -419,16 +419,19 @@ export class WireEventRouter extends WireEventsHandler {
       }
       const config = await this.deps.conversationConfig.get(convId);
       await this.deps.pushActionToJira.execute({
-        actionId, conversationId: convId, actorId: sender, actorName: senderDisplayName ?? "a team member",
+        actionId, conversationId: convId, actorId: sender,
         timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
       });
       return;
     }
 
-    // status of DS-NN / jira status of ACT-NNNN (customer demo). Without the integration,
-    // or for a bare "status of ACT-NNNN", the text keeps its existing Q&A handling.
-    const issueStatusMatch = this.deps.getIssueStatus
-      ? commandText.match(/^(?:jira\s+status\s+of\s+(ACT-\d+)|(?:jira\s+)?status\s+of\s+(?!(?:ACT|DEC|REM|TASK)-)([A-Z][A-Z0-9]+-\d+))[?.]?\s*$/i)
+    // status of DS-NN / jira status of ACT-NNNN (customer demo). Only keys of the configured
+    // project match, so other ticket references in ordinary chat and the bot's own record
+    // IDs keep their existing handling, as does a bare "status of ACT-NNNN". The project
+    // key is validated at startup and contains only [A-Z0-9].
+    const jiraProjectKey = this.deps.getIssueStatus?.projectKey;
+    const issueStatusMatch = jiraProjectKey
+      ? commandText.match(new RegExp(`^(?:jira\\s+status\\s+of\\s+(ACT-\\d+)|(?:jira\\s+)?status\\s+of\\s+(${jiraProjectKey}-\\d+))[?.]?\\s*$`, "i"))
       : null;
     if (issueStatusMatch && this.deps.getIssueStatus) {
       await this.deps.getIssueStatus.execute({

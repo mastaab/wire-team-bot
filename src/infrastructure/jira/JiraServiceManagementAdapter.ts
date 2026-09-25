@@ -97,6 +97,12 @@ function toSla(entry: JiraSla): SlaSummary | null {
   };
 }
 
+/** Jira rejects summaries over 255 characters; cut long ones visibly rather than silently. */
+function truncateSummary(summary: string): string {
+  const text = summary.trim();
+  return text.length <= SUMMARY_MAX_LENGTH ? text : `${text.slice(0, SUMMARY_MAX_LENGTH - 3).trimEnd()}...`;
+}
+
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class JiraServiceManagementAdapter implements IssueTrackerPort {
@@ -125,7 +131,7 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
       serviceDeskId: this.config.serviceDeskId,
       requestTypeId: this.config.requestTypeId,
       requestFieldValues: {
-        summary: request.summary.slice(0, SUMMARY_MAX_LENGTH),
+        summary: truncateSummary(request.summary),
         description: request.description,
       },
     });
@@ -185,10 +191,11 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
 
     let snapshot = await this.requireIssue(key);
     if (snapshot.statusCategory !== "done") return snapshot;
-    // SLA recalculation lags the transition by a few seconds, so wait for the clocks to stop.
+    // SLA recalculation lags the transition by a few seconds, so wait for the clocks to
+    // stop. The status is already done; only the SLAs need re-reading.
     for (let attempt = 1; attempt < this.slaPollAttempts && snapshot.slas.some((s) => s.state === "running"); attempt++) {
       await this.sleep(this.slaPollIntervalMs);
-      snapshot = await this.requireIssue(key);
+      snapshot = { ...snapshot, slas: await this.readSlas(key) };
     }
     return snapshot;
   }

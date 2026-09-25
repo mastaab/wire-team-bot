@@ -64,3 +64,11 @@ export class IssueTrackerError extends Error {
     this.name = "IssueTrackerError";
   }
 }
+
+/** Log fields for a failure: error name and tracker status only, never messages or bodies. */
+export function trackerErrorFields(err: unknown): Record<string, unknown> {
+  return {
+    err: err instanceof Error ? err.name : "UnknownError",
+    ...(err instanceof IssueTrackerError && err.status !== undefined ? { status: err.status } : {}),
+  };
+}

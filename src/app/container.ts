@@ -184,7 +184,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   // Customer demo: Jira Service Management, wired only when fully configured.
   const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
   if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey });
-  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker);
+  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger);
   const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const getIssueStatus = issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined;
   const updateActionDeadline = new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo);

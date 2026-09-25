@@ -915,7 +915,7 @@ it.each([
 describe("WireEventRouter contract: Jira demo commands", () => {
   const jiraDeps = () => makeDeps({
     pushActionToJira: { execute: vi.fn().mockResolvedValue(null) },
-    getIssueStatus: { execute: vi.fn().mockResolvedValue(null) },
+    getIssueStatus: { execute: vi.fn().mockResolvedValue(null), projectKey: "DS" },
     conversationConfig: { get: vi.fn().mockResolvedValue({ timezone: "Europe/Berlin" }), upsert: vi.fn() },
   } as unknown as Partial<WireEventRouterDeps>);
 
@@ -941,7 +941,7 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith({ reference, conversationId: convId, replyToMessageId: "msg-1" });
   });
 
-  it.each(["status of ACT-0004", "status of DEC-0001", "status of REM-0001"])("leaves '%s' to the existing handling", async (text) => {
+  it.each(["status of ACT-0004", "status of DEC-0001", "status of REM-0001", "status of KB-3", "status of WPB-1234"])("leaves '%s' to the existing handling", async (text) => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
     expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
@@ -957,6 +957,20 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(customMention("status"));
     expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not answer other projects' ticket references in ordinary chat", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("status of WPB-1234"));
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId, expect.stringContaining("DS project"), expect.anything());
+  });
+
+  it("keeps the previous multi-command behaviour for Jira-like text when the integration is off", async () => {
+    const deps = makeDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("status of WPB-12\nACT-3 done"));
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId,
+      "Please send one command per message. I have not run any commands from this message.", expect.anything());
   });
 
   it("refuses a Jira escalation combined with another command in one message", async () => {

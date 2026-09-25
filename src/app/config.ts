@@ -146,7 +146,7 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
     projectKey,
     serviceDeskId: numericId("WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID"),
     requestTypeId: numericId("WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID"),
-    timeoutMs: Number.isFinite(timeout) && timeout >= 1000 ? timeout : 15_000,
+    timeoutMs: Number.isFinite(timeout) ? Math.max(1000, timeout) : 15_000,
   };
 }
 

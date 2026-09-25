@@ -259,7 +259,7 @@ async function main() {
     supersedeDecision:      new SupersedeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     revokeDecision:         new RevokeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     createActionFromExplicit: new CreateActionFromExplicit(actionsRepo, convConfigRepo, dateTimeService, userResolution, wireOutbound, auditLogRepo, logger),
-    updateActionStatus:     new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker),
+    updateActionStatus:     new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger),
     updateActionDeadline:   new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo),
     listMyActions:          new ListMyActions(actionsRepo, wireOutbound),
     listTeamActions:        new ListTeamActions(actionsRepo, wireOutbound),

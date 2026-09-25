@@ -2,11 +2,11 @@ import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import { isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/ids/jiraLink";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { formatIssueStatus } from "./formatIssue";
-import { trackerErrorFields } from "./PushActionToJira";
 
 export interface GetIssueStatusInput {
   /** Either an action ID (ACT-NNNN) or a tracker key. */
@@ -18,7 +18,6 @@ export interface GetIssueStatusInput {
 type Reply = (text: string) => Promise<void>;
 
 const ACTION_ID_RE = /^ACT-\d+$/;
-const LINKED_ACTION_SCAN_LIMIT = 200;
 
 /** Reads a linked ticket's live status, restricted to tickets linked from this conversation. */
 export class GetIssueStatus {
@@ -28,6 +27,11 @@ export class GetIssueStatus {
     private readonly wireOutbound: WireOutboundPort,
     private readonly logger?: Logger,
   ) {}
+
+  /** The only project whose keys this lookup accepts. */
+  get projectKey(): string {
+    return this.tracker.projectKey;
+  }
 
   async execute(input: GetIssueStatusInput): Promise<IssueSnapshot | null> {
     const reply: Reply = text =>
@@ -66,6 +70,10 @@ export class GetIssueStatus {
       await reply(`**${action.id}** isn't linked to a Jira ticket yet. Use \`${action.id} to jira\` to raise one.`);
       return null;
     }
+    if (!isKeyInProject(key, this.tracker.projectKey)) {
+      await reply(`I'm afraid **${action.id}** is linked to **${key}**, which is outside the ${this.tracker.projectKey} project I can look up.`);
+      return null;
+    }
     return key;
   }
 
@@ -76,7 +84,7 @@ export class GetIssueStatus {
       return null;
     }
     const link = toJiraLink(key);
-    const candidates = await this.actions.query({ conversationId, limit: LINKED_ACTION_SCAN_LIMIT });
+    const candidates = await this.actions.query({ conversationId, linkedIdsHas: link, limit: 20 });
     const linkedHere = candidates.some(a =>
       !a.deleted && sameQualifiedId(a.conversationId, conversationId) && a.linkedIds.includes(link));
     if (!linkedHere) {

@@ -109,9 +109,22 @@ describe("GetIssueStatus", () => {
 
     expect(await useCase.execute({ reference: "DS-42", conversationId: convId })).toBe(snapshot);
 
-    expect(repo.query).toHaveBeenCalledWith({ conversationId: convId, limit: 200 });
+    expect(repo.query).toHaveBeenCalledWith({ conversationId: convId, linkedIdsHas: "jira:DS-42", limit: 20 });
     expect(tracker.getIssue).toHaveBeenCalledWith("DS-42");
     expect(sent).toHaveLength(1);
+  });
+
+  it("explains when an action is linked to a ticket outside the configured project", async () => {
+    const { tracker, sent, useCase } = setup({ found: makeAction({ linkedIds: ["jira:SD-9"] }) });
+
+    expect(await useCase.execute({ reference: "ACT-0004", conversationId: convId })).toBeNull();
+
+    expect(sent).toEqual(["I'm afraid **ACT-0004** is linked to **SD-9**, which is outside the DS project I can look up."]);
+    expect(tracker.getIssue).not.toHaveBeenCalled();
+  });
+
+  it("exposes the configured project key for command matching", () => {
+    expect(setup().useCase.projectKey).toBe("DS");
   });
 
   it("refuses keys from other projects without calling the tracker", async () => {

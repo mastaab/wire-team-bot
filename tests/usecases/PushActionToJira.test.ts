@@ -68,7 +68,6 @@ const input = {
   actionId: "ACT-0004",
   conversationId: convId,
   actorId,
-  actorName: "Alice",
   timezone: "Europe/Berlin",
   replyToMessageId: "msg-1",
 };
@@ -82,7 +81,7 @@ describe("PushActionToJira", () => {
     expect(result).toEqual({ key: "DS-42", url: "https://jira.test/browse/DS-42" });
     expect(tracker.createIssue).toHaveBeenCalledWith({
       summary: "Prepare the security questionnaire",
-      description: "Prepare the security questionnaire\n\nOwner: Bob\nRaised from Wire by Alice (ACT-0004).",
+      description: "Prepare the security questionnaire\n\nOwner: Bob\nRaised from Wire (ACT-0004).",
       labels: ["wire-team-bot"],
     });
     expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({
@@ -161,7 +160,7 @@ describe("PushActionToJira", () => {
     const request = tracker.createIssue.mock.calls[0][0];
     expect(JSON.stringify(request)).not.toContain(MARKER);
     expect(request.description).toBe(
-      "Prepare the security questionnaire\n\nOwner: Bob\nDue: 2026-09-25\nRaised from Wire by Alice (ACT-0004).",
+      "Prepare the security questionnaire\n\nOwner: Bob\nDue: 2026-09-25\nRaised from Wire (ACT-0004).",
     );
     expect(request.dueDate).toBe("2026-09-25");
   });
@@ -179,15 +178,63 @@ describe("PushActionToJira", () => {
     expect(request.description).not.toContain(assigneeName.trim() || "Owner:  ");
   });
 
-  it("trims the summary and truncates it to 255 characters", async () => {
+  it("passes the trimmed description as the summary and leaves Jira's length limit to the adapter", async () => {
     const { tracker, useCase } = setup(makeAction({ description: `  ${"a".repeat(300)}  ` }));
 
     await useCase.execute(input);
 
     const request = tracker.createIssue.mock.calls[0][0];
-    expect(request.summary).toHaveLength(255);
-    expect(request.summary.endsWith("...")).toBe(true);
+    expect(request.summary).toBe("a".repeat(300));
     expect(request.description.startsWith(`${"a".repeat(300)}\n`)).toBe(true);
+  });
+
+  it("never sends the requester's name to Jira", async () => {
+    const { tracker, useCase } = setup(makeAction());
+
+    await useCase.execute(input);
+
+    expect(tracker.createIssue.mock.calls[0][0].description).not.toMatch(/Raised from Wire by/);
+  });
+
+  it("links the ticket onto the action as it is after the tracker call, keeping changes made meanwhile", async () => {
+    const { repo, useCase } = setup(makeAction());
+    const changedMeanwhile = makeAction({ status: "done", version: 5, deadline: new Date("2026-10-02T12:00:00Z") });
+    repo.findById.mockResolvedValueOnce(makeAction()).mockResolvedValueOnce(changedMeanwhile);
+
+    await useCase.execute(input);
+
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: "done", version: 6, deadline: changedMeanwhile.deadline, linkedIds: ["DEC-0001", "jira:DS-42"],
+    }));
+  });
+
+  it("creates only one ticket when the same action is raised twice concurrently", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { tracker, sent, useCase } = setup(makeAction(), {
+      createIssue: vi.fn(async () => { await gate; return { key: "DS-42", url: "https://jira.test/browse/DS-42", fieldsApplied: true }; }),
+    });
+
+    const first = useCase.execute(input);
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = await useCase.execute(input);
+    release();
+    await first;
+
+    expect(second).toBeNull();
+    expect(tracker.createIssue).toHaveBeenCalledTimes(1);
+    expect(sent).toContain("**ACT-0004** is already being raised in Jira.");
+  });
+
+  it("allows the action to be raised again after an attempt has finished", async () => {
+    const { tracker, useCase } = setup(makeAction(), {
+      createIssue: vi.fn().mockRejectedValueOnce(new IssueTrackerError("Jira request failed (503)", 503))
+        .mockResolvedValueOnce({ key: "DS-43", url: "https://jira.test/browse/DS-43", fieldsApplied: true }),
+    });
+
+    expect(await useCase.execute(input)).toBeNull();
+    expect(await useCase.execute(input)).toEqual({ key: "DS-43", url: "https://jira.test/browse/DS-43" });
+    expect(tracker.createIssue).toHaveBeenCalledTimes(2);
   });
 
   it.each([

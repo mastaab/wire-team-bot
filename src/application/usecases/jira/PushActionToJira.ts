@@ -4,7 +4,7 @@ import type { Action } from "../../../domain/entities/Action";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
-import { IssueTrackerError } from "../../ports/IssueTrackerPort";
+import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { CreateIssueRequest, CreatedIssue, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
@@ -13,7 +13,6 @@ export interface PushActionToJiraInput {
   actionId: string;
   conversationId: QualifiedId;
   actorId: QualifiedId;
-  actorName: string;
   timezone: string;
   replyToMessageId?: string;
 }
@@ -23,12 +22,17 @@ export interface PushedIssue {
   url: string;
 }
 
-const SUMMARY_MAX = 255;
 const LABEL = "wire-team-bot";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Raises an open action as a tracker ticket, sending only the action's own fields. */
+/**
+ * Raises an open action as a tracker ticket, sending only the action's own fields.
+ * One bot process serves all conversations, so an in-process guard is enough to stop
+ * two concurrent requests for the same action from creating two tickets.
+ */
 export class PushActionToJira {
+  private readonly inFlight = new Set<string>();
+
   constructor(
     private readonly actions: ActionRepository,
     private readonly tracker: IssueTrackerPort,
@@ -59,7 +63,20 @@ export class PushActionToJira {
       return null;
     }
 
-    const request = buildRequest(action, input.actorName, input.timezone);
+    if (this.inFlight.has(action.id)) {
+      await reply(`**${action.id}** is already being raised in Jira.`);
+      return null;
+    }
+    this.inFlight.add(action.id);
+    try {
+      return await this.raise(action, input, reply);
+    } finally {
+      this.inFlight.delete(action.id);
+    }
+  }
+
+  private async raise(action: Action, input: PushActionToJiraInput, reply: (text: string) => Promise<void>): Promise<PushedIssue | null> {
+    const request = buildRequest(action, input.timezone);
     let created: CreatedIssue;
     try {
       created = await this.tracker.createIssue(request);
@@ -80,14 +97,16 @@ export class PushActionToJira {
       details: { actionId: action.id },
     });
 
-    const updated: Action = {
-      ...action,
-      linkedIds: [...action.linkedIds, toJiraLink(key)],
-      version: action.version + 1,
-      updatedAt: new Date(),
-    };
     try {
-      await this.actions.update(updated);
+      // Re-read after the slow tracker call so changes made meanwhile (status, deadline,
+      // owner) are not overwritten by the copy read before it.
+      const current = (await this.actions.findById(action.id)) ?? action;
+      await this.actions.update({
+        ...current,
+        linkedIds: [...current.linkedIds, toJiraLink(key)],
+        version: current.version + 1,
+        updatedAt: new Date(),
+      });
     } catch (err) {
       this.logger?.warn("PushActionToJira: failed to link ticket to action", trackerErrorFields(err));
       await reply(`Created **${key}** in Jira (${url}), but I'm afraid I couldn't link it to **${action.id}**.`);
@@ -123,22 +142,18 @@ export class PushActionToJira {
 }
 
 /** Builds the ticket from the action's own fields only (extract-and-forget). */
-function buildRequest(action: Action, actorName: string, timezone: string): CreateIssueRequest {
+function buildRequest(action: Action, timezone: string): CreateIssueRequest {
   const description = action.description.trim();
   const dueDate = action.deadline ? calendarDate(action.deadline, timezone) : undefined;
   const lines = [description, "", `Owner: ${ownerName(action.assigneeName)}`];
   if (dueDate) lines.push(`Due: ${dueDate}`);
-  lines.push(`Raised from Wire by ${actorName} (${action.id}).`);
+  lines.push(`Raised from Wire (${action.id}).`);
   return {
-    summary: truncate(description, SUMMARY_MAX),
+    summary: description,
     description: lines.join("\n"),
     ...(dueDate ? { dueDate } : {}),
     labels: [LABEL],
   };
-}
-
-function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 3).trimEnd()}...`;
 }
 
 /** assigneeName can hold a raw user UUID when no display name was resolved. */
@@ -156,12 +171,4 @@ export function calendarDate(date: Date, timeZone: string): string {
   } catch {
     return format("UTC");
   }
-}
-
-/** Log fields for a failure: error name and tracker status only, never messages or bodies. */
-export function trackerErrorFields(err: unknown): Record<string, unknown> {
-  return {
-    err: err instanceof Error ? err.name : "UnknownError",
-    ...(err instanceof IssueTrackerError && err.status !== undefined ? { status: err.status } : {}),
-  };
 }
