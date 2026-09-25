@@ -4,6 +4,7 @@
  *
  *   ## Relevant Decisions
  *   ## Relevant Actions
+ *   ## Linked Jira tickets (only when sharing ticket content with the model is enabled)
  *   ## Related Context  (entity relationships, signals)
  *   ## Summaries        (future — Phase 4)
  *   ## User's Question
@@ -21,6 +22,7 @@ import type { GeneralAnswerService, ConversationMemberContext } from "../../appl
 import type { RetrievalResult } from "../../application/ports/RetrievalPort";
 import type { LLMClientFactory } from "./LLMClientFactory";
 import type { Logger } from "../../application/ports/Logger";
+import { OFFER_MARKER_PREFIX } from "../../application/services/offers";
 
 const SYSTEM_PROMPT = `You are Wire Team Bot, a capable and discreet team assistant embedded in Wire, a secure messaging platform. You are British, professional, and direct — no fuss, no small talk.
 
@@ -117,30 +119,70 @@ function stripTrailingOffer(text: string): string {
   return trimmed;
 }
 
+/**
+ * Applies stripTrailingOffer to the answer while keeping a final offer marker line intact,
+ * so the use case can validate it. A marker with no other text is returned alone rather
+ * than triggering the retry, because the use case writes the question itself.
+ */
+function stripKeepingMarker(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let last = lines.length - 1;
+  while (last >= 0 && !lines[last]!.trim()) last--;
+  if (last < 0 || !lines[last]!.trim().startsWith(OFFER_MARKER_PREFIX)) return stripTrailingOffer(text);
+  const marker = lines[last]!.trim();
+  let body = lines.slice(0, last).join("\n").trim();
+  // Only the final sentence is dropped, keeping earlier text and its line breaks.
+  const boundary = /(?<=[.?!])\s+/g;
+  let start = 0;
+  for (let m = boundary.exec(body); m; m = boundary.exec(body)) {
+    if (m.index + m[0].length < body.length) start = m.index + m[0].length;
+  }
+  if (isOfferQuestion(body.slice(start))) body = body.slice(0, start).trim();
+  return body ? `${body}\n${marker}` : marker;
+}
+
 /** Optional integrations the answer model must know about so it does not deny them. */
 export interface AnswerIntegrations {
   /** Configured Jira Service Management project key, when the integration is on. */
   jiraProjectKey?: string;
+  /** True when live ticket data may reach the model as a "## Linked Jira tickets" section. */
+  jiraShareWithModel?: boolean;
 }
 
 /**
  * Appended to the system prompt only when Jira is configured. This path stays read-only:
- * the model learns that the integration exists and which commands to offer, and gets no
- * ticket content.
+ * the model learns that the integration exists and which commands to give, may propose one
+ * change as an offer marker that code validates and confirms, and sees ticket content only
+ * when sharing it with the model is enabled.
  */
 export function integrationsPrompt(integrations: AnswerIntegrations): string {
   const project = integrations.jiraProjectKey;
   if (!project) return "";
+  const reading = integrations.jiraShareWithModel
+    ? `- A "## Linked Jira tickets" section, when present, holds the live status, SLAs and latest customer replies of tickets linked from this conversation. Use it to answer questions about those tickets and cite the ticket key. Say nothing about a ticket beyond what that section states. You cannot change Jira while writing this answer. For a ${project} ticket that is not in that section, give the status command below. When asked to raise, update or close a ticket, give the exact supported command, using real IDs from the records provided; do not describe internal mechanics such as answer paths:`
+    : `- You cannot read or change Jira while writing this answer. When asked about a ${project} ticket or asked to raise, update or close one, give the exact supported command, using real IDs from the records provided. Present the command as the way to get the live details; do not describe internal mechanics such as answer paths:`;
+  const statusRule = integrations.jiraShareWithModel
+    ? `Never invent ticket keys, statuses or replies, and never guess a ticket's status in Jira, not even from its action's status; state a status only as given in "## Linked Jira tickets", otherwise give the status command.`
+    : `Never invent ticket keys, statuses or replies, and never state or guess a ticket's status in Jira, not even from its action's status; only the status command reports it.`;
   return `
 
 Jira integration:
 - This bot is connected to the Jira Service Management project ${project}. Never say that it has no Jira integration or cannot work with Jira.
-- You cannot read or change Jira while writing this answer. When asked about a ${project} ticket or asked to raise, update or close one, give the exact supported command, using real IDs from the records provided. Present the command as the way to get the live details; do not describe internal mechanics such as answer paths:
+${reading}
   - \`ACT-NNNN to jira\` raises an open action as a ${project} request.
   - \`status of ${project}-NN\` or \`jira status of ACT-NNNN\` shows a ticket's live status, SLAs and latest service-desk replies.
   - \`ACT-NNNN done\` marks the action done and also closes its linked ${project} ticket.
-- An action record may show its linked ticket as "Jira: ${project}-NN"; mention that link when it is relevant. Never invent ticket keys, statuses or replies, and never state or guess a ticket's status in Jira, not even from its action's status; only the status command reports it.
-- Tickets are raised from actions. For work not yet tracked, suggest capturing it first with \`action: ...\` and then \`ACT-NNNN to jira\`.`;
+- An action record may show its linked ticket as "Jira: ${project}-NN"; mention that link when it is relevant. ${statusRule}
+- Tickets are raised from actions. For work not yet tracked, suggest capturing it first with \`action: ...\` and then \`ACT-NNNN to jira\`.
+
+Jira offers:
+- If and only if the requester asks you to raise an action in Jira, to mark an action done and close its ticket, or to send a reply to a linked ticket, and the target record is clear from the records provided, end the answer with exactly one final line in one of these forms:
+  OFFER: {"kind":"raise","actionId":"ACT-NNNN"}
+  OFFER: {"kind":"close","actionId":"ACT-NNNN"}
+  OFFER: {"kind":"reply","issueKey":"${project}-NN","body":"<the reply text the requester wants sent, without their name>"}
+- Raise only an open action that has no linked ticket. Close only an action that is linked to a ${project} ticket. Reply only to a ${project} ticket linked from the records provided.
+- Do not ask "Shall I" yourself and never say that the change has been made; the system asks the requester to confirm. Keep the answer before the marker short.
+- If the target record is unclear, ask which record is meant and add no marker. Never add more than one marker, and never add one for any other request.`;
 }
 
 export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
@@ -177,8 +219,9 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
     // Group retrieval results by type per spec §6.4
     const decisions = retrievalResults.filter((r) => r.type === "decision");
     const actions = retrievalResults.filter((r) => r.type === "action");
+    const tickets = retrievalResults.filter((r) => r.type === "jira_ticket");
     const other = retrievalResults.filter(
-      (r) => r.type !== "decision" && r.type !== "action",
+      (r) => r.type !== "decision" && r.type !== "action" && r.type !== "jira_ticket",
     );
 
     const decisionsBlock =
@@ -206,6 +249,11 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
         ? `## Related Context\n${other.map((r) => `- ${r.content}`).join("\n")}\n\n`
         : "";
 
+    const ticketsBlock =
+      tickets.length > 0
+        ? `## Linked Jira tickets\n${tickets.map((r) => `- ${r.content}`).join("\n")}\n\n`
+        : "";
+
     const contextBlock =
       conversationContext.length > 0
         ? `## Recent conversation\n${conversationContext.map((t) => `> ${t}`).join("\n")}\n\n`
@@ -219,7 +267,7 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
       : `## Data summary\n- Actions recorded: ${actions.length}\n- Decisions recorded: ${decisions.length}\n\n`;
 
     const requesterBlock = requester ? `## Current requester\n${JSON.stringify(requester)}\n\n` : "";
-    const userContent = `${purposeBlock}${memberBlock}${requesterBlock}${dataSummary}${decisionsBlock}${actionsBlock}${relatedBlock}${contextBlock}## User's Question\n${question}`;
+    const userContent = `${purposeBlock}${memberBlock}${requesterBlock}${dataSummary}${decisionsBlock}${actionsBlock}${ticketsBlock}${relatedBlock}${contextBlock}## User's Question\n${question}`;
 
     try {
       const result = await this.llm.chatCompletion(
@@ -242,7 +290,7 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
         });
       }
 
-      const stripped = stripTrailingOffer(result.content.trim());
+      const stripped = stripKeepingMarker(result.content.trim());
       if (stripped) return stripped;
 
       // The model returned only a permission-asking question. Retry once with a
@@ -257,7 +305,7 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
         ],
         { max_tokens: 800, temperature: 0.3 },
       );
-      return stripTrailingOffer(retry.content.trim()) || "I wasn't able to generate a response.";
+      return stripKeepingMarker(retry.content.trim()) || "I wasn't able to generate a response.";
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         this.logger.warn("OpenAIGeneralAnswerAdapter: request timed out");
