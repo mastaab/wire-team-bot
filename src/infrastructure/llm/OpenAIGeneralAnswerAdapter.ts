@@ -4,7 +4,8 @@
  *
  *   ## Relevant Decisions
  *   ## Relevant Actions
- *   ## Linked Jira tickets (only when sharing ticket content with the model is enabled)
+ *   ## Support requests (stored records, only when Jira is configured)
+ *   ## Live support request tickets (only when sharing ticket content with the model is enabled)
  *   ## Related Context  (entity relationships, signals)
  *   ## Summaries        (future — Phase 4)
  *   ## User's Question
@@ -145,7 +146,7 @@ function stripKeepingMarker(text: string): string {
 export interface AnswerIntegrations {
   /** Configured Jira Service Management project key, when the integration is on. */
   jiraProjectKey?: string;
-  /** True when live ticket data may reach the model as a "## Linked Jira tickets" section. */
+  /** True when live ticket data may reach the model as a "## Live support request tickets" section. */
   jiraShareWithModel?: boolean;
 }
 
@@ -153,39 +154,43 @@ export interface AnswerIntegrations {
  * Appended to the system prompt only when Jira is configured. This path stays read-only:
  * the model learns that the integration exists and which commands to give, may propose one
  * change as an offer marker that code validates and confirms, and sees ticket content only
- * when sharing it with the model is enabled.
+ * when sharing it with the model is enabled. Stored support requests (key, summary,
+ * requester, last known status) are provided either way.
  */
 export function integrationsPrompt(integrations: AnswerIntegrations): string {
   const project = integrations.jiraProjectKey;
   if (!project) return "";
   const reading = integrations.jiraShareWithModel
-    ? `- A "## Linked Jira tickets" section, when present, holds the live status, SLAs and latest service-desk replies of tickets linked from this conversation. Use it to answer questions about those tickets and cite the ticket key. Say nothing about a ticket beyond what that section states. You cannot change Jira while writing this answer. For a ${project} ticket that is not in that section, give the status command below. When asked to raise, update or close a ticket, give the exact supported command, using real IDs from the records provided; do not describe internal mechanics such as answer paths:`
-    : `- You cannot read or change Jira while writing this answer. When asked about a ${project} ticket or asked to raise, update or close one, give the exact supported command, using real IDs from the records provided. Present the command as the way to get the live details; do not describe internal mechanics such as answer paths:`;
+    ? `- A "## Live support request tickets" section, when present, holds the live status, SLAs and latest service-desk replies of support requests raised from this conversation. Use it to answer questions about those requests and cite the ticket key. Say nothing about a ticket beyond what that section states. You cannot change Jira while writing this answer. For a ${project} request that is not in that section, give the status command below.`
+    : `- You cannot read or change Jira while writing this answer, and you have no ticket content: no live status, SLAs or service-desk replies. For the live details of a ${project} request, give the status command below; present it as the way to get them.`;
   const statusRule = integrations.jiraShareWithModel
-    ? `Never invent ticket keys, statuses or replies, and never guess a ticket's status in Jira, not even from its action's status; state a status only as given in "## Linked Jira tickets", otherwise give the status command.`
-    : `Never invent ticket keys, statuses or replies, and never state or guess a ticket's status in Jira, not even from its action's status; only the status command reports it.`;
+    ? `Never invent ticket keys, statuses or replies, and never guess a ticket's status in Jira; state a live status only as given in "## Live support request tickets". Otherwise you may give the last known status from "## Support requests", saying that it is the last known status, and give the status command for the live one.`
+    : `Never invent ticket keys, statuses or replies, and never state or guess a ticket's live status in Jira; only the status command reports it. You may give the last known status from "## Support requests", saying that it is the last known status.`;
   return `
 
 Jira integration:
-- This bot is connected to the Jira Service Management project ${project}. Never say that it has no Jira integration or cannot work with Jira.
+- This bot is connected to the Jira Service Management project ${project}. Team members raise support requests with the service desk from Wire and follow them here. Never say that it has no Jira integration or cannot work with Jira.
+- A "## Support requests" section, when present, lists the support requests raised from this conversation as stored by the bot: key, summary, requester and last known status. Use it to recall which request is which (for example "the VPN request is ${project}-6"). ${statusRule}
 ${reading}
-  - \`ACT-NNNN to jira\` raises an open action as a ${project} request.
-  - \`status of ${project}-NN\` or \`jira status of ACT-NNNN\` shows a ticket's live status, SLAs and latest service-desk replies.
-  - \`ACT-NNNN done\` marks the action done and also closes its linked ${project} ticket.
-  - \`reply to ${project}-NN: <text>\` or \`reply to ACT-NNNN: <text>\` sends a customer-facing reply to a linked ticket.
-- An action record may show its linked ticket as "Jira: ${project}-NN"; mention that link when it is relevant. ${statusRule}
-- Tickets are raised from actions. For work not yet tracked, suggest capturing it first with \`action: ...\` and then \`ACT-NNNN to jira\`.
+- When asked to raise, follow, reply to or resolve a support request, give the exact supported command, using real keys from the records provided; do not describe internal mechanics such as answer paths:
+  - \`@Wire Team Bot support: <problem>\` raises a support request with the service desk; the first line becomes its summary.
+  - \`@Wire Team Bot support requests\` lists the open support requests of this channel; \`@Wire Team Bot my support requests\` lists the requester's own.
+  - \`status of ${project}-NN\` shows a request's live status, SLAs and latest service-desk replies.
+  - \`@Wire Team Bot reply to ${project}-NN: <text>\` sends a reply to the service desk on that request.
+  - \`@Wire Team Bot resolve ${project}-NN\` resolves the request with the service desk.
+- Actions, decisions and reminders stay in Wire and are never sent to Jira. Never suggest sending an action to Jira; for a problem the team needs help with, suggest a support request.
 
-Jira offers:
-- If and only if the requester asks you to raise an action in Jira, to mark an action done and close its ticket, or to send a reply to a linked ticket, and the target record is clear from the records provided, end the answer with exactly one final line in one of these forms:
-  OFFER: {"kind":"raise","actionId":"ACT-NNNN"}
-  OFFER: {"kind":"close","actionId":"ACT-NNNN"}
-  OFFER: {"kind":"reply","issueKey":"${project}-NN","body":"<the reply text the requester wants sent, without their name>"}
-- Raise only an open action that has no linked ticket. Close only an action that is linked to a ${project} ticket. Reply only to a ${project} ticket linked from the records provided.
+Support request offers:
+- If and only if the requester asks you to raise a problem with the service desk, to send a reply to the service desk on one of the support requests provided, or to resolve one of them, end the answer with exactly one final line in one of these forms:
+  OFFER: {"kind":"support","summary":"<one short line>","description":"<the problem>"}
+  OFFER: {"kind":"reply","issueKey":"${project}-NN","body":"<the reply text the requester wants sent>"}
+  OFFER: {"kind":"resolve","issueKey":"${project}-NN"}
+- For support, the summary is one short line in the requester's own words saying what the problem is. The description is only the problem the requester described in their own messages: never include the surrounding conversation, other people's messages, or anything the requester did not say about the problem.
+- Reply to and resolve only a ${project} request listed in "## Support requests". Resolve only a request whose last known status is not Done.
 - Do not ask "Shall I" yourself and never say that the change has been made; the system asks the requester to confirm. Keep the answer before the marker short.
 - Earlier offers in the conversation are closed once answered. If the requester replied no (the bot then said "Understood, I won't.") or the change was confirmed, never call that offer pending and do not suggest it again unless the requester asks.
 - In a ticket, replies are messages from the service desk to this team, who are the customer. Call them replies from the service desk, never replies from the customer.
-- If the target record is unclear, ask which record is meant and add no marker. Never add more than one marker, and never add one for any other request.`;
+- If the target request or the problem is unclear, ask which request or what problem is meant and add no marker. Never add more than one marker, and never add one for any other request.`;
 }
 
 export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
@@ -222,9 +227,10 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
     // Group retrieval results by type per spec §6.4
     const decisions = retrievalResults.filter((r) => r.type === "decision");
     const actions = retrievalResults.filter((r) => r.type === "action");
+    const requests = retrievalResults.filter((r) => r.type === "support_request");
     const tickets = retrievalResults.filter((r) => r.type === "jira_ticket");
     const other = retrievalResults.filter(
-      (r) => r.type !== "decision" && r.type !== "action" && r.type !== "jira_ticket",
+      (r) => r.type !== "decision" && r.type !== "action" && r.type !== "support_request" && r.type !== "jira_ticket",
     );
 
     const decisionsBlock =
@@ -252,9 +258,19 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
         ? `## Related Context\n${other.map((r) => `- ${r.content}`).join("\n")}\n\n`
         : "";
 
+    const requestsBlock =
+      requests.length > 0
+        ? `## Support requests\n${requests
+            .map(
+              (r) =>
+                `- ${r.content} _(${r.sourceDate.toISOString().slice(0, 10)})_`,
+            )
+            .join("\n")}\n\n`
+        : "";
+
     const ticketsBlock =
       tickets.length > 0
-        ? `## Linked Jira tickets\n${tickets.map((r) => `- ${r.content}`).join("\n")}\n\n`
+        ? `## Live support request tickets\n${tickets.map((r) => `- ${r.content}`).join("\n")}\n\n`
         : "";
 
     const contextBlock =
@@ -270,7 +286,7 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
       : `## Data summary\n- Actions recorded: ${actions.length}\n- Decisions recorded: ${decisions.length}\n\n`;
 
     const requesterBlock = requester ? `## Current requester\n${JSON.stringify(requester)}\n\n` : "";
-    const userContent = `${purposeBlock}${memberBlock}${requesterBlock}${dataSummary}${decisionsBlock}${actionsBlock}${ticketsBlock}${relatedBlock}${contextBlock}## User's Question\n${question}`;
+    const userContent = `${purposeBlock}${memberBlock}${requesterBlock}${dataSummary}${decisionsBlock}${actionsBlock}${requestsBlock}${ticketsBlock}${relatedBlock}${contextBlock}## User's Question\n${question}`;
 
     try {
       const result = await this.llm.chatCompletion(

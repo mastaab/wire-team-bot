@@ -5,15 +5,17 @@ import type { RetrievalPort, RetrievalResult, RetrievalScope } from "../../ports
 import type { ChannelContext } from "../../ports/ClassifierPort";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
-import { JIRA_KEY_PATTERN, isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/ids/jiraLink";
-import type { Action } from "../../../domain/entities/Action";
-import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
+import { isKeyInProject } from "../../../domain/ids/jiraLink";
+import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
+import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import { OFFER_TTL_MS, parseOfferMarker } from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { formatSla, statusLabel } from "../jira/formatIssue";
+import { findSupportRequestInConversation } from "../jira/supportRequestScope";
 
 /**
  * Scans `text` for `@Name` tokens and returns Wire mention objects with UTF-16 offsets.
@@ -54,31 +56,39 @@ export interface AnswerQuestionInput {
   userId?: string;
 }
 
-/** Jira support for the answer path. Ticket content is fetched only when `shareWithModel` is true. */
+/**
+ * Jira support for the answer path. Stored support requests of this conversation are always
+ * added to the results; live ticket content is fetched only when `shareWithModel` is true.
+ */
 export interface AnswerQuestionJira {
   tracker: IssueTrackerPort;
-  actions: ActionRepository;
+  requests: SupportRequestRepository;
+  /** Records the status refresh after a live read shows a changed category. */
+  auditLog: AuditLogRepository;
   offers: PendingOfferStore;
-  /** Pass live status, SLAs and customer replies of linked tickets to the answer model. */
+  /** Pass live status, SLAs and service-desk replies of this conversation's support requests to the answer model. */
   shareWithModel: boolean;
   now?: () => Date;
 }
 
-/** Action results inspected for ticket links. */
-const ACTION_RESULTS_INSPECTED = 5;
+/** Newest stored support requests of the conversation added to the results. */
+const STORED_REQUESTS_SHARED = 10;
+/** Keys named in the question that are looked up through the scope helper. */
+const NAMED_KEYS_CHECKED = 5;
 /** Tickets whose live data is passed to the model. */
 const TICKETS_SHARED = 3;
 const REPLIES_SHARED = 3;
 const SHARED_REPLY_MAX = 500;
-const LINK_QUERY_LIMIT = 20;
 const FALLBACK_ANSWER = "I wasn't able to generate a response.";
+/** Actor of audit entries for writes the bot makes on its own, such as a status refresh. */
+const SYSTEM_ACTOR_ID = "wire-team-bot";
 
 /**
- * Questions that may need live ticket data: Jira or service-desk wording, or asking for the
- * status or news of something. Other questions make no tracker call. A named project key
- * also counts (see `asksAboutTickets`).
+ * Questions that may need live ticket data: Jira, service-desk or support wording, or asking
+ * for the status or news of something. Other questions make no tracker call. A named project
+ * key also counts (see `asksAboutTickets`).
  */
-const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|slas?|repl(?:y|ies)|status|latest|updates?|progress|heard|answers?)\b/i;
+const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|support|requests?|issues?|slas?|repl(?:y|ies)|status|latest|news|updates?|progress|heard|answers?)\b/i;
 
 /*
  * Change intent that the requester's own question must express before a model offer is
@@ -86,27 +96,25 @@ const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|slas?|repl(?:y|ies)|s
  * so an offer on a question that asks for no change ("what did we decide about lunch?") is
  * dropped. A named project key also counts as a reply target (see `asksForChange`).
  */
-/** raise: Jira or ticket wording, "raise", "escalate", "open a (...) request", "put ... into". */
-const RAISE_INTENT = /\b(?:jira|tickets?|rais(?:e|es|ed|ing)|escalat(?:e|es|ed|ing)|open\s+(?:a|an)\s+(?:\w+\s+)?request|put\b.*\binto)\b/i;
-/** close: "done", "close", "complete", "finish", "resolve" and their inflections. */
-const CLOSE_INTENT = /\b(?:done|clos(?:e|es|ed|ing)|complet(?:e|es|ed|ing)|finish(?:es|ed|ing)?|resolv(?:e|es|ed|ing))\b/i;
+/** support: service-desk, support, Jira or ticket wording, "raise", "escalate", "open a (...) request", "report". */
+const SUPPORT_INTENT = /\b(?:service\s+desk|support|jira|tickets?|rais(?:e|es|ed|ing)|escalat(?:e|es|ed|ing)|open\s+(?:a|an)\s+(?:\w+\s+)?request|report(?:s|ed|ing)?)\b/i;
+/** resolve: "close", "resolve", "works again", "fixed", "no longer needed" and their inflections. */
+const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?|working)\s+again|fixed|no\s+longer\s+(?:needed|necessary|required))\b/i;
 /** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
 const REPLY_VERB = /\b(?:repl(?:y|ies|ied|ying)|tell|send|let\b.*\bknow|message|answer)\b/i;
 /** reply, second part: the service desk as recipient. */
-const REPLY_TARGET = /\b(?:service\s+desk|jira|tickets?)\b/i;
-
-/** Requester names shorter than this are not checked in reply bodies. */
-const NAME_MIN_LENGTH = 2;
-
-interface TicketCandidate {
-  key: string;
-  actionId: string;
-}
+const REPLY_TARGET = /\b(?:service\s+desk|support|jira|tickets?)\b/i;
 
 /** A validated offer and the code-written question that asks the requester to confirm it. */
 interface PreparedOffer {
   question: string;
   offer: PendingOffer;
+}
+
+/** Live data for one support request, and its record when the read refreshed the stored category. */
+interface LiveTicket {
+  result: RetrievalResult;
+  refreshed: SupportRequest | null;
 }
 
 /**
@@ -120,9 +128,10 @@ interface PreparedOffer {
  * When retrieval engine is absent (backwards-compatible):
  *   - Falls back to empty context (Phase 1b behaviour).
  *
- * When Jira support is provided, live data for linked tickets is added to the results (only
- * with sharing enabled), and a model-proposed offer is validated by code and turned into a
- * code-written confirmation question. This path never writes to Jira or the records.
+ * When Jira support is provided, the stored support requests of this conversation are added
+ * to the results, live data for some of them is added only with sharing enabled, and a
+ * model-proposed offer is validated by code and turned into a code-written confirmation
+ * question. This path never writes to Jira; its only record write is the status refresh.
  */
 export class AnswerQuestion {
   constructor(
@@ -177,8 +186,8 @@ export class AnswerQuestion {
       }
     }
 
-    if (this.jira?.shareWithModel && asksAboutTickets(input.question, this.jira.tracker.projectKey)) {
-      retrievalResults = [...retrievalResults, ...(await this.linkedTickets(this.jira, input, retrievalResults))];
+    if (this.jira) {
+      retrievalResults = [...retrievalResults, ...(await this.supportRequestContext(this.jira, input))];
     }
 
     const modelAnswer = await this.generalAnswer.answer(
@@ -207,7 +216,7 @@ export class AnswerQuestion {
 
     // Only the code-written question is sent: the model's own lead-in can imply the change
     // already happened ("I'll send that ..."), which is wrong until the requester confirms.
-    // No mentions: a quoted reply body may contain @names that must not ping members.
+    // No mentions: a quoted summary or reply body may contain @names that must not ping members.
     // The offer is stored only after the question was sent, so it is never confirmable unseen.
     await this.send(input, prepared.question, false);
     this.jira.offers.put(prepared.offer);
@@ -222,66 +231,113 @@ export class AnswerQuestion {
     });
   }
 
-  /**
-   * Live data for tickets linked from this conversation: keys of the configured project named
-   * in the question, then keys shown on retrieved action results (`Jira: <KEY>`). Every key is
-   * confirmed with an exact link query before use: result content includes member-written
-   * descriptions, so a key read from it alone could name a ticket linked from another channel.
-   * The content goes to the model only; it is never stored or logged.
-   */
-  private async linkedTickets(jira: AnswerQuestionJira, input: AnswerQuestionInput, results: RetrievalResult[]): Promise<RetrievalResult[]> {
-    const candidates: TicketCandidate[] = [];
-    const add = (candidate: TicketCandidate): void => {
-      if (candidates.length < TICKETS_SHARED && !candidates.some((c) => c.key === candidate.key)) candidates.push(candidate);
-    };
 
+  /**
+   * Support requests of this conversation for the model: the stored records (keys named in the
+   * question first, then the newest ones), independent of sharing, and, with sharing on and a
+   * ticket-type question, live data for at most three of them. Named keys go through the scope
+   * helper, so another channel's key is neither shown nor fetched.
+   */
+  private async supportRequestContext(jira: AnswerQuestionJira, input: AnswerQuestionInput): Promise<RetrievalResult[]> {
+    const projectKey = jira.tracker.projectKey;
+    const named: SupportRequest[] = [];
+    let recent: SupportRequest[] = [];
     try {
-      for (const key of namedKeys(input.question, jira.tracker.projectKey)) {
-        if (candidates.length >= TICKETS_SHARED) break;
-        const action = await this.actionLinkingKey(jira.actions, key, input.conversationId);
-        if (action) add({ key, actionId: action.id });
+      for (const key of namedKeys(input.question, projectKey).slice(0, NAMED_KEYS_CHECKED)) {
+        const request = await findSupportRequestInConversation(jira.requests, key, input.conversationId, projectKey);
+        if (request) named.push(request);
       }
-      for (const result of results.filter((r) => r.type === "action").slice(0, ACTION_RESULTS_INSPECTED)) {
-        if (candidates.length >= TICKETS_SHARED) break;
-        const key = linkedKeyInContent(result.content);
-        if (!key || !isKeyInProject(key, jira.tracker.projectKey) || candidates.some((c) => c.key === key)) continue;
-        const action = await this.actionLinkingKey(jira.actions, key, input.conversationId);
-        if (action) add({ key, actionId: action.id });
-      }
+      recent = inConversation(await jira.requests.listByConversation(input.conversationId, { limit: STORED_REQUESTS_SHARED }), input.conversationId);
     } catch (err) {
-      this.logger?.warn("AnswerQuestion: linked ticket lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
+      this.logger?.warn("AnswerQuestion: support request lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
+    }
+    const known = uniqueByKey([...named, ...recent]);
+    if (!jira.shareWithModel || !asksAboutTickets(input.question, projectKey)) {
+      return known.map((request) => storedRequestResult(request, input.channelId));
     }
 
+    let open: SupportRequest[] = [];
+    try {
+      open = inConversation(await jira.requests.listByConversation(input.conversationId, { openOnly: true, limit: TICKETS_SHARED }), input.conversationId)
+        .filter((request) => request.statusCategory !== "done");
+    } catch (err) {
+      this.logger?.warn("AnswerQuestion: support request lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
+    }
+    const live = await this.liveTickets(jira, input, uniqueByKey([...named, ...open]).slice(0, TICKETS_SHARED));
+    // A refreshed record replaces the stored one, so the model never sees a stale category next to live data.
+    for (const { refreshed } of live) {
+      if (!refreshed) continue;
+      const index = known.findIndex((request) => request.key === refreshed.key);
+      if (index >= 0) known[index] = refreshed;
+    }
+    return [...known.map((request) => storedRequestResult(request, input.channelId)), ...live.map((ticket) => ticket.result)];
+  }
+
+  /**
+   * Live status, SLAs and public service-desk replies of the given support requests (the port
+   * never returns internal notes). A read that shows a changed category refreshes the stored
+   * one. The content goes to the model only; it is never stored or logged.
+   */
+  private async liveTickets(jira: AnswerQuestionJira, input: AnswerQuestionInput, requests: readonly SupportRequest[]): Promise<LiveTicket[]> {
     const now = (jira.now ?? (() => new Date()))();
-    const tickets = await Promise.all(candidates.map(async (candidate): Promise<RetrievalResult | null> => {
+    const tickets = await Promise.all(requests.map(async (request): Promise<LiveTicket | null> => {
+      let snapshot: IssueSnapshot | null;
+      let replies: IssueReply[];
       try {
-        const [snapshot, replies] = await Promise.all([
-          jira.tracker.getIssue(candidate.key),
-          jira.tracker.listCustomerReplies(candidate.key, REPLIES_SHARED),
+        [snapshot, replies] = await Promise.all([
+          jira.tracker.getIssue(request.key),
+          jira.tracker.listCustomerReplies(request.key, REPLIES_SHARED),
         ]);
-        if (!snapshot) return null;
-        return {
-          id: candidate.key,
-          type: "jira_ticket",
-          content: ticketContent(snapshot, candidate.actionId, replies),
-          sourceChannel: input.channelId ?? "",
-          sourceDate: now,
-          confidence: 1,
-          pathsMatched: ["jira"],
-        };
       } catch (err) {
         this.logger?.warn("AnswerQuestion: ticket read failed", trackerErrorFields(err));
         return null;
       }
+      if (!snapshot) return null;
+      return {
+        result: {
+          id: request.key,
+          type: "jira_ticket",
+          content: ticketContent(snapshot, replies),
+          sourceChannel: input.channelId ?? "",
+          sourceDate: now,
+          confidence: 1,
+          pathsMatched: ["jira"],
+        },
+        refreshed: await this.refreshStatus(jira, request, snapshot, input.conversationId, now),
+      };
     }));
-    return tickets.filter((t): t is RetrievalResult => t !== null);
+    return tickets.filter((t): t is LiveTicket => t !== null);
   }
 
-  /** The first non-deleted action in this conversation that links the key, or null. */
-  private async actionLinkingKey(actions: ActionRepository, key: string, conversationId: QualifiedId): Promise<Action | null> {
-    const link = toJiraLink(key);
-    const found = await actions.query({ conversationId, linkedIdsHas: link, limit: LINK_QUERY_LIMIT });
-    return found.find((a) => !a.deleted && sameQualifiedId(a.conversationId, conversationId) && a.linkedIds.includes(link)) ?? null;
+  /**
+   * Stores the live category when it differs from the last known one and audits the change.
+   * An unchanged category writes nothing. A failure is logged and leaves the record as it was.
+   */
+  private async refreshStatus(
+    jira: AnswerQuestionJira,
+    request: SupportRequest,
+    snapshot: IssueSnapshot,
+    conversationId: QualifiedId,
+    now: Date,
+  ): Promise<SupportRequest | null> {
+    if (snapshot.statusCategory === request.statusCategory) return null;
+    try {
+      const updated = await jira.requests.updateStatusCategory(request.key, snapshot.statusCategory, now);
+      if (!updated) return null;
+      await jira.auditLog.append({
+        timestamp: now,
+        actorId: { id: SYSTEM_ACTOR_ID, domain: conversationId.domain },
+        conversationId,
+        action: "entity_updated",
+        entityType: "SupportRequest",
+        entityId: request.key,
+        details: { statusCategory: snapshot.statusCategory },
+      });
+      return updated;
+    } catch (err) {
+      this.logger?.warn("AnswerQuestion: support request status refresh failed", { err: err instanceof Error ? err.name : "UnknownError" });
+      return null;
+    }
   }
 
   /**
@@ -298,7 +354,7 @@ export class AnswerQuestion {
     let question: string | null = null;
     if (requester?.domain) {
       try {
-        question = await this.offerQuestion(jira, command, input.conversationId, requester.name);
+        question = await this.offerQuestion(jira, command, input.conversationId);
       } catch (err) {
         this.logger?.warn("AnswerQuestion: offer validation failed", { kind: command.kind, err: err instanceof Error ? err.name : "UnknownError" });
         return null;
@@ -326,26 +382,18 @@ export class AnswerQuestion {
    * Validates the proposed command against the records; returns the question, or null when invalid.
    * Every question ends with "?" so the router treats a non-exact answer as a follow-up.
    */
-  private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId, requesterName: string | undefined): Promise<string | null> {
-    const projectKey = jira.tracker.projectKey;
-    if (command.kind === "reply") {
-      if (!isKeyInProject(command.issueKey, projectKey)) return null;
-      // Customer-facing replies never carry the requester's name, whatever the model wrote.
-      if (requesterName && containsName(command.body, requesterName)) return null;
-      if (!(await this.actionLinkingKey(jira.actions, command.issueKey, conversationId))) return null;
-      const quoted = command.body.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
-      return `Here is the reply for **${command.issueKey}**:\n${quoted}\n\nShall I send it (yes or no)?`;
-    }
+  private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId): Promise<string | null> {
+    // The parser has already bounded the summary and description and collapsed the summary to one line.
+    if (command.kind === "support") return `Shall I raise this with the service desk?\n> ${command.summary}\n\n(yes or no)?`;
 
-    const action = await jira.actions.findById(command.actionId);
-    if (!action || action.deleted || !sameQualifiedId(action.conversationId, conversationId)) return null;
-    const key = jiraKeyFromLinks(action.linkedIds);
-    if (command.kind === "raise") {
-      if (action.status === "done" || action.status === "cancelled" || key) return null;
-      return `Shall I raise **${action.id}** "${action.description.replace(/\s+/g, " ").trim()}" in Jira (yes or no)?`;
+    const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
+    if (!request) return null;
+    if (command.kind === "reply") {
+      const quoted = command.body.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
+      return `Here is the reply for **${request.key}**:\n${quoted}\n\nShall I send it (yes or no)?`;
     }
-    if (action.status === "done" || action.status === "cancelled" || !key || !isKeyInProject(key, projectKey)) return null;
-    return `Shall I mark **${action.id}** done and close **${key}** in Jira (yes or no)?`;
+    if (request.statusCategory === "done") return null;
+    return `Shall I resolve **${request.key}** "${oneLine(request.summary)}" with the service desk (yes or no)?`;
   }
 }
 
@@ -369,41 +417,58 @@ function asksAboutTickets(question: string, projectKey: string): boolean {
 /** True when the requester's question expresses the change that the offer proposes. */
 function asksForChange(kind: OfferCommand["kind"], question: string, projectKey: string): boolean {
   switch (kind) {
-    case "raise":
-      return RAISE_INTENT.test(question);
-    case "close":
-      return CLOSE_INTENT.test(question);
+    case "support":
+      return SUPPORT_INTENT.test(question);
+    case "resolve":
+      return RESOLVE_INTENT.test(question);
     case "reply":
       return REPLY_VERB.test(question) && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
   }
 }
 
-/** Whole-word, case-insensitive match of a display name. Names under two characters never match. */
-function containsName(text: string, name: string): boolean {
-  const trimmed = name.trim();
-  if (trimmed.length < NAME_MIN_LENGTH) return false;
-  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "iu").test(text);
+/** Only not-deleted records of this conversation, whatever the repository returned. */
+function inConversation(requests: readonly SupportRequest[], conversationId: QualifiedId): SupportRequest[] {
+  return requests.filter((request) => !request.deleted && sameQualifiedId(request.conversationId, conversationId));
 }
 
-/**
- * The ticket key of an action result, from its ` | `-separated `Jira: <KEY>` field. The last
- * such field wins because the real one follows the free-text description.
- */
-function linkedKeyInContent(content: string): string | null {
-  let key: string | null = null;
-  for (const field of content.split(" | ")) {
-    const match = /^Jira: (\S+)$/.exec(field.trim());
-    if (match && JIRA_KEY_PATTERN.test(match[1]!)) key = match[1]!;
-  }
-  return key;
+/** The first record per key, in order. */
+function uniqueByKey(requests: readonly SupportRequest[]): SupportRequest[] {
+  const seen = new Set<string>();
+  return requests.filter((request) => {
+    if (seen.has(request.key)) return false;
+    seen.add(request.key);
+    return true;
+  });
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** The stored record for the model: key, summary, requester name and last known status only. */
+function storedRequestResult(request: SupportRequest, channelId: string | undefined): RetrievalResult {
+  const requesterName = request.requesterName.trim();
+  return {
+    id: request.key,
+    type: "support_request",
+    content: [
+      request.key,
+      `Summary: ${oneLine(request.summary)}`,
+      ...(requesterName ? [`Requested by: ${requesterName}`] : []),
+      `Last known status: ${statusLabel(request.statusCategory)}`,
+    ].join(" | "),
+    sourceChannel: channelId ?? "",
+    sourceDate: request.createdAt,
+    confidence: 1,
+    pathsMatched: ["support_requests"],
+  };
 }
 
 /** Compact ticket text for the model. Uses the English status label, never the tracker's status name. */
-function ticketContent(snapshot: IssueSnapshot, actionId: string, replies: readonly IssueReply[]): string {
+function ticketContent(snapshot: IssueSnapshot, replies: readonly IssueReply[]): string {
   const replyLines = replies.map((reply) => {
     const author = reply.fromThisBot ? "your team via Wire" : reply.author;
-    const body = reply.body.replace(/\s+/g, " ").trim();
+    const body = oneLine(reply.body);
     const text = body.length <= SHARED_REPLY_MAX ? body : `${body.slice(0, SHARED_REPLY_MAX - 3).trimEnd()}...`;
     return `Reply from ${author} at ${reply.created.toISOString()}: ${text}`;
   });
@@ -411,8 +476,6 @@ function ticketContent(snapshot: IssueSnapshot, actionId: string, replies: reado
     `${snapshot.key}: ${snapshot.summary}`,
     `Status: ${statusLabel(snapshot.statusCategory)}`,
     ...snapshot.slas.map(formatSla),
-    `Linked action: ${actionId}`,
-    ...(replyLines.length > 0 ? replyLines : ["No customer replies yet."]),
+    ...(replyLines.length > 0 ? replyLines : ["No service-desk replies yet."]),
   ].join("\n");
 }
-
