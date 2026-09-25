@@ -339,7 +339,13 @@ export class WireEventRouter extends WireEventsHandler {
         text: commandText, conversationId: convId, requesterId: sender,
         timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
       });
-      if (handled) return;
+      if (handled) {
+        // Record the answer so the answer model sees the offer as closed, not pending.
+        this.deps.messageBuffer.push(convId, {
+          messageId: wireMessage.id, senderId: sender, senderName: senderDisplayName ?? "", text, timestamp: new Date(),
+        });
+        return;
+      }
       this.deps.pendingOffers.take(convId, sender);
     }
 

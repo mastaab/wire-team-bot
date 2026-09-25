@@ -263,7 +263,7 @@ describe("AnswerQuestion with Jira: offers", () => {
       createdAt: NOW,
       expiresAt: new Date(NOW.getTime() + OFFER_TTL_MS),
     }]);
-    const expected = 'ACT-0010 is not in Jira yet.\n\nShall I raise **ACT-0010** "Write the customer proposal" in Jira? Reply yes or no.';
+    const expected = 'Shall I raise **ACT-0010** "Write the customer proposal" in Jira? Reply yes or no.';
     expect(sent).toEqual([expected]);
     expect(answer).toBe(expected);
   });
@@ -279,19 +279,21 @@ describe("AnswerQuestion with Jira: offers", () => {
     const { stored, sent, run } = setup({ actions: [makeAction({ linkedIds: ["jira:DS-4"] })], modelAnswer: `Here is the reply.\n${reply}` });
     await run("Tell the service desk on DS-4 to send the draft");
     expect(stored[0]!.command).toEqual({ kind: "reply", issueKey: "DS-4", body: "Please send the draft.\nThanks" });
-    expect(sent).toEqual(["Here is the reply.\n\nShall I send this reply to **DS-4** in Jira?\n> Please send the draft.\n> Thanks\n\nReply yes or no."]);
+    expect(sent).toEqual(["Shall I send this reply to **DS-4** in Jira?\n> Please send the draft.\n> Thanks\n\nReply yes or no."]);
   });
 
-  it("removes a trailing model-written offer question when appending the code-written one", async () => {
+  it("sends only the code-written question, dropping the model's own offer wording", async () => {
     const { sent, run } = setup({ actions: [makeAction()], modelAnswer: `ACT-0010 has no ticket yet. Shall I raise it in Jira for you?\n${raise}` });
     await run("Put the proposal into Jira");
-    expect(sent).toEqual(['ACT-0010 has no ticket yet.\n\nShall I raise **ACT-0010** "Write the customer proposal" in Jira? Reply yes or no.']);
+    expect(sent).toEqual(['Shall I raise **ACT-0010** "Write the customer proposal" in Jira? Reply yes or no.']);
   });
 
-  it("keeps a trailing question that is not an offer", async () => {
-    const { sent, run } = setup({ actions: [makeAction()], modelAnswer: `Is this the proposal action?\n${raise}` });
-    await run("Put the proposal into Jira");
-    expect(sent[0]).toMatch(/^Is this the proposal action\?\n\nShall I raise/);
+  it("never sends a lead-in implying the change already happened before the requester confirms", async () => {
+    // Regression from a real-model run: the model wrote "I'll send that ..." before its offer.
+    const { sent, run } = setup({ actions: [makeAction({ linkedIds: ["jira:DS-4"] })], modelAnswer: `I'll send that to the service desk on DS-4.\n${reply}` });
+    await run("Tell the service desk on DS-4 to send the draft");
+    expect(sent[0]).not.toContain("I'll send");
+    expect(sent[0]!.startsWith("Shall I send this reply to **DS-4** in Jira?")).toBe(true);
   });
 
   const other = { id: "conv-2", domain: "wire.com" };
@@ -365,9 +367,10 @@ describe("AnswerQuestion with Jira: offers", () => {
   });
 
   it("extracts mentions from the final text", async () => {
-    const { wire, run } = setup({ actions: [makeAction()], modelAnswer: `OFFER: stray\n@Alice owns it.\n${raise}` });
-    const final = await run("Raise it");
-    expect(final.startsWith("@Alice owns it.\n\nShall I raise")).toBe(true);
+    // No valid offer here, so the model's text is sent, minus the stray marker line.
+    const { wire, run } = setup({ actions: [makeAction()], modelAnswer: `OFFER: stray\n@Alice owns it.` });
+    const final = await run("Who owns the proposal?");
+    expect(final).toBe("@Alice owns it.");
     expect(wire.sendPlainText).toHaveBeenCalledWith(convId, final, {
       replyToMessageId: "q",
       mentions: [{ userId: { id: "user-1", domain: "wire.com" }, offset: 0, length: "@Alice".length }],

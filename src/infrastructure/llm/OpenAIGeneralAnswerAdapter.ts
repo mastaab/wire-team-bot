@@ -159,7 +159,7 @@ export function integrationsPrompt(integrations: AnswerIntegrations): string {
   const project = integrations.jiraProjectKey;
   if (!project) return "";
   const reading = integrations.jiraShareWithModel
-    ? `- A "## Linked Jira tickets" section, when present, holds the live status, SLAs and latest customer replies of tickets linked from this conversation. Use it to answer questions about those tickets and cite the ticket key. Say nothing about a ticket beyond what that section states. You cannot change Jira while writing this answer. For a ${project} ticket that is not in that section, give the status command below. When asked to raise, update or close a ticket, give the exact supported command, using real IDs from the records provided; do not describe internal mechanics such as answer paths:`
+    ? `- A "## Linked Jira tickets" section, when present, holds the live status, SLAs and latest service-desk replies of tickets linked from this conversation. Use it to answer questions about those tickets and cite the ticket key. Say nothing about a ticket beyond what that section states. You cannot change Jira while writing this answer. For a ${project} ticket that is not in that section, give the status command below. When asked to raise, update or close a ticket, give the exact supported command, using real IDs from the records provided; do not describe internal mechanics such as answer paths:`
     : `- You cannot read or change Jira while writing this answer. When asked about a ${project} ticket or asked to raise, update or close one, give the exact supported command, using real IDs from the records provided. Present the command as the way to get the live details; do not describe internal mechanics such as answer paths:`;
   const statusRule = integrations.jiraShareWithModel
     ? `Never invent ticket keys, statuses or replies, and never guess a ticket's status in Jira, not even from its action's status; state a status only as given in "## Linked Jira tickets", otherwise give the status command.`
@@ -183,6 +183,8 @@ Jira offers:
   OFFER: {"kind":"reply","issueKey":"${project}-NN","body":"<the reply text the requester wants sent, without their name>"}
 - Raise only an open action that has no linked ticket. Close only an action that is linked to a ${project} ticket. Reply only to a ${project} ticket linked from the records provided.
 - Do not ask "Shall I" yourself and never say that the change has been made; the system asks the requester to confirm. Keep the answer before the marker short.
+- Earlier offers in the conversation are closed once answered. If the requester replied no (the bot then said "Understood, I won't.") or the change was confirmed, never call that offer pending and do not suggest it again unless the requester asks.
+- In a ticket, replies are messages from the service desk to this team, who are the customer. Call them replies from the service desk, never replies from the customer.
 - If the target record is unclear, ask which record is meant and add no marker. Never add more than one marker, and never add one for any other request.`;
 }
 

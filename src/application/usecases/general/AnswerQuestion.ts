@@ -73,7 +73,6 @@ const SHARED_REPLY_MAX = 500;
 const LINK_QUERY_LIMIT = 20;
 const FALLBACK_ANSWER = "I wasn't able to generate a response.";
 /** A model-written offer question that the code-written one replaces. */
-const MODEL_OFFER_QUESTION = /\b(shall i|would you like|do you want|should i)\b/i;
 
 interface TicketCandidate {
   key: string;
@@ -267,8 +266,9 @@ export class AnswerQuestion {
       createdAt: now,
       expiresAt: new Date(now.getTime() + OFFER_TTL_MS),
     });
-    const body = stripModelOfferQuestion(text);
-    return body ? `${body}\n\n${question}` : question;
+    // Only the code-written question is sent: the model's own lead-in can imply the change
+    // already happened ("I'll send that ..."), which is wrong until the requester confirms.
+    return question;
   }
 
   /** Validates the proposed command against the records; returns the question, or null when invalid. */
@@ -322,13 +322,3 @@ function ticketContent(snapshot: IssueSnapshot, actionId: string, replies: reado
   ].join("\n");
 }
 
-/** Removes a final model-written offer question, e.g. "Shall I raise it in Jira?". */
-function stripModelOfferQuestion(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed.endsWith("?")) return trimmed;
-  const head = trimmed.slice(0, -1);
-  const boundary = /[.?!]\s+|\n/g;
-  let start = 0;
-  for (let m = boundary.exec(head); m; m = boundary.exec(head)) start = m.index + m[0].length;
-  return MODEL_OFFER_QUESTION.test(trimmed.slice(start)) ? trimmed.slice(0, start).trim() : trimmed;
-}

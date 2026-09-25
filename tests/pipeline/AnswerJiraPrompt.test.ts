@@ -47,7 +47,7 @@ describe("integrationsPrompt", () => {
   it("describes the linked tickets section instead of the cannot-read line when sharing is on", () => {
     const prompt = integrationsPrompt({ jiraProjectKey: "DS", jiraShareWithModel: true });
     expect(prompt).not.toContain("You cannot read or change Jira while writing this answer");
-    expect(prompt).toContain('A "## Linked Jira tickets" section, when present, holds the live status, SLAs and latest customer replies');
+    expect(prompt).toContain('A "## Linked Jira tickets" section, when present, holds the live status, SLAs and latest service-desk replies');
     expect(prompt).toContain("cite the ticket key");
     expect(prompt).toContain("Say nothing about a ticket beyond what that section states");
     expect(prompt).toContain("give the status command");
