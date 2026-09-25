@@ -959,6 +959,26 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
   });
 
+  it("routes a natural status question to the Jira lookup when the bot is mentioned", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("whats the status of DS-4 in jira"));
+    expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith(expect.objectContaining({ reference: "DS-4", timezone: "Europe/Berlin" }));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  it("leaves a natural status question between teammates alone", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("any update on DS-4?"));
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+  });
+
+  it("sends a change request about a ticket to Q&A rather than the read-only lookup", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("please close DS-4"));
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+    expect(deps.answerQuestion.execute).toHaveBeenCalled();
+  });
+
   it("does not answer other projects' ticket references in ordinary chat", async () => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("status of WPB-1234"));

@@ -40,6 +40,7 @@ import { toChannelId } from "../../domain/ids/channelId";
 import { bindUserMentions } from "./bindUserMentions";
 import { hasMultipleCommands } from "./hasMultipleCommands";
 import { parseAddressedAction } from "./parseAddressedAction";
+import { matchIssueStatusRequest } from "./matchIssueStatusRequest";
 import type { WireReplyContext } from "./WireReplyContext";
 
 const CONTEXT_WINDOW = 10;
@@ -425,18 +426,14 @@ export class WireEventRouter extends WireEventsHandler {
       return;
     }
 
-    // status of DS-NN / jira status of ACT-NNNN (customer demo). Only keys of the configured
-    // project match, so other ticket references in ordinary chat and the bot's own record
-    // IDs keep their existing handling, as does a bare "status of ACT-NNNN". The project
-    // key is validated at startup and contains only [A-Z0-9].
+    // Jira status lookups (customer demo): the exact command, or natural phrasing when the bot
+    // is addressed. Only keys of the configured project match; see matchIssueStatusRequest.
     const jiraProjectKey = this.deps.getIssueStatus?.projectKey;
-    const issueStatusMatch = jiraProjectKey
-      ? commandText.match(new RegExp(`^(?:jira\\s+status\\s+of\\s+(ACT-\\d+)|(?:jira\\s+)?status\\s+of\\s+(${jiraProjectKey}-\\d+))[?.]?\\s*$`, "i"))
-      : null;
-    if (issueStatusMatch && this.deps.getIssueStatus) {
+    const issueReference = jiraProjectKey ? matchIssueStatusRequest(commandText, jiraProjectKey, isBotAddressed) : null;
+    if (issueReference && this.deps.getIssueStatus) {
       const config = await this.deps.conversationConfig.get(convId);
       await this.deps.getIssueStatus.execute({
-        reference: (issueStatusMatch[1] ?? issueStatusMatch[2])!.toUpperCase(), conversationId: convId,
+        reference: issueReference, conversationId: convId,
         timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
       });
       return;

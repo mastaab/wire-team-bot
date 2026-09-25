@@ -1675,6 +1675,15 @@ Requested 2026-09-25: show service-desk replies from Jira in Wire. Decisions: re
 - **Guardrails:** the existing project and conversation scoping applies unchanged. Reply text is shown in Wire only; it is never stored, logged or passed to a model.
 - **Acceptance:** unit tests for the public filter (including a missing flag), paging, ordering, truncation and failure; a live check on a DS ticket carrying one customer reply and one internal note, where only the reply appears.
 
+### Conversational Jira, first step
+
+Found on 2026-09-25 in the Wire staging session: "whats the status of DS-4" and "whats the status of DS-4 in jira" fell through to Q&A, which said it had no record of DS-4 and could not query Jira; asked to put an action into Jira, it denied the integration and suggested logging a new action.
+
+- **Natural status questions:** `matchIssueStatusRequest` keeps the exact commands and, only when the bot is addressed, also accepts natural phrasing that names exactly one key of the configured project (or one action ID with "jira" or "ticket") with a status word or a question mark. Change requests ("close", "mark", "reply to", "raise") are left to Q&A, so the read-only lookup never answers them.
+- **Integration awareness:** when Jira is configured, the answer model's system prompt states the integration and its commands, forbids denying it, and forbids stating or guessing a ticket's status. Retrieved actions show their linked key as `Jira: DS-NN`. No ticket content, status or reply reaches the model; the answer path stays read-only.
+- **Evidence:** 569 tests pass. Real-model CLI check: the natural question returned the live DS-2 status and replies; "can you put the questionnaire action into Jira?" answered that ACT-0005 is already linked to DS-2 and gave `status of DS-2`; asking by name found the link without guessing its status; "what can you do with Jira?" listed the commands.
+- **Next options (not started):** give the answer model live ticket status and customer replies (requires deciding whether that content may go to the configured model provider; today it never does); confirmed conversational writes ("Shall I raise ACT-0010 in Jira?", then yes, running the existing audited use case after code validates the ID and scope); resolving names and "it" to records within the channel; and replying to the service desk from Wire.
+
 ### Out of scope for the demo
 
 Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due`, cancellations and passive (unmentioned) completions to Jira, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.

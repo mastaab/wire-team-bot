@@ -220,7 +220,7 @@ Set its endpoint and model using the keys in the template.
 
 ### Jira Service Management (optional, customer demo)
 
-Off unless all six required keys are set; a partial configuration stops startup with the names of the missing keys. With it on, `ACT-NNNN to jira` raises a service request for an open action, `ACT-NNNN done` also closes the linked request, and `status of DS-42` or `jira status of ACT-NNNN` reads its status, SLAs and up to three latest service-desk replies. Only replies to the customer are shown; internal agent notes stay in Jira, even though the service account can read them. Only the action's description, owner, deadline and ID are sent to Jira. See [PLAN.md §6](PLAN.md#6-customer-demo-jira-service-management-integration) for the design and guardrails.
+Off unless all six required keys are set; a partial configuration stops startup with the names of the missing keys. With it on, `ACT-NNNN to jira` raises a service request for an open action, `ACT-NNNN done` also closes the linked request, and `status of DS-42` or `jira status of ACT-NNNN` reads its status, SLAs and up to three latest service-desk replies. Only replies to the customer are shown; internal agent notes stay in Jira, even though the service account can read them. When the bot is addressed, natural questions such as `@Wire Team Bot what's the status of DS-42?` work too, and general questions point to these commands instead of denying the integration. Only the action's description, owner, deadline and ID are sent to Jira. See [PLAN.md §6](PLAN.md#6-customer-demo-jira-service-management-integration) for the design and guardrails.
 
 | Variable | Default | Description |
 |---|---|---|

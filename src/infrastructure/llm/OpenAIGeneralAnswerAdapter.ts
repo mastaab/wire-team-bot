@@ -117,11 +117,42 @@ function stripTrailingOffer(text: string): string {
   return trimmed;
 }
 
+/** Optional integrations the answer model must know about so it does not deny them. */
+export interface AnswerIntegrations {
+  /** Configured Jira Service Management project key, when the integration is on. */
+  jiraProjectKey?: string;
+}
+
+/**
+ * Appended to the system prompt only when Jira is configured. This path stays read-only:
+ * the model learns that the integration exists and which commands to offer, and gets no
+ * ticket content.
+ */
+export function integrationsPrompt(integrations: AnswerIntegrations): string {
+  const project = integrations.jiraProjectKey;
+  if (!project) return "";
+  return `
+
+Jira integration:
+- This bot is connected to the Jira Service Management project ${project}. Never say that it has no Jira integration or cannot work with Jira.
+- You cannot read or change Jira while writing this answer. When asked about a ${project} ticket or asked to raise, update or close one, give the exact supported command, using real IDs from the records provided. Present the command as the way to get the live details; do not describe internal mechanics such as answer paths:
+  - \`ACT-NNNN to jira\` raises an open action as a ${project} request.
+  - \`status of ${project}-NN\` or \`jira status of ACT-NNNN\` shows a ticket's live status, SLAs and latest service-desk replies.
+  - \`ACT-NNNN done\` marks the action done and also closes its linked ${project} ticket.
+- An action record may show its linked ticket as "Jira: ${project}-NN"; mention that link when it is relevant. Never invent ticket keys, statuses or replies, and never state or guess a ticket's status in Jira, not even from its action's status; only the status command reports it.
+- Tickets are raised from actions. For work not yet tracked, suggest capturing it first with \`action: ...\` and then \`ACT-NNNN to jira\`.`;
+}
+
 export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
+  private readonly systemPrompt: string;
+
   constructor(
     private readonly llm: LLMClientFactory,
     private readonly logger: Logger,
-  ) {}
+    integrations: AnswerIntegrations = {},
+  ) {
+    this.systemPrompt = SYSTEM_PROMPT + integrationsPrompt(integrations);
+  }
 
   async answer(
     question: string,
@@ -194,7 +225,7 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
       const result = await this.llm.chatCompletion(
         "respond",
         [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: this.systemPrompt },
           { role: "user", content: userContent },
         ],
         {
@@ -219,7 +250,7 @@ export class OpenAIGeneralAnswerAdapter implements GeneralAnswerService {
       const retry = await this.llm.chatCompletion(
         "respond",
         [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: this.systemPrompt },
           { role: "user", content: userContent },
           { role: "assistant", content: result.content.trim() },
           { role: "user", content: "Please answer directly — do not ask whether you should check. Just provide the answer now." },

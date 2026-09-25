@@ -244,7 +244,7 @@ async function main() {
   const retrievalEngine  = new MultiPathRetrievalEngine(structuredPath, semanticPath, graphPath, summaryPath, logger);
 
   // Use cases
-  const answerQuestion = new AnswerQuestion(generalAnswerAdapter(llmFactory, logger), wireOutbound, queryAnalysis, retrievalEngine, logger);
+  const answerQuestion = new AnswerQuestion(generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey), wireOutbound, queryAnalysis, retrievalEngine, logger);
   const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
   // Customer demo: Jira Service Management, wired only when fully configured.
   const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
@@ -344,8 +344,8 @@ async function main() {
 }
 
 // Tiny helper — avoids duplicating the adapter construction
-function generalAnswerAdapter(llmFactory: LLMClientFactory, logger: ReturnType<typeof getLogger>) {
-  return new OpenAIGeneralAnswerAdapter(llmFactory, logger);
+function generalAnswerAdapter(llmFactory: LLMClientFactory, logger: ReturnType<typeof getLogger>, jiraProjectKey?: string) {
+  return new OpenAIGeneralAnswerAdapter(llmFactory, logger, { jiraProjectKey });
 }
 
 main().catch(() => {

@@ -4,6 +4,7 @@
  * and status. For accountability intent, filters to open/in_progress actions.
  */
 
+import { jiraKeyFromLinks } from "../../domain/ids/jiraLink";
 import type { DecisionRepository } from "../../domain/repositories/DecisionRepository";
 import type { ActionRepository } from "../../domain/repositories/ActionRepository";
 import type { RetrievalResult, RetrievalScope } from "../../application/ports/RetrievalPort";
@@ -150,6 +151,8 @@ function actionToResult(a: Action, channelId: string): RetrievalResult {
     `Owner: ${owner}`,
     `Status: ${a.status}`,
     `Due: ${deadline}`,
+    // The linked ticket key only; ticket content is never retrieved for the answer model.
+    jiraKeyFromLinks(a.linkedIds) ? `Jira: ${jiraKeyFromLinks(a.linkedIds)}` : "",
     a.tags.length > 0 ? `Tags: ${a.tags.join(", ")}` : "",
   ]
     .filter(Boolean)
