@@ -24,6 +24,9 @@ import type { StatusCommand } from "../../application/usecases/general/StatusCom
 import type { CatchMeUpCommand } from "../../application/usecases/general/CatchMeUpCommand";
 import type { PushActionToJira } from "../../application/usecases/jira/PushActionToJira";
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
+import type { ConfirmOffer } from "../../application/usecases/jira/ConfirmOffer";
+import type { ReplyToServiceDesk } from "../../application/usecases/jira/ReplyToServiceDesk";
+import type { PendingOfferStore } from "../../application/services/offers";
 import type { ConversationMessageBuffer } from "../../application/services/ConversationMessageBuffer";
 import type { DateTimeService } from "../../domain/services/DateTimeService";
 import type { ConversationMemberCache, CachedMember } from "../../domain/services/ConversationMemberCache";
@@ -86,6 +89,10 @@ export interface WireEventRouterDeps {
   /** Customer demo: present only when the Jira integration is configured. */
   pushActionToJira?: PushActionToJira;
   getIssueStatus?: GetIssueStatus;
+  replyToServiceDesk?: ReplyToServiceDesk;
+  /** Offers made by the answer path, confirmed with a short "yes" or "no". */
+  pendingOffers?: PendingOfferStore;
+  confirmOffer?: ConfirmOffer;
   // Infrastructure
   botUserId: QualifiedId;
   wireOutbound: WireOutboundPort;
@@ -321,6 +328,21 @@ export class WireEventRouter extends WireEventsHandler {
       return;
     }
 
+    // A short "yes"/"no" to a pending Jira offer (customer demo). Checked before commands and
+    // before the follow-up handling further down, which would otherwise send the "yes" to the
+    // read-only Q&A path. Only the member who received the offer can confirm it, and only with
+    // their next message: anything else drops the offer, so a later "yes" meant for a different
+    // question can never confirm it.
+    if (this.deps.confirmOffer && this.deps.pendingOffers?.has(convId, sender)) {
+      const config = await this.deps.conversationConfig.get(convId);
+      const handled = await this.deps.confirmOffer.execute({
+        text: commandText, conversationId: convId, requesterId: sender,
+        timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
+      });
+      if (handled) return;
+      this.deps.pendingOffers.take(convId, sender);
+    }
+
     // ── ACTIVE — state-change commands ────────────────────────────────────────
     if (isBotAddressed) {
       if (this.matchesPauseCommand(commandLowered)) {
@@ -422,6 +444,20 @@ export class WireEventRouter extends WireEventsHandler {
       await this.deps.pushActionToJira.execute({
         actionId, conversationId: convId, actorId: sender,
         timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
+      });
+      return;
+    }
+
+    // reply to DS-NN: <text> / reply to ACT-NNNN: <text> (customer demo). Only keys of the
+    // configured project match, so "reply to" in ordinary chat keeps its existing handling.
+    const replyProjectKey = this.deps.replyToServiceDesk ? this.deps.getIssueStatus?.projectKey : undefined;
+    const replyMatch = replyProjectKey
+      ? commandText.match(new RegExp(`^reply\\s+to\\s+(ACT-\\d+|${replyProjectKey}-\\d+)\\s*:\\s*([\\s\\S]+)$`, "i"))
+      : null;
+    if (replyMatch && this.deps.replyToServiceDesk) {
+      await this.deps.replyToServiceDesk.execute({
+        reference: replyMatch[1]!.toUpperCase(), body: replyMatch[2]!, conversationId: convId,
+        actorId: sender, replyToMessageId: wireMessage.id,
       });
       return;
     }
@@ -745,6 +781,7 @@ export class WireEventRouter extends WireEventsHandler {
     // Stop locally first. Resume only after the durable state write succeeds.
     this.channelStateCache.set(channelId, "paused");
     this.deps.messageBuffer.clear(convId);
+    this.deps.pendingOffers?.clearConversation(convId);
     this.deps.slidingWindow.flush(channelId);
     await this.deps.processingQueue?.cancelChannel(channelId);
     try {

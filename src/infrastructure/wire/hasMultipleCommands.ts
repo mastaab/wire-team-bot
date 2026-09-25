@@ -16,7 +16,7 @@ const COMMAND_START = /^(?:(?:decision|action|context):|remind(?:er)?\s|(?:make|
  * configured project; a validated project key contains only [A-Z0-9].
  */
 function jiraCommandStart(projectKey: string): RegExp {
-  return new RegExp(`^(?:ACT-\\d+\\s+to\\s+jira\\b|(?:raise|push|send)\\s+ACT-\\d+\\s+(?:to|in)\\s+jira\\b|jira\\s+status\\s+of\\s+ACT-\\d+\\b|(?:jira\\s+)?status\\s+of\\s+${projectKey}-\\d+\\b)`, "i");
+  return new RegExp(`^(?:ACT-\\d+\\s+to\\s+jira\\b|(?:raise|push|send)\\s+ACT-\\d+\\s+(?:to|in)\\s+jira\\b|jira\\s+status\\s+of\\s+ACT-\\d+\\b|(?:jira\\s+)?status\\s+of\\s+${projectKey}-\\d+\\b|reply\\s+to\\s+(?:ACT-\\d+|${projectKey}-\\d+)\\s*:)`, "i");
 }
 
 export function hasMultipleCommands(text: string, mentions: readonly Mention[], botId: QualifiedId, jiraProjectKey?: string): boolean {

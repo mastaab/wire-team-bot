@@ -63,6 +63,9 @@ import { UpdateActionStatus } from "../application/usecases/actions/UpdateAction
 import { PushActionToJira } from "../application/usecases/jira/PushActionToJira";
 import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
 import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
+import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPendingOfferStore";
+import { ReplyToServiceDesk } from "../application/usecases/jira/ReplyToServiceDesk";
+import { ConfirmOffer } from "../application/usecases/jira/ConfirmOffer";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
 import { ReassignAction } from "../application/usecases/actions/ReassignAction";
@@ -244,12 +247,24 @@ async function main() {
   const retrievalEngine  = new MultiPathRetrievalEngine(structuredPath, semanticPath, graphPath, summaryPath, logger);
 
   // Use cases
-  const answerQuestion = new AnswerQuestion(generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey), wireOutbound, queryAnalysis, retrievalEngine, logger);
-  const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
   // Customer demo: Jira Service Management, wired only when fully configured.
   const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
+  const pendingOffers = issueTracker ? new InMemoryPendingOfferStore() : undefined;
+  const shareWithModel = config.jira?.shareWithModel ?? false;
+  const answerQuestion = new AnswerQuestion(
+    generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey, shareWithModel), wireOutbound, queryAnalysis, retrievalEngine, logger,
+    issueTracker && pendingOffers ? { tracker: issueTracker, actions: actionsRepo, offers: pendingOffers, shareWithModel } : undefined,
+  );
+  const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
   const catchMeUp      = new CatchMeUpCommand(summaryRepo, generateSummary, wireOutbound);
 
+  // Built once so ConfirmOffer shares the instances the router uses.
+  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger);
+  const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const replyToServiceDesk = issueTracker ? new ReplyToServiceDesk(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const confirmOffer = pendingOffers && pushActionToJira && replyToServiceDesk
+    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk }, wireOutbound)
+    : undefined;
   const router = new WireEventRouter({
     logger,
     botUserId: BOT_ID,
@@ -259,7 +274,7 @@ async function main() {
     supersedeDecision:      new SupersedeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     revokeDecision:         new RevokeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     createActionFromExplicit: new CreateActionFromExplicit(actionsRepo, convConfigRepo, dateTimeService, userResolution, wireOutbound, auditLogRepo, logger),
-    updateActionStatus:     new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger),
+    updateActionStatus,
     updateActionDeadline:   new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo),
     listMyActions:          new ListMyActions(actionsRepo, wireOutbound),
     listTeamActions:        new ListTeamActions(actionsRepo, wireOutbound),
@@ -272,8 +287,11 @@ async function main() {
     answerQuestion,
     statusCommand,
     catchMeUpCommand:       catchMeUp,
-    pushActionToJira:       issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined,
+    pushActionToJira,
     getIssueStatus:         issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined,
+    replyToServiceDesk,
+    pendingOffers,
+    confirmOffer,
     wireOutbound,
     dateTimeService,
     scheduler,
@@ -344,8 +362,8 @@ async function main() {
 }
 
 // Tiny helper — avoids duplicating the adapter construction
-function generalAnswerAdapter(llmFactory: LLMClientFactory, logger: ReturnType<typeof getLogger>, jiraProjectKey?: string) {
-  return new OpenAIGeneralAnswerAdapter(llmFactory, logger, { jiraProjectKey });
+function generalAnswerAdapter(llmFactory: LLMClientFactory, logger: ReturnType<typeof getLogger>, jiraProjectKey?: string, jiraShareWithModel = false) {
+  return new OpenAIGeneralAnswerAdapter(llmFactory, logger, { jiraProjectKey, jiraShareWithModel });
 }
 
 main().catch(() => {

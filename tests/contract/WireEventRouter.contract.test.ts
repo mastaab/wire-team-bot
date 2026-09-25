@@ -1003,3 +1003,87 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
   });
 });
+
+describe("WireEventRouter contract: Jira offers and service-desk replies", () => {
+  const offerDeps = (pending: boolean, handled = true) => makeDeps({
+    getIssueStatus: { execute: vi.fn().mockResolvedValue(null), projectKey: "DS" },
+    replyToServiceDesk: { execute: vi.fn().mockResolvedValue(undefined) },
+    pendingOffers: { has: vi.fn().mockReturnValue(pending), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn() },
+    confirmOffer: { execute: vi.fn().mockResolvedValue(handled) },
+    conversationConfig: { get: vi.fn().mockResolvedValue({ timezone: "Europe/Berlin" }), upsert: vi.fn() },
+  } as unknown as Partial<WireEventRouterDeps>);
+
+  it("hands a reply to a pending offer to ConfirmOffer before any follow-up or Q&A handling", async () => {
+    const deps = offerDeps(true);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
+    expect(deps.pendingOffers!.has).toHaveBeenCalledWith(convId, sender);
+    expect(deps.confirmOffer!.execute).toHaveBeenCalledWith({
+      text: "yes", conversationId: convId, requesterId: sender, timezone: "Europe/Berlin", replyToMessageId: "msg-1",
+    });
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not consult ConfirmOffer when the sender has no pending offer", async () => {
+    const deps = offerDeps(false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
+    expect(deps.confirmOffer!.execute).not.toHaveBeenCalled();
+  });
+
+  it("continues normal routing when ConfirmOffer does not handle the message", async () => {
+    const deps = offerDeps(true, false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("ACT-0001 done"));
+    expect(deps.confirmOffer!.execute).toHaveBeenCalled();
+    expect(deps.updateActionStatus.execute).toHaveBeenCalledWith(expect.objectContaining({ actionId: "ACT-0001", newStatus: "done" }));
+  });
+
+  it("drops the pending offer when the requester's next message is not a yes or no", async () => {
+    const deps = offerDeps(true, false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("what is due today?"));
+    expect(deps.pendingOffers!.take).toHaveBeenCalledWith(convId, sender);
+  });
+
+  it("keeps the offer when it was handled by the confirmation", async () => {
+    const deps = offerDeps(true, true);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
+    expect(deps.pendingOffers!.take).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["reply to DS-4: The draft is attached.", "DS-4", "The draft is attached."],
+    ["reply to ds-4:the draft is attached", "DS-4", "the draft is attached"],
+    ["reply to ACT-0010: Line one\nLine two", "ACT-0010", "Line one\nLine two"],
+  ])("routes '%s' to ReplyToServiceDesk", async (text, reference, body) => {
+    const deps = offerDeps(false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.replyToServiceDesk!.execute).toHaveBeenCalledWith({
+      reference, body, conversationId: convId, actorId: sender, replyToMessageId: "msg-1",
+    });
+  });
+
+  it.each(["reply to WPB-12: thanks", "reply to DS-4 thanks", "reply to Bob: thanks"])("does not treat '%s' as a service-desk reply", async (text) => {
+    const deps = offerDeps(false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
+  });
+
+  it("leaves 'reply to DS-4: ...' alone when the integration is off", async () => {
+    const deps = makeDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("reply to DS-4: thanks"));
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId, expect.stringContaining("Jira"), expect.anything());
+  });
+
+  it.each(["pause", "secure mode"])("drops pending offers when the channel is set to %s", async (command) => {
+    const deps = offerDeps(false);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(command));
+    expect(deps.pendingOffers!.clearConversation).toHaveBeenCalledWith(convId);
+  });
+
+  it("refuses a service-desk reply combined with another command in one message", async () => {
+    const deps = offerDeps(false);
+    const message = makeMessage("reply to DS-4: done\nACT-0005 done");
+    await new WireEventRouter(deps).onTextMessageReceived(message);
+    expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
+      "Please send one command per message. I have not run any commands from this message.", { replyToMessageId: message.id });
+  });
+});

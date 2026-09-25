@@ -29,6 +29,9 @@ import { UpdateActionStatus } from "../application/usecases/actions/UpdateAction
 import { PushActionToJira } from "../application/usecases/jira/PushActionToJira";
 import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
 import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
+import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPendingOfferStore";
+import { ReplyToServiceDesk } from "../application/usecases/jira/ReplyToServiceDesk";
+import { ConfirmOffer } from "../application/usecases/jira/ConfirmOffer";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
 import { ReassignAction } from "../application/usecases/actions/ReassignAction";
@@ -94,7 +97,14 @@ export function createContainer(config: Config, logger: Logger): Container {
   // ── Phase 2: Intelligence pipeline ──────────────────────────────────────
   const llmFactory = new LLMClientFactory(config.llm.bot, logger);
   // One factory for every adapter, so models that reject temperature are learned once.
-  const generalAnswerAdapter = new OpenAIGeneralAnswerAdapter(llmFactory, logger, { jiraProjectKey: config.jira?.projectKey });
+  // Customer demo: Jira Service Management, wired only when fully configured. Ticket content
+  // reaches the answer model only when WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL is on.
+  const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
+  if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey, shareWithModel: config.jira?.shareWithModel ?? false });
+  const pendingOffers = issueTracker ? new InMemoryPendingOfferStore() : undefined;
+  const generalAnswerAdapter = new OpenAIGeneralAnswerAdapter(llmFactory, logger, {
+    jiraProjectKey: config.jira?.projectKey, jiraShareWithModel: config.jira?.shareWithModel ?? false,
+  });
   const classifier = new OpenAIClassifierAdapter(llmFactory, logger);
   const extraction = new OpenAIExtractionAdapter(llmFactory, logger);
   const embeddingService = createEmbeddingService(config.llm.bot, logger);
@@ -162,6 +172,9 @@ export function createContainer(config: Config, logger: Logger): Container {
     queryAnalysis,
     retrievalEngine,
     logger,
+    issueTracker && pendingOffers
+      ? { tracker: issueTracker, actions: actionsRepo, offers: pendingOffers, shareWithModel: config.jira?.shareWithModel ?? false }
+      : undefined,
   );
 
   const statusCommand = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
@@ -181,12 +194,13 @@ export function createContainer(config: Config, logger: Logger): Container {
     auditLogRepo,
     logger,
   );
-  // Customer demo: Jira Service Management, wired only when fully configured.
-  const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
-  if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey });
   const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger);
   const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const getIssueStatus = issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined;
+  const replyToServiceDesk = issueTracker ? new ReplyToServiceDesk(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const confirmOffer = pendingOffers && pushActionToJira && replyToServiceDesk
+    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk }, wireOutbound)
+    : undefined;
   const updateActionDeadline = new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo);
   const listMyActions = new ListMyActions(actionsRepo, wireOutbound);
   const listTeamActions = new ListTeamActions(actionsRepo, wireOutbound);
@@ -278,6 +292,9 @@ export function createContainer(config: Config, logger: Logger): Container {
     catchMeUpCommand,
     pushActionToJira,
     getIssueStatus,
+    replyToServiceDesk,
+    pendingOffers,
+    confirmOffer,
     wireOutbound,
     replyContext,
     messageBuffer,

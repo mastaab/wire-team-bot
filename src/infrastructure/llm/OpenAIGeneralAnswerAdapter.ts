@@ -172,6 +172,7 @@ ${reading}
   - \`ACT-NNNN to jira\` raises an open action as a ${project} request.
   - \`status of ${project}-NN\` or \`jira status of ACT-NNNN\` shows a ticket's live status, SLAs and latest service-desk replies.
   - \`ACT-NNNN done\` marks the action done and also closes its linked ${project} ticket.
+  - \`reply to ${project}-NN: <text>\` or \`reply to ACT-NNNN: <text>\` sends a customer-facing reply to a linked ticket.
 - An action record may show its linked ticket as "Jira: ${project}-NN"; mention that link when it is relevant. ${statusRule}
 - Tickets are raised from actions. For work not yet tracked, suggest capturing it first with \`action: ...\` and then \`ACT-NNNN to jira\`.
 

@@ -29,6 +29,7 @@ it("tells the answer model about the Jira integration only when it is configured
   expect(configured).toContain("Never say that it has no Jira integration");
   expect(configured).toContain("`status of DS-NN`");
   expect(configured).toContain("`ACT-NNNN to jira`");
+  expect(configured).toContain("`reply to DS-NN: <text>`");
   expect(configured).toContain("You cannot read or change Jira while writing this answer");
   expect(configured).toContain("do not describe internal mechanics");
   expect(configured).toContain("never state or guess a ticket's status in Jira");
