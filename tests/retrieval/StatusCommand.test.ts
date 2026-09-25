@@ -158,4 +158,24 @@ describe("StatusCommand", () => {
     expect(sentMessage(deps)).toContain("Pending reminders in this channel: 150");
     expect(sentMessage(deps)).not.toContain("Pending reminders in this channel: 150+");
   });
+
+  it("counts open support requests of this conversation only when the service desk is configured", async () => {
+    const deps = makeDeps(null, []);
+    const supportRequests = { listByConversation: vi.fn().mockResolvedValue(live(2)), create: vi.fn(), findByKey: vi.fn(), updateStatusCategory: vi.fn() };
+    const command = new StatusCommand(
+      deps.channelConfig as never, deps.entityRepo as never, deps.actionRepo as never,
+      deps.reminderRepo as never, deps.decisionRepo as never, deps.wireOutbound as never, supportRequests as never,
+    );
+
+    await command.execute({ conversationId: convId, channelId, replyToMessageId: "msg-1" });
+
+    expect(supportRequests.listByConversation).toHaveBeenCalledWith(convId, expect.objectContaining({ openOnly: true }));
+    expect(sentMessage(deps)).toContain("Open support requests: 2");
+  });
+
+  it("leaves out the support request line when the service desk is not configured", async () => {
+    const deps = makeDeps(null, []);
+    await makeCommand(deps).execute({ conversationId: convId, channelId, replyToMessageId: "msg-1" });
+    expect(sentMessage(deps)).not.toContain("support requests");
+  });
 });

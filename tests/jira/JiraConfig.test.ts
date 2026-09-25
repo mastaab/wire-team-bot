@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveJiraConfig } from "../../src/app/config";
-import { jiraKeyFromLinks, toJiraLink, isKeyInProject } from "../../src/domain/ids/jiraLink";
+import { isKeyInProject } from "../../src/domain/ids/jiraLink";
 
 const full = {
   WIRE_TEAM_BOT_JIRA_BASE_URL: "https://api.atlassian.com/ex/jira/cloud-id/",
@@ -51,15 +51,7 @@ describe("resolveJiraConfig", () => {
   });
 });
 
-describe("jira links", () => {
-  it("round-trips a key through the prefixed link form", () => {
-    expect(jiraKeyFromLinks(["DEC-0001", toJiraLink("ds-42")])).toBe("DS-42");
-  });
-
-  it("never mistakes a decision ID for a Jira key", () => {
-    expect(jiraKeyFromLinks(["DEC-0001"])).toBeNull();
-  });
-
+describe("jira keys", () => {
   it("scopes keys to the configured project", () => {
     expect(isKeyInProject("DS-42", "DS")).toBe(true);
     expect(isKeyInProject("DSX-42", "DS")).toBe(false);

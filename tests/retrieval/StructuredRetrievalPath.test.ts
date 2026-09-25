@@ -134,19 +134,6 @@ describe("StructuredRetrievalPath", () => {
     expect(decision?.content).toContain("For consistency");
   });
 
-  it("shows an action's linked Jira ticket key, and nothing for unlinked actions", async () => {
-    const decisionRepo = { query: vi.fn().mockResolvedValue([]), findById: vi.fn() };
-    const actionRepo = { query: vi.fn().mockResolvedValue([
-      makeAction({ id: "ACT-0010", linkedIds: ["DEC-0001", "jira:DS-4"] }),
-      makeAction({ id: "ACT-0011", linkedIds: ["DEC-0001"] }),
-    ]), findById: vi.fn() };
-    const path = new StructuredRetrievalPath(decisionRepo as never, actionRepo as never);
-
-    const results = await path.retrieve(basePlan, scope);
-    expect(results.find((r) => r.id === "ACT-0010")?.content).toContain("Jira: DS-4");
-    expect(results.find((r) => r.id === "ACT-0011")?.content).not.toContain("Jira:");
-  });
-
   it("continues gracefully if decisionRepo throws", async () => {
     const decisionRepo = { query: vi.fn().mockRejectedValue(new Error("DB error")), findById: vi.fn() };
     const actionRepo = { query: vi.fn().mockResolvedValue([makeAction()]), findById: vi.fn() };

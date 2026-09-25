@@ -60,7 +60,10 @@ import { SupersedeDecision } from "../application/usecases/decisions/SupersedeDe
 import { RevokeDecision } from "../application/usecases/decisions/RevokeDecision";
 import { CreateActionFromExplicit } from "../application/usecases/actions/CreateActionFromExplicit";
 import { UpdateActionStatus } from "../application/usecases/actions/UpdateActionStatus";
-import { PushActionToJira } from "../application/usecases/jira/PushActionToJira";
+import { RaiseSupportRequest } from "../application/usecases/jira/RaiseSupportRequest";
+import { ListSupportRequests } from "../application/usecases/jira/ListSupportRequests";
+import { ResolveSupportRequest } from "../application/usecases/jira/ResolveSupportRequest";
+import { PrismaSupportRequestRepository } from "../infrastructure/persistence/postgres/PrismaSupportRequestRepository";
 import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
 import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
 import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPendingOfferStore";
@@ -250,20 +253,25 @@ async function main() {
   // Customer demo: Jira Service Management, wired only when fully configured.
   const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
   const pendingOffers = issueTracker ? new InMemoryPendingOfferStore() : undefined;
+  const supportRequestsRepo = issueTracker ? new PrismaSupportRequestRepository() : undefined;
   const shareWithModel = config.jira?.shareWithModel ?? false;
   const answerQuestion = new AnswerQuestion(
     generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey, shareWithModel), wireOutbound, queryAnalysis, retrievalEngine, logger,
-    issueTracker && pendingOffers ? { tracker: issueTracker, actions: actionsRepo, offers: pendingOffers, shareWithModel } : undefined,
+    issueTracker && pendingOffers && supportRequestsRepo
+      ? { tracker: issueTracker, requests: supportRequestsRepo, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel }
+      : undefined,
   );
-  const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
+  const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound, supportRequestsRepo);
   const catchMeUp      = new CatchMeUpCommand(summaryRepo, generateSummary, wireOutbound);
 
-  // Built once so ConfirmOffer shares the instances the router uses.
-  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger);
-  const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const replyToServiceDesk = issueTracker ? new ReplyToServiceDesk(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const confirmOffer = pendingOffers && pushActionToJira && replyToServiceDesk
-    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk, actions: actionsRepo }, wireOutbound)
+  // Customer demo: support requests, built once so ConfirmOffer shares the router's instances.
+  const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
+    ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)
     : undefined;
   const router = new WireEventRouter({
     logger,
@@ -274,7 +282,7 @@ async function main() {
     supersedeDecision:      new SupersedeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     revokeDecision:         new RevokeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     createActionFromExplicit: new CreateActionFromExplicit(actionsRepo, convConfigRepo, dateTimeService, userResolution, wireOutbound, auditLogRepo, logger),
-    updateActionStatus,
+    updateActionStatus:     new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo),
     updateActionDeadline:   new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo),
     listMyActions:          new ListMyActions(actionsRepo, wireOutbound),
     listTeamActions:        new ListTeamActions(actionsRepo, wireOutbound),
@@ -287,8 +295,10 @@ async function main() {
     answerQuestion,
     statusCommand,
     catchMeUpCommand:       catchMeUp,
-    pushActionToJira,
-    getIssueStatus:         issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined,
+    raiseSupportRequest,
+    listSupportRequests,
+    resolveSupportRequest,
+    getIssueStatus,
     replyToServiceDesk,
     pendingOffers,
     confirmOffer,

@@ -1,5 +1,4 @@
 import { toChannelId } from "../../domain/ids/channelId";
-import { jiraKeyFromLinks } from "../../domain/ids/jiraLink";
 /**
  * Semantic retrieval path — pgvector HNSW cosine similarity on the embeddings table.
  * Embeds the question, finds similar stored vectors, then enriches with source record details.
@@ -100,7 +99,6 @@ export class SemanticRetrievalPath {
               `Owner: ${owner}`,
               `Status: ${a.status}`,
               a.deadline ? `Due: ${a.deadline.toISOString().slice(0, 10)}` : "",
-              jiraKeyFromLinks(a.linkedIds) ? `Jira: ${jiraKeyFromLinks(a.linkedIds)}` : "",
             ]
               .filter(Boolean)
               .join(" | "),

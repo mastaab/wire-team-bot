@@ -26,7 +26,10 @@ import { SupersedeDecision } from "../application/usecases/decisions/SupersedeDe
 import { RevokeDecision } from "../application/usecases/decisions/RevokeDecision";
 import { CreateActionFromExplicit } from "../application/usecases/actions/CreateActionFromExplicit";
 import { UpdateActionStatus } from "../application/usecases/actions/UpdateActionStatus";
-import { PushActionToJira } from "../application/usecases/jira/PushActionToJira";
+import { RaiseSupportRequest } from "../application/usecases/jira/RaiseSupportRequest";
+import { ListSupportRequests } from "../application/usecases/jira/ListSupportRequests";
+import { ResolveSupportRequest } from "../application/usecases/jira/ResolveSupportRequest";
+import { PrismaSupportRequestRepository } from "../infrastructure/persistence/postgres/PrismaSupportRequestRepository";
 import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
 import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
 import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPendingOfferStore";
@@ -102,6 +105,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
   if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey, shareWithModel: config.jira?.shareWithModel ?? false });
   const pendingOffers = issueTracker ? new InMemoryPendingOfferStore() : undefined;
+  const supportRequestsRepo = issueTracker ? new PrismaSupportRequestRepository() : undefined;
   const generalAnswerAdapter = new OpenAIGeneralAnswerAdapter(llmFactory, logger, {
     jiraProjectKey: config.jira?.projectKey, jiraShareWithModel: config.jira?.shareWithModel ?? false,
   });
@@ -173,11 +177,11 @@ export function createContainer(config: Config, logger: Logger): Container {
     retrievalEngine,
     logger,
     issueTracker && pendingOffers
-      ? { tracker: issueTracker, actions: actionsRepo, offers: pendingOffers, shareWithModel: config.jira?.shareWithModel ?? false }
+      ? { tracker: issueTracker, requests: supportRequestsRepo!, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel: config.jira?.shareWithModel ?? false }
       : undefined,
   );
 
-  const statusCommand = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
+  const statusCommand = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound, supportRequestsRepo);
 
   const logDecision = new LogDecision(decisionsRepo, wireOutbound, auditLogRepo, logger);
   const searchDecisions = new SearchDecisions(decisionsRepo, wireOutbound);
@@ -194,12 +198,15 @@ export function createContainer(config: Config, logger: Logger): Container {
     auditLogRepo,
     logger,
   );
-  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker, logger);
-  const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const getIssueStatus = issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined;
-  const replyToServiceDesk = issueTracker ? new ReplyToServiceDesk(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const confirmOffer = pendingOffers && pushActionToJira && replyToServiceDesk
-    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk, actions: actionsRepo }, wireOutbound)
+  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo);
+  // Customer demo: support requests, built once so ConfirmOffer shares the router's instances.
+  const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
+    ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)
     : undefined;
   const updateActionDeadline = new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo);
   const listMyActions = new ListMyActions(actionsRepo, wireOutbound);
@@ -290,7 +297,9 @@ export function createContainer(config: Config, logger: Logger): Container {
     answerQuestion,
     statusCommand,
     catchMeUpCommand,
-    pushActionToJira,
+    raiseSupportRequest,
+    listSupportRequests,
+    resolveSupportRequest,
     getIssueStatus,
     replyToServiceDesk,
     pendingOffers,

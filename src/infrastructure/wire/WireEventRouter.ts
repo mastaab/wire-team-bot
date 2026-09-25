@@ -22,7 +22,9 @@ import type { SnoozeReminder } from "../../application/usecases/reminders/Snooze
 import type { AnswerQuestion } from "../../application/usecases/general/AnswerQuestion";
 import type { StatusCommand } from "../../application/usecases/general/StatusCommand";
 import type { CatchMeUpCommand } from "../../application/usecases/general/CatchMeUpCommand";
-import type { PushActionToJira } from "../../application/usecases/jira/PushActionToJira";
+import type { RaiseSupportRequest } from "../../application/usecases/jira/RaiseSupportRequest";
+import type { ListSupportRequests } from "../../application/usecases/jira/ListSupportRequests";
+import type { ResolveSupportRequest } from "../../application/usecases/jira/ResolveSupportRequest";
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
 import type { ConfirmOffer } from "../../application/usecases/jira/ConfirmOffer";
 import type { ReplyToServiceDesk } from "../../application/usecases/jira/ReplyToServiceDesk";
@@ -44,6 +46,7 @@ import { bindUserMentions } from "./bindUserMentions";
 import { hasMultipleCommands } from "./hasMultipleCommands";
 import { parseAddressedAction } from "./parseAddressedAction";
 import { matchIssueStatusRequest } from "./matchIssueStatusRequest";
+import { splitSupportText } from "./splitSupportText";
 import type { WireReplyContext } from "./WireReplyContext";
 
 const CONTEXT_WINDOW = 10;
@@ -87,7 +90,9 @@ export interface WireEventRouterDeps {
   /** Phase 4: optional — handles "catch me up" / "what did I miss" queries. */
   catchMeUpCommand?: CatchMeUpCommand;
   /** Customer demo: present only when the Jira integration is configured. */
-  pushActionToJira?: PushActionToJira;
+  raiseSupportRequest?: RaiseSupportRequest;
+  listSupportRequests?: ListSupportRequests;
+  resolveSupportRequest?: ResolveSupportRequest;
   getIssueStatus?: GetIssueStatus;
   replyToServiceDesk?: ReplyToServiceDesk;
   /** Offers made by the answer path, confirmed with a short "yes" or "no". */
@@ -327,10 +332,9 @@ export class WireEventRouter extends WireEventsHandler {
     // their next message: anything else drops the offer, so a later "yes" meant for a different
     // question can never confirm it.
     if (this.deps.confirmOffer && this.deps.pendingOffers?.has(convId, sender)) {
-      const config = await this.deps.conversationConfig.get(convId);
       const handled = await this.deps.confirmOffer.execute({
         text: commandText, conversationId: convId, requesterId: sender,
-        timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
+        requesterName: senderDisplayName, replyToMessageId: wireMessage.id,
       });
       if (handled) {
         // Record the answer so the answer model sees the offer as closed, not pending.
@@ -438,29 +442,32 @@ export class WireEventRouter extends WireEventsHandler {
       return;
     }
 
-    // ACT-NNNN to jira / raise ACT-NNNN in jira (customer demo)
-    const jiraPushMatch = commandText.match(/^(?:(ACT-\d+)\s+to\s+jira|(?:raise|push|send)\s+(ACT-\d+)\s+(?:to|in)\s+jira)[.]?\s*$/i);
-    if (jiraPushMatch) {
-      const actionId = (jiraPushMatch[1] ?? jiraPushMatch[2])!.toUpperCase();
-      if (!this.deps.pushActionToJira) {
-        await this.deps.wireOutbound.sendPlainText(convId, "I'm afraid Jira isn't configured for this bot.", { replyToMessageId: wireMessage.id });
-        return;
-      }
-      const config = await this.deps.conversationConfig.get(convId);
-      await this.deps.pushActionToJira.execute({
-        actionId, conversationId: convId, actorId: sender,
-        timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
+    // Support requests (customer demo). Writes to the service desk need the bot to be
+    // addressed, so a teammate's chat that happens to start with "support:", "resolve DS-4" or
+    // "reply to DS-4:" never reaches Jira. Only keys of the configured project match.
+    const jiraProjectKey = this.deps.getIssueStatus?.projectKey;
+    const supportMatch = this.deps.raiseSupportRequest && isBotAddressed ? commandText.match(/^support\s*:\s*([\s\S]+)$/i) : null;
+    if (supportMatch && this.deps.raiseSupportRequest) {
+      const { summary, description } = splitSupportText(supportMatch[1]!);
+      await this.deps.raiseSupportRequest.execute({
+        summary, description, conversationId: convId, requesterId: sender,
+        requesterName: senderDisplayName, replyToMessageId: wireMessage.id,
       });
       return;
     }
 
-    // reply to DS-NN: <text> / reply to ACT-NNNN: <text> (customer demo). Only keys of the
-    // configured project match, so "reply to" in ordinary chat keeps its existing handling.
-    // The bot must be addressed: this posts a customer-visible comment, so a teammate's chat
-    // that happens to start with "reply to DS-4:" must never reach Jira.
-    const replyProjectKey = this.deps.replyToServiceDesk && isBotAddressed ? this.deps.getIssueStatus?.projectKey : undefined;
-    const replyMatch = replyProjectKey
-      ? commandText.match(new RegExp(`^reply\\s+to\\s+(ACT-\\d+|${replyProjectKey}-\\d+)\\s*:\\s*([\\s\\S]+)$`, "i"))
+    const resolveMatch = jiraProjectKey && isBotAddressed
+      ? commandText.match(new RegExp(`^(?:resolve|close)\\s+(${jiraProjectKey}-\\d+)[.!]?\\s*$`, "i"))
+      : null;
+    if (resolveMatch && this.deps.resolveSupportRequest) {
+      await this.deps.resolveSupportRequest.execute({
+        issueKey: resolveMatch[1]!.toUpperCase(), conversationId: convId, actorId: sender, replyToMessageId: wireMessage.id,
+      });
+      return;
+    }
+
+    const replyMatch = jiraProjectKey && isBotAddressed
+      ? commandText.match(new RegExp(`^reply\\s+to\\s+(${jiraProjectKey}-\\d+)\\s*:\\s*([\\s\\S]+)$`, "i"))
       : null;
     if (replyMatch && this.deps.replyToServiceDesk) {
       await this.deps.replyToServiceDesk.execute({
@@ -470,9 +477,18 @@ export class WireEventRouter extends WireEventsHandler {
       return;
     }
 
+    const supportListMatch = this.deps.listSupportRequests
+      ? commandLowered.match(/^(my\s+)?(?:open\s+)?support\s+requests?[?.]?\s*$/)
+      : null;
+    if (supportListMatch && this.deps.listSupportRequests) {
+      await this.deps.listSupportRequests.execute({
+        conversationId: convId, ...(supportListMatch[1] ? { requesterId: sender } : {}), replyToMessageId: wireMessage.id,
+      });
+      return;
+    }
+
     // Jira status lookups (customer demo): the exact command, or natural phrasing when the bot
     // is addressed. Only keys of the configured project match; see matchIssueStatusRequest.
-    const jiraProjectKey = this.deps.getIssueStatus?.projectKey;
     const issueReference = jiraProjectKey ? matchIssueStatusRequest(commandText, jiraProjectKey, isBotAddressed) : null;
     if (issueReference && this.deps.getIssueStatus) {
       const config = await this.deps.conversationConfig.get(convId);

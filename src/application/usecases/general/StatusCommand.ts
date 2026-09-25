@@ -4,6 +4,7 @@ import type { EntityRepository } from "../../../domain/repositories/EntityReposi
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { ReminderRepository } from "../../../domain/repositories/ReminderRepository";
 import type { DecisionRepository } from "../../../domain/repositories/DecisionRepository";
+import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 
 export interface StatusCommandInput {
@@ -20,6 +21,7 @@ const COUNT_CAP = 100;
  * - Channel state (active / paused / secure)
  * - Time active since joining
  * - Open actions, pending reminders and active decisions in this conversation
+ * - Open support requests, when the service desk integration is configured
  * - Number of knowledge graph entities (written only by passive extraction)
  * - Channel purpose (if set)
  * - Context type / tags (if set)
@@ -32,17 +34,21 @@ export class StatusCommand {
     private readonly reminderRepo: ReminderRepository,
     private readonly decisionRepo: DecisionRepository,
     private readonly wireOutbound: WireOutboundPort,
+    /** Customer demo: present only when the Jira integration is configured. */
+    private readonly supportRequests?: SupportRequestRepository,
   ) {}
 
   async execute(input: StatusCommandInput): Promise<void> {
     const conversationId = input.conversationId;
-    const [cfg, entityNames, actions, reminders, decisions] = await Promise.all([
+    const [cfg, entityNames, actions, reminders, decisions, supportRequests] = await Promise.all([
       this.channelConfig.get(input.channelId),
       this.entityRepo.listNames(input.channelId),
       // Same status sets as `team actions`, `show reminders` and `list decisions`.
       this.actionRepo.query({ conversationId, statusIn: ["open", "in_progress", "overdue"], limit: COUNT_CAP }),
       this.reminderRepo.query({ conversationId, statusIn: ["pending"] }),
       this.decisionRepo.query({ conversationId, statusIn: ["active"], limit: COUNT_CAP }),
+      // Last known status; `support requests` reads the live one.
+      this.supportRequests?.listByConversation(conversationId, { openOnly: true, limit: COUNT_CAP }),
     ]);
 
     const state = cfg?.state ?? "active";
@@ -70,6 +76,7 @@ export class StatusCommand {
       // The reminder query takes no limit, so its count is always exact.
       `Pending reminders in this channel: ${formatCount(reminders, false)}`,
       `Active decisions: ${formatCount(decisions, true)}`,
+      ...(supportRequests ? [`Open support requests: ${formatCount(supportRequests, true)}`] : []),
       `Knowledge graph entities: ${entityNames.length}`,
     );
 

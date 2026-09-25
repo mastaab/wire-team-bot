@@ -914,28 +914,65 @@ it.each([
 
 describe("WireEventRouter contract: Jira demo commands", () => {
   const jiraDeps = () => makeDeps({
-    pushActionToJira: { execute: vi.fn().mockResolvedValue(null) },
+    raiseSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
+    listSupportRequests: { execute: vi.fn().mockResolvedValue(undefined) },
+    resolveSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
     getIssueStatus: { execute: vi.fn().mockResolvedValue(null), projectKey: "DS" },
     conversationConfig: { get: vi.fn().mockResolvedValue({ timezone: "Europe/Berlin" }), upsert: vi.fn() },
   } as unknown as Partial<WireEventRouterDeps>);
 
-  it.each(["ACT-0004 to jira", "act-0004 to Jira", "raise ACT-0004 in jira", "push ACT-0004 to jira."])("'%s' → pushActionToJira with the channel timezone", async (text) => {
+  it.each([
+    ["support: My VPN drops every ten minutes", "My VPN drops every ten minutes", "My VPN drops every ten minutes"],
+    ["Support:  VPN drops\nIt started after the update.", "VPN drops", "VPN drops\nIt started after the update."],
+  ])("'%s' → raiseSupportRequest when the bot is mentioned", async (text, summary, description) => {
     const deps = jiraDeps();
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
-    expect(deps.pushActionToJira!.execute).toHaveBeenCalledWith(expect.objectContaining({
-      actionId: "ACT-0004", conversationId: convId, actorId: sender, timezone: "Europe/Berlin", replyToMessageId: "msg-1",
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect(deps.raiseSupportRequest!.execute).toHaveBeenCalledWith(expect.objectContaining({
+      summary, description, conversationId: convId, requesterId: sender, replyToMessageId: "msg-1",
     }));
     expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
   });
 
-  it("explains that Jira is not configured instead of guessing when the integration is off", async () => {
-    const deps = makeDeps();
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("ACT-0004 to jira"));
-    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, "I'm afraid Jira isn't configured for this bot.", { replyToMessageId: "msg-1" });
-    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  it("never raises a support request from chat that does not address the bot", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("support: my VPN drops"));
+    expect(deps.raiseSupportRequest!.execute).not.toHaveBeenCalled();
   });
 
-  it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"], ["jira status of ACT-0004", "ACT-0004"]])("'%s' → getIssueStatus(%s)", async (text, reference) => {
+  it("leaves 'support:' to the existing handling when the integration is off", async () => {
+    const deps = makeDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("support: my VPN drops"));
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId, expect.stringContaining("service desk"), expect.anything());
+  });
+
+  it.each([["resolve DS-6", "DS-6"], ["close ds-6.", "DS-6"]])("'%s' → resolveSupportRequest when the bot is mentioned", async (text, issueKey) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect(deps.resolveSupportRequest!.execute).toHaveBeenCalledWith({ issueKey, conversationId: convId, actorId: sender, replyToMessageId: "msg-1" });
+  });
+
+  it.each([["resolve WPB-6", true], ["resolve DS-6", false]])("does not resolve '%s' (mentioned: %s) outside the addressed, configured-project form", async (text, mentioned) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(mentioned ? customMention(text) : makeMessage(text));
+    expect(deps.resolveSupportRequest!.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([["support requests", false], ["open support requests?", false], ["my support requests", true], ["My support request", true]])("'%s' → listSupportRequests (own only: %s)", async (text, own) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.listSupportRequests!.execute).toHaveBeenCalledWith({
+      conversationId: convId, ...(own ? { requesterId: sender } : {}), replyToMessageId: "msg-1",
+    });
+  });
+
+  it.each(["ACT-0004 to jira", "raise ACT-0004 in jira", "jira status of ACT-0004"])("no longer sends actions to Jira: '%s'", async (text) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.raiseSupportRequest!.execute).not.toHaveBeenCalled();
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"]])("'%s' → getIssueStatus(%s)", async (text, reference) => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
     expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith({ reference, conversationId: convId, timezone: "Europe/Berlin", replyToMessageId: "msg-1" });
@@ -976,6 +1013,7 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(customMention("please close DS-4"));
     expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+    expect(deps.resolveSupportRequest!.execute).not.toHaveBeenCalled();
     expect(deps.answerQuestion.execute).toHaveBeenCalled();
   });
 
@@ -993,13 +1031,13 @@ describe("WireEventRouter contract: Jira demo commands", () => {
       "Please send one command per message. I have not run any commands from this message.", expect.anything());
   });
 
-  it("refuses a Jira escalation combined with another command in one message", async () => {
+  it("refuses a support request combined with another command in one message", async () => {
     const deps = jiraDeps();
-    const message = makeMessage("ACT-0004 to jira and ACT-0005 done");
+    const message = customMention("support: VPN drops\nACT-0005 done");
     await new WireEventRouter(deps).onTextMessageReceived(message);
     expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
       "Please send one command per message. I have not run any commands from this message.", { replyToMessageId: message.id });
-    expect(deps.pushActionToJira!.execute).not.toHaveBeenCalled();
+    expect(deps.raiseSupportRequest!.execute).not.toHaveBeenCalled();
     expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
   });
 });
@@ -1018,7 +1056,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
     expect(deps.pendingOffers!.has).toHaveBeenCalledWith(convId, sender);
     expect(deps.confirmOffer!.execute).toHaveBeenCalledWith({
-      text: "yes", conversationId: convId, requesterId: sender, timezone: "Europe/Berlin", replyToMessageId: "msg-1",
+      text: "yes", conversationId: convId, requesterId: sender, requesterName: undefined, replyToMessageId: "msg-1",
     });
     expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
   });
@@ -1051,7 +1089,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
   it.each([
     ["reply to DS-4: The draft is attached.", "DS-4", "The draft is attached."],
     ["reply to ds-4:the draft is attached", "DS-4", "the draft is attached"],
-    ["reply to ACT-0010: Line one\nLine two", "ACT-0010", "Line one\nLine two"],
+    ["reply to DS-10: Line one\nLine two", "DS-10", "Line one\nLine two"],
   ])("routes '%s' to ReplyToServiceDesk when the bot is mentioned", async (text, reference, body) => {
     const deps = offerDeps(false);
     await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
@@ -1074,7 +1112,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
       "Please send one command per message. I have not run any commands from this message.", expect.anything());
   });
 
-  it.each(["reply to WPB-12: thanks", "reply to DS-4 thanks", "reply to Bob: thanks"])("does not treat '%s' as a service-desk reply", async (text) => {
+  it.each(["reply to WPB-12: thanks", "reply to DS-4 thanks", "reply to Bob: thanks", "reply to ACT-0010: thanks"])("does not treat '%s' as a service-desk reply", async (text) => {
     const deps = offerDeps(false);
     await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
