@@ -44,8 +44,8 @@ describe("combined-command guard", () => {
     expect(hasMultipleCommands("status", [{ offset: -1, length: 4, userId: botId }], botId)).toBe(false);
   });
   it.each([
-    "support: VPN drops\nACT-3 done",
     "status of DS-42\nACT-3 done",
+    "ACT-3 done\nsupport: VPN drops",
     "resolve DS-6; list decisions",
     "reply to DS-6: fixed\nsupport requests",
   ])("recognises Jira command starts when the integration is configured: %s", text => {
@@ -57,6 +57,8 @@ describe("combined-command guard", () => {
     ["status of WPB-12\nACT-3 done", "DS"],
     ["ACT-0004 to jira and ACT-0005 done", "DS"],
     ["support: VPN drops\nit fails when I resolve DNS names", "DS"],
+    ["support: Printer broken and my actions page is blank", "DS"],
+    ["support: VPN drops\nACT-3 done", "DS"],
   ])("leaves Jira-like text alone when it is not a configured command: %s (project %s)", (text, project) => {
     expect(hasMultipleCommands(text, [], botId, project)).toBe(false);
   });

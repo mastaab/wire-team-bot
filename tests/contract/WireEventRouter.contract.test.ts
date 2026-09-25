@@ -943,6 +943,17 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     const deps = makeDeps();
     await new WireEventRouter(deps).onTextMessageReceived(customMention("support: my VPN drops"));
     expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId, expect.stringContaining("service desk"), expect.anything());
+    // Addressed text without a command still goes to Q&A, as before the integration existed.
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ question: "support: my VPN drops" }));
+  });
+
+  it("raises a multi-line support request whose description mentions other commands, without running them", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("support: Printer broken\nACT-0005 done"));
+    expect(deps.raiseSupportRequest!.execute).toHaveBeenCalledWith(expect.objectContaining({
+      summary: "Printer broken", description: "Printer broken\nACT-0005 done",
+    }));
+    expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
   });
 
   it.each([["resolve DS-6", "DS-6"], ["close ds-6.", "DS-6"]])("'%s' → resolveSupportRequest when the bot is mentioned", async (text, issueKey) => {
@@ -970,6 +981,8 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
     expect(deps.raiseSupportRequest!.execute).not.toHaveBeenCalled();
     expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+    expect(deps.resolveSupportRequest!.execute).not.toHaveBeenCalled();
+    expect(deps.listSupportRequests!.execute).not.toHaveBeenCalled();
   });
 
   it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"]])("'%s' → getIssueStatus(%s)", async (text, reference) => {
@@ -1031,9 +1044,9 @@ describe("WireEventRouter contract: Jira demo commands", () => {
       "Please send one command per message. I have not run any commands from this message.", expect.anything());
   });
 
-  it("refuses a support request combined with another command in one message", async () => {
+  it("refuses a support request that follows another command in one message", async () => {
     const deps = jiraDeps();
-    const message = customMention("support: VPN drops\nACT-0005 done");
+    const message = customMention("ACT-0005 done\nsupport: VPN drops");
     await new WireEventRouter(deps).onTextMessageReceived(message);
     expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
       "Please send one command per message. I have not run any commands from this message.", { replyToMessageId: message.id });

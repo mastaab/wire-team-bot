@@ -1728,18 +1728,20 @@ Built by three parallel subagents (answer side, action side, adapter) on the mai
 
 ### Open items
 
-- **TODO: per-channel timezone setting (before a real customer team uses the bot).** Every channel gets `UTC` when the bot joins (hard-coded in `WireEventRouter`), and there is no command to change it. The channel timezone decides how deadlines ("by Friday") and reminder times are read, the calendar date sent to Jira as the due date, and the times shown in replies, so a German team in `UTC` is two hours off and can be a day off for late-evening deadlines. Stored deadlines are exact instants and do not move when the timezone changes; only their reading and display do. Planned fix:
+- **TODO: per-channel timezone setting (before a real customer team uses the bot).** Every channel gets `UTC` when the bot joins (hard-coded in `WireEventRouter`), and there is no command to change it. The channel timezone decides how deadlines ("by Friday") and reminder times are read and the times shown in replies, including the times of service-desk replies, so a German team in `UTC` is two hours off and can be a day off for late-evening deadlines. Stored deadlines are exact instants and do not move when the timezone changes; only their reading and display do. Planned fix:
   - an addressed command such as `@Wire Team Bot timezone Europe/Berlin` that validates the IANA name, saves it to `channel_config.timezone` with a `config_changed` audit entry, and confirms;
   - `WIRE_TEAM_BOT_DEFAULT_TIMEZONE` for channels the bot newly joins, defaulting to `UTC`;
   - the zone shown with displayed times (for example "20:45 CEST");
-  - tests for validation, the default, and deadline, reminder and due-date behaviour across zones.
+  - tests for validation, the default, and deadline and reminder behaviour across zones.
 - **Applied manually for the demo (2026-09-25):** the staging channel's `channel_config.timezone` was set to `Europe/Berlin` with a one-row SQL update and the bot restarted. The CLI test channel stays `UTC`. Revert with the same update to `'UTC'`.
 
 ### Out of scope for the demo
 
-Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due`, cancellations and passive (unmentioned) completions to Jira, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
+Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), raising on behalf of the Wire user (mapping Wire users to Jira accounts by email), attachments, request types other than the configured one, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
 
 ### Work breakdown and status
+
+The first eight rows record the earlier action-linked build; the rework rows follow.
 
 | Item | Owner | Status |
 |---|---|---|
@@ -1754,8 +1756,8 @@ Choosing among several done-category transitions (the adapter takes the first; D
 ### Acceptance
 
 - `npx tsc --noEmit`, `npm run lint` and `npm test` pass; new code has unit tests with mocked ports and HTTP, per AGENTS.md.
-- Live run: `ACT-NNNN to jira` creates a DS request with the expected summary, description, due date and label and replies with its link; `status of` reads it; `ACT-NNNN done` reaches Done and reports both SLAs as met; a key from another project and an unlinked DS key are refused.
-- No token, response body or surrounding message text appears in logs or in Jira.
+- The acceptance list under "Rework" below: removed commands no longer route, conversation scoping for every path, offers for all three kinds, migration on a throwaway database, real-model checks with sharing off and on, one live journey on Wire staging and DS.
+- No token, response body, description, reply text or surrounding message text appears in logs; nothing from the surrounding conversation appears in Jira.
 
 ### Rework: support requests replace action tracking in Jira (planned 2026-09-25)
 
