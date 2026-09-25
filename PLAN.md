@@ -1613,6 +1613,77 @@ reason; an implementation or historical passing count alone does not close a rel
 | 2026-09-18 | Wire reactions accepted; native replies implemented | Operator confirms 📝/✅; stored emoji checklist is done/version 2 with two audits. `4bc7e1f` quotes the exact source through SDK metadata and scopes/cleans it per handler; 304 tests/build/type-check/lint pass, immutable image built. | Staged with readable backups and zero SDK errors; operator screenshot verifies native quote and completed-action list removal. Full immutable-image regression 57/60, unchanged targeted author recheck passes; live two-message check pending |
 | — | P3 pilot decision | Not started | Record usefulness, noise, latency and up to three next fixes |
 
+## 6. Customer demo: Jira Service Management integration
+
+This work lives on the `demo/jira` branch. It is a customer demo, not part of the pilot scope in §4, and merging it upstream is the owner's decision. The integration is off unless every required setting is present, so a deployment without Jira configuration behaves exactly as before.
+
+### Demo story
+
+A service team works in an encrypted Wire channel and escalates agreed work into its Jira Service Management queue without leaving the conversation.
+
+1. **Capture:** `action: Bob to prepare the security questionnaire by Friday` creates `ACT-0004` as today.
+2. **Escalate:** `ACT-0004 to jira` raises a request in the DS service desk, sets its due date, links it to `ACT-0004` and replies with the ticket link. Both SLA clocks start.
+3. **Close from Wire:** `ACT-0004 done` marks the action done, moves the ticket to Done and reports the SLA outcome, for example "Resolved in 3m, within the 16h target".
+4. **Ask:** `status of DS-42` (or `status of ACT-0004`) reads the live ticket and its SLAs.
+
+The message for security-minded customers: the team's work stays in Wire, and only the actions someone explicitly escalates are sent to Jira, with nothing from the surrounding conversation.
+
+### Jira environment (verified 2026-09-25)
+
+| Item | Value |
+|---|---|
+| Site | `wearezeta.atlassian.net`; REST base for scoped tokens `https://api.atlassian.com/ex/jira/3e94f30e-b591-4cbc-8802-f0362e732d38` |
+| Project | DS "Demo Sandbox" (id `13383`), team-managed Jira Service Management, visible to all Wire Jira users, so demo data must be synthetic |
+| Service desk / request type | service desk `184`; request type `11808` "Submit a request or incident" (issue type `11808`) |
+| Required fields | summary, description; `duedate` added to the work type (date only, not on the customer request form) |
+| Workflow | To Do, Start work (`81`), In progress, Resolved (`121`), Done (category `done`); In review leads to Pending; Reopened (`141`) leaves Done. A fresh ticket is two hops from Done |
+| SLAs | Time to first response (4h) and Time to done (16h), business hours. Both stop on Done; recalculation lags the transition by a few seconds |
+| Resolution | The Resolved transition sets no resolution value; accepted for the demo |
+| Credential | service account `WireTeamBotDemo` with the Agent role in DS; scoped token with classic scopes `read:servicedesk-request`, `write:servicedesk-request`, `read:jira-work`, `write:jira-work`, `read:jira-user`; Bearer auth through the API gateway |
+| Language | The account has no language preference; Node's default `Accept-Language: *` makes Jira answer in `zh_CN`. Requests send `Accept-Language: en-GB` |
+| Probe ticket | DS-1, created and resolved to verify the workflow and SLA stop |
+
+### Design
+
+- **Port:** `src/application/ports/IssueTrackerPort.ts` (`createIssue`, `getIssue`, `resolveIssue`, `projectKey`). Use cases never call Jira directly.
+- **Adapter:** `src/infrastructure/jira/JiraServiceManagementAdapter.ts` using built-in `fetch`, no new dependency. It creates the request through `POST /rest/servicedeskapi/request` so it is a proper service request in the queues and SLAs, then sets `duedate` and the `wire-team-bot` label with `PUT /rest/api/3/issue/{key}`, because the Service Management API only accepts fields on the customer form. A failed follow-up edit is reported, not hidden.
+- **Resolving:** follow transitions by status category, never by name: prefer a `done` target, otherwise an in-progress one, at most three hops. Then poll the SLA endpoint briefly so the reply reports the stopped clock rather than a stale running one. If Done is not reached, report the actual state.
+- **Links:** stored in the existing `Action.linkedIds` as `jira:DS-42` (no migration). The prefix is required because a bare key pattern also matches `DEC-0001`. Helpers in `src/domain/ids/jiraLink.ts`.
+- **Use cases:** `PushActionToJira`, `GetIssueStatus`, and an optional tracker in `UpdateActionStatus` that resolves the linked ticket when an action is marked done.
+- **Commands:** `ACT-NNNN to jira`, `status of DS-NN`, `status of ACT-NNNN`, added to the router and to multi-command detection.
+- **Configuration:** `WIRE_TEAM_BOT_JIRA_BASE_URL`, `_SITE_URL`, `_API_TOKEN`, `_PROJECT_KEY`, `_SERVICE_DESK_ID`, `_REQUEST_TYPE_ID`, optional `_EMAIL` (Basic auth with a classic token, for rehearsal only) and `_TIMEOUT_MS`. Partial configuration fails at startup.
+- **Due dates:** the action deadline is sent as a calendar date in the conversation's timezone, so an evening deadline does not move to the next day.
+
+### Guardrails
+
+- Only an explicit `to jira` command sends data to Jira. Passive extraction and the read-only Q&A path never write to it.
+- Only the action's description, owner name, deadline and ID are sent, never surrounding messages.
+- Action lookups keep the qualified-conversation check. A Jira key is accepted only if it belongs to the configured project and is linked from an action in the same conversation, so one channel cannot read another channel's tickets.
+- Jira status names are never shown in Wire; replies use English labels derived from the status category.
+- Response bodies and credentials are never logged. A Jira failure never rolls back or blocks the Wire-side change, and the reply says what did and did not happen.
+- Every Jira write is audited through `AuditLogRepository` with the ticket key.
+
+### Out of scope for the demo
+
+Assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due` and cancellations to Jira, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
+
+### Work breakdown and status
+
+| Item | Owner | Status |
+|---|---|---|
+| Contract: port, link helpers, configuration and tests | main session | done |
+| Jira adapter and tests with mocked responses modelled on the verified API shapes | subagent | in progress |
+| Use cases and tests with mocked ports | subagent | in progress |
+| Router commands, multi-command detection, container and CLI wiring, contract tests | main session | pending |
+| Independent review of the complete branch | subagent | pending |
+| Live run on Wire staging and DS | operator and main session | pending |
+
+### Acceptance
+
+- `npx tsc --noEmit`, `npm run lint` and `npm test` pass; new code has unit tests with mocked ports and HTTP, per AGENTS.md.
+- Live run: `ACT-NNNN to jira` creates a DS request with the expected summary, description, due date and label and replies with its link; `status of` reads it; `ACT-NNNN done` reaches Done and reports both SLAs as met; a key from another project and an unlinked DS key are refused.
+- No token, response body or surrounding message text appears in logs or in Jira.
+
 The former v1/v2 plans, SDK migration plan and V3 gap list are superseded by this document.
 Their historical text remains in Git. SDK operational cutover steps are retained in README;
 there is no second active roadmap.

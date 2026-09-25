@@ -1,0 +1,66 @@
+/**
+ * Issue tracker port: the application's view of an external ticketing system
+ * (Jira Service Management for the customer demo). Use cases depend on this
+ * interface only; the adapter owns HTTP, authentication and workflow details.
+ */
+
+/** Language-independent status bucket. Tracker status names are localised, so never match on them. */
+export type IssueStatusCategory = "todo" | "in_progress" | "done";
+
+export type SlaState = "running" | "paused" | "met" | "breached";
+
+export interface SlaSummary {
+  /** Tracker-defined SLA name, e.g. "Time to done". */
+  name: string;
+  state: SlaState;
+  /** Human-readable durations as reported by the tracker, e.g. "3m", "16h". */
+  elapsed?: string;
+  remaining?: string;
+  goal?: string;
+}
+
+export interface IssueSnapshot {
+  key: string;
+  url: string;
+  summary: string;
+  statusCategory: IssueStatusCategory;
+  slas: SlaSummary[];
+}
+
+export interface CreateIssueRequest {
+  summary: string;
+  /** Plain text. Must not contain surrounding conversation (extract-and-forget). */
+  description: string;
+  /** Calendar date (YYYY-MM-DD) already resolved in the conversation's timezone. */
+  dueDate?: string;
+  labels?: string[];
+}
+
+export interface CreatedIssue {
+  key: string;
+  url: string;
+  /** False when the issue was created but the follow-up field edit (due date, labels) failed. */
+  fieldsApplied: boolean;
+}
+
+export interface IssueTrackerPort {
+  /** Project key the tracker is scoped to. Keys from other projects must be rejected by callers. */
+  readonly projectKey: string;
+  createIssue(request: CreateIssueRequest): Promise<CreatedIssue>;
+  /** Returns null when the issue does not exist or is not visible. */
+  getIssue(key: string): Promise<IssueSnapshot | null>;
+  /**
+   * Moves the issue towards a done-category status by following workflow transitions
+   * by category, within a bounded number of hops. Returns the final snapshot, which may
+   * not be done if no path was found; callers must report the actual category.
+   */
+  resolveIssue(key: string): Promise<IssueSnapshot>;
+}
+
+/** Tracker failure. Messages never include response bodies or credentials. */
+export class IssueTrackerError extends Error {
+  constructor(message: string, public readonly status?: number) {
+    super(message);
+    this.name = "IssueTrackerError";
+  }
+}

@@ -81,6 +81,73 @@ export interface Config {
   llm: {
     bot: LLMConfig;
   };
+  /** Jira Service Management integration (customer demo). Absent unless fully configured. */
+  jira?: JiraConfig;
+}
+
+export interface JiraConfig {
+  /** REST base, e.g. https://api.atlassian.com/ex/jira/<cloudId> for service-account tokens. */
+  baseUrl: string;
+  /** Site URL used for browse links, e.g. https://example.atlassian.net. */
+  siteUrl: string;
+  apiToken: string;
+  /** When set, requests use Basic auth (email + classic token); otherwise Bearer (scoped token). */
+  email?: string;
+  projectKey: string;
+  serviceDeskId: string;
+  requestTypeId: string;
+  timeoutMs: number;
+}
+
+const JIRA_REQUIRED_KEYS = [
+  "WIRE_TEAM_BOT_JIRA_BASE_URL",
+  "WIRE_TEAM_BOT_JIRA_SITE_URL",
+  "WIRE_TEAM_BOT_JIRA_API_TOKEN",
+  "WIRE_TEAM_BOT_JIRA_PROJECT_KEY",
+  "WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID",
+  "WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID",
+] as const;
+
+/**
+ * Pure resolver for the Jira settings, kept separate from process.env for testing.
+ * No Jira keys set: the integration is off. Some but not all required keys set:
+ * fail at startup rather than silently running without the integration.
+ */
+export function resolveJiraConfig(env: Record<string, string | undefined>): JiraConfig | undefined {
+  const value = (name: string) => env[name]?.trim() || undefined;
+  const present = JIRA_REQUIRED_KEYS.filter((k) => value(k) !== undefined);
+  if (present.length === 0) return undefined;
+  const missing = JIRA_REQUIRED_KEYS.filter((k) => value(k) === undefined);
+  if (missing.length > 0) {
+    throw new Error(`Jira integration is partially configured; also set: ${missing.join(", ")}`);
+  }
+
+  const httpsUrl = (name: string) => {
+    const raw = value(name)!.replace(/\/+$/, "");
+    let url: URL;
+    try { url = new URL(raw); } catch { throw new Error(`${name} must be a valid URL`); }
+    if (url.protocol !== "https:") throw new Error(`${name} must use https`);
+    return raw;
+  };
+  const numericId = (name: string) => {
+    const raw = value(name)!;
+    if (!/^\d+$/.test(raw)) throw new Error(`${name} must be a numeric ID`);
+    return raw;
+  };
+  const projectKey = value("WIRE_TEAM_BOT_JIRA_PROJECT_KEY")!.toUpperCase();
+  if (!/^[A-Z][A-Z0-9]+$/.test(projectKey)) throw new Error("WIRE_TEAM_BOT_JIRA_PROJECT_KEY must be a Jira project key");
+  const timeout = parseInt(value("WIRE_TEAM_BOT_JIRA_TIMEOUT_MS") ?? "", 10);
+
+  return {
+    baseUrl: httpsUrl("WIRE_TEAM_BOT_JIRA_BASE_URL"),
+    siteUrl: httpsUrl("WIRE_TEAM_BOT_JIRA_SITE_URL"),
+    apiToken: value("WIRE_TEAM_BOT_JIRA_API_TOKEN")!,
+    email: value("WIRE_TEAM_BOT_JIRA_EMAIL"),
+    projectKey,
+    serviceDeskId: numericId("WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID"),
+    requestTypeId: numericId("WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID"),
+    timeoutMs: Number.isFinite(timeout) && timeout >= 1000 ? timeout : 15_000,
+  };
 }
 
 function getEnv(name: string): string {
@@ -213,11 +280,13 @@ export function loadConfig(): Config {
   const secretModeInactivityMs = Math.max(60_000, parseInt(process.env.SECRET_MODE_INACTIVITY_MS ?? "1800000", 10));
 
   const bot = loadLLMConfig();
+  const jira = resolveJiraConfig(process.env);
 
   return {
     wire,
     database,
     app: { logLevel, messageBufferSize, secretModeInactivityMs },
     llm: { bot },
+    ...(jira ? { jira } : {}),
   };
 }
