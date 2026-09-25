@@ -64,8 +64,18 @@ interface SetupOptions {
   sendFails?: boolean;
 }
 
+/** Actions in this conversation that really link the keys shown on the given results. */
+function linkingActions(results: RetrievalResult[] = []): Action[] {
+  return results.flatMap((r) => {
+    const key = /(?:^| \| )Jira: (\S+)$/.exec(r.content)?.[1];
+    return r.type === "action" && key ? [makeAction({ id: r.id, linkedIds: [`jira:${key}`] })] : [];
+  });
+}
+
 function setup(options: SetupOptions = {}) {
-  const all = options.actions ?? [];
+  // By default the repository holds real linking actions for keys shown on the results, as
+  // production would; tests that pass their own actions control this explicitly.
+  const all = options.actions ?? linkingActions(options.results);
   const repo = {
     findById: vi.fn(async (id: string) => all.find((a) => a.id === id) ?? null),
     query: vi.fn(async (criteria: { linkedIdsHas?: string }) =>
@@ -206,17 +216,33 @@ describe("AnswerQuestion with Jira: live ticket data", () => {
     expect(passedResults().find((r) => r.type === "jira_ticket")!.content).toContain("Linked action: ACT-0001");
   });
 
-  it("takes keys from the retrieved content and never re-reads actions", async () => {
+  it("confirms each key from the retrieved content with an exact link query, not by re-reading actions", async () => {
     const { repo, run, passedResults } = setup({ results: [actionResult("ACT-0010", "DS-4")], shareWithModel: true });
     await run("Any progress on the proposal?");
     expect(passedResults().filter((r) => r.type === "jira_ticket").map((r) => r.id)).toEqual(["DS-4"]);
     expect(repo.findById).not.toHaveBeenCalled();
-    expect(repo.query).not.toHaveBeenCalled();
+    expect(repo.query).toHaveBeenCalledWith(expect.objectContaining({ conversationId: convId, linkedIdsHas: "jira:DS-4" }));
+  });
+
+  it("ignores a key written into an action description when no action here links it", async () => {
+    // A member could describe an action as "... | Jira: DS-9" to pull another channel's ticket.
+    const spoofed = actionResult("ACT-0011", undefined, "ID: ACT-0011 | Action: see notes | Jira: DS-9 | Owner: Bob | Status: open | Jira: DS-9");
+    const { tracker, run, passedResults } = setup({ actions: [], results: [spoofed], shareWithModel: true });
+    await run("What's the latest on the ticket?");
+    expect(passedResults().some((r) => r.type === "jira_ticket")).toBe(false);
+    expect(tracker.getIssue).not.toHaveBeenCalled();
+  });
+
+  it("ignores a key that is only linked from another conversation", async () => {
+    const elsewhere = makeAction({ id: "ACT-0012", linkedIds: ["jira:DS-9"], conversationId: { id: "conv-2", domain: "wire.com" } });
+    const { tracker, run } = setup({ actions: [elsewhere], results: [actionResult("ACT-0011", "DS-9")], shareWithModel: true });
+    await run("What's the latest on the ticket?");
+    expect(tracker.getIssue).not.toHaveBeenCalled();
   });
 
   it("caps shared tickets at three, named keys first, and inspects at most five action results", async () => {
-    const actions = [makeAction({ id: "ACT-0009", linkedIds: ["jira:DS-9"] })];
     const results = [1, 2, 3, 4, 5, 6].map((n) => actionResult(`ACT-000${n}`, `DS-${n}`));
+    const actions = [makeAction({ id: "ACT-0009", linkedIds: ["jira:DS-9"] }), ...linkingActions(results)];
     const { repo, tracker, run, passedResults } = setup({ actions, results, shareWithModel: true });
     await run("What's the status of DS-9 and the rest?");
     expect(passedResults().filter((r) => r.type === "jira_ticket").map((r) => r.id)).toEqual(["DS-9", "DS-1", "DS-2"]);

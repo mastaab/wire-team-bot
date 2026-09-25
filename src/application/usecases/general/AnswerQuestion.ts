@@ -224,9 +224,10 @@ export class AnswerQuestion {
 
   /**
    * Live data for tickets linked from this conversation: keys of the configured project named
-   * in the question, then keys shown on retrieved action results (`Jira: <KEY>`; retrieval has
-   * already scoped those to this channel, so no action is read again). The content goes to the
-   * model only; it is never stored or logged.
+   * in the question, then keys shown on retrieved action results (`Jira: <KEY>`). Every key is
+   * confirmed with an exact link query before use: result content includes member-written
+   * descriptions, so a key read from it alone could name a ticket linked from another channel.
+   * The content goes to the model only; it is never stored or logged.
    */
   private async linkedTickets(jira: AnswerQuestionJira, input: AnswerQuestionInput, results: RetrievalResult[]): Promise<RetrievalResult[]> {
     const candidates: TicketCandidate[] = [];
@@ -243,7 +244,9 @@ export class AnswerQuestion {
       for (const result of results.filter((r) => r.type === "action").slice(0, ACTION_RESULTS_INSPECTED)) {
         if (candidates.length >= TICKETS_SHARED) break;
         const key = linkedKeyInContent(result.content);
-        if (key && isKeyInProject(key, jira.tracker.projectKey)) add({ key, actionId: result.id });
+        if (!key || !isKeyInProject(key, jira.tracker.projectKey) || candidates.some((c) => c.key === key)) continue;
+        const action = await this.actionLinkingKey(jira.actions, key, input.conversationId);
+        if (action) add({ key, actionId: action.id });
       }
     } catch (err) {
       this.logger?.warn("AnswerQuestion: linked ticket lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
