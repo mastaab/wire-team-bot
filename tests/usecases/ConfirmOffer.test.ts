@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { ConfirmOffer, classifyConfirmation } from "../../src/application/usecases/jira/ConfirmOffer";
+import { ConfirmOffer, classifyConfirmation, isAcknowledgement } from "../../src/application/usecases/jira/ConfirmOffer";
 import type { ConfirmOfferHandlers } from "../../src/application/usecases/jira/ConfirmOffer";
 import { InMemoryPendingOfferStore } from "../../src/infrastructure/services/InMemoryPendingOfferStore";
 import type { OfferCommand, PendingOfferStore } from "../../src/application/services/offers";
@@ -32,6 +32,13 @@ describe("classifyConfirmation", () => {
     "ok", "okay", "sure", "ok thanks", "ok, thanks", "sure please", "y", "OK!",
   ])("does not treat %j as a confirmation", (text) => {
     expect(classifyConfirmation(text)).toBeNull();
+  });
+  it.each(["ok", "OK!", "okay", "sure", "ok thanks", "ok, thanks", "thanks", "y", "cheers"])("recognises %j as an acknowledgement, not a decision", (text) => {
+    expect(isAcknowledgement(text)).toBe(true);
+  });
+
+  it.each(["yes", "no", "what is due today?", "ok so what's next", "okay raise ACT-2 instead"])("does not treat %j as a bare acknowledgement", (text) => {
+    expect(isAcknowledgement(text)).toBe(false);
   });
 });
 
@@ -190,11 +197,36 @@ describe("ConfirmOffer", () => {
     const { handlers, wire, store, useCase, offer } = setup();
     offer({ kind: "close", actionId: "ACT-0010" });
 
-    expect(await useCase.execute({ ...input, text: "ok thanks" })).toBe(false);
+    expect(await useCase.execute({ ...input, text: "ok thanks" })).toBe(true);
 
     expectNothingDispatched(handlers);
-    expect(wire.sendPlainText).not.toHaveBeenCalled();
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId,
+      "I need a clear yes or no, so I haven't closed anything yet. Shall I mark **ACT-0010** done and close its Jira ticket (yes or no)?",
+      { replyToMessageId: input.replyToMessageId });
     expect(store.has(convId, alice, now)).toBe(true);
+  });
+
+  it.each([
+    [{ kind: "raise", actionId: "ACT-0010" } as const, "I need a clear yes or no, so I haven't raised **ACT-0010** in Jira yet. Shall I raise it (yes or no)?"],
+    [{ kind: "reply", issueKey: "DS-42", body: "Attached." } as const, "I need a clear yes or no, so I haven't sent the reply to **DS-42** yet. Shall I send it (yes or no)?"],
+  ])("asks again after an acknowledgement for a %j offer, and a following yes still confirms it", async (command, question) => {
+    const { handlers, wire, useCase, offer } = setup();
+    offer(command);
+
+    expect(await useCase.execute({ ...input, text: "ok" })).toBe(true);
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, question, { replyToMessageId: input.replyToMessageId });
+    expectNothingDispatched(handlers);
+
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+    const dispatched = command.kind === "raise" ? handlers.pushActionToJira.execute : handlers.replyToServiceDesk.execute;
+    expect(dispatched).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat an acknowledgement as handled when nothing is pending", async () => {
+    const { handlers, wire, useCase } = setup();
+    expect(await useCase.execute({ ...input, text: "ok thanks" })).toBe(false);
+    expectNothingDispatched(handlers);
+    expect(wire.sendPlainText).not.toHaveBeenCalled();
   });
 
   it("sends the offered reply with the requester as actor", async () => {

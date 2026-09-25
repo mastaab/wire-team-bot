@@ -1716,6 +1716,18 @@ A later `yes` from the same requester runs the existing audited use case (`PushA
 
 **Acceptance.** Unit tests for each part, including: the setting off sends no ticket content; invalid, cross-conversation, deleted, already-linked or out-of-project offers are dropped; a `yes` from another member, an expired offer, or after pause does nothing; confirmation re-validates state; replies carry no requester name; the bot's own replies are labelled. Real-model CLI checks for offers and ticket-aware answers. A live DS check of one reply sent from Wire, with approval.
 
+### Second step: status and evidence (2026-09-25)
+
+Built by three parallel subagents (answer side, action side, adapter) on the main session's contract, integrated and reviewed. The independent review found ten issues and all are fixed. Refinements to the design above, as built:
+
+- **Commands:** `reply to DS-NN: <text>` and `reply to ACT-NNNN: <text>` require the bot to be addressed, because they post customer-visible comments.
+- **Offers:** accepted only when the requester's question itself asks for that change (so an offer injected through ticket text on an unrelated question is dropped), stored only after the question is sent, and phrased by code ending "(yes or no)?". The model's own lead-in is never sent with an offer. Reply offers are dropped if the body contains the requester's name, and offer questions carry no mentions. Close offers reject done and cancelled actions and are re-checked at confirmation.
+- **Confirmations:** only explicit forms count (yes, yes please, yep, yeah, go ahead, do it, please do, confirm, confirmed; no, nope, cancel, don't, stop). A bare acknowledgement such as "ok thanks" does not confirm: the bot asks again and keeps the offer. Any other message from the requester drops the offer, including a rejected multi-command message. The requester's yes or no is recorded in the conversation memory so the model sees the offer as closed.
+- **Replies:** a failure that may have reached Jira (timeout, network, 5xx) says the bot could not confirm delivery and asks the requester to check the ticket, to avoid a duplicate public reply; an audit failure after a successful send is logged, not reported as a failed send. Replies sent by the service account are labelled "Your team (via Wire)".
+- **Ticket data for the model:** only for Jira-related questions; keys come from questions and retrieved records, and every key is confirmed with an exact link query for this conversation, so a key written into an action description cannot pull another channel's ticket. `/myself` is looked up once per process.
+- **Marker parsing:** a marker spread over several lines is parsed and hidden; raw JSON is never shown.
+- **Evidence:** 843 tests pass, type-check and lint clean. Real-model CLI checks with sharing off and on: raise and reply offers phrased correctly and cancelled with no; "ok thanks" re-asked without writing; an unrelated question answered without ticket lookups; ticket status answered from live data only with sharing on; audit log shows no Jira writes from these checks. Pending: live Wire check of one service-desk reply and one confirmed raise, with operator approval.
+
 ### Out of scope for the demo
 
 Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due`, cancellations and passive (unmentioned) completions to Jira, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.

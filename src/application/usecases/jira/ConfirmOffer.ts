@@ -2,7 +2,7 @@ import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { jiraKeyFromLinks } from "../../../domain/ids/jiraLink";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
-import type { PendingOfferStore } from "../../services/offers";
+import type { OfferCommand, PendingOfferStore } from "../../services/offers";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { PushActionToJira } from "./PushActionToJira";
 import type { ReplyToServiceDesk } from "./ReplyToServiceDesk";
@@ -31,6 +31,22 @@ const YES: ReadonlySet<string> = new Set([
   "yes", "yes please", "yep", "yeah", "go ahead", "do it", "please do", "confirm", "confirmed",
 ]);
 const NO: ReadonlySet<string> = new Set(["no", "n", "nope", "no thanks", "cancel", "don't", "do not", "stop"]);
+
+/**
+ * Casual replies that answer the offer without deciding it. They never confirm a write; the
+ * bot asks again and keeps the offer, instead of dropping it while the requester thinks it
+ * is still open.
+ */
+const ACKNOWLEDGEMENTS: ReadonlySet<string> = new Set([
+  "ok", "okay", "k", "sure", "y", "thanks", "thank you", "cheers", "cool", "great", "fine", "alright", "all right",
+]);
+
+/** True for a bare acknowledgement such as "ok" or "ok thanks", which is not a decision. */
+export function isAcknowledgement(text: string): boolean {
+  const normalised = normalise(text);
+  if (!normalised) return false;
+  return [normalised, normalise(stripCourtesy(normalised))].some((c) => ACKNOWLEDGEMENTS.has(c));
+}
 
 /**
  * Classifies a short confirmation reply. Only the listed forms count, optionally with
@@ -76,9 +92,17 @@ export class ConfirmOffer {
   /** True when the message confirmed or declined this requester's pending offer. */
   async execute(input: ConfirmOfferInput): Promise<boolean> {
     const answer = classifyConfirmation(input.text);
-    if (!answer) return false;
-
     const now = this.now();
+    if (!answer) {
+      if (!isAcknowledgement(input.text) || !this.offers.has(input.conversationId, input.requesterId, now)) return false;
+      const pending = this.offers.take(input.conversationId, input.requesterId, now);
+      if (!pending) return false;
+      // Keep the offer and ask again: an acknowledgement is a response, but not a decision.
+      this.offers.put(pending);
+      await this.wireOutbound.sendPlainText(input.conversationId, askAgain(pending.command), { replyToMessageId: input.replyToMessageId });
+      return true;
+    }
+
     if (!this.offers.has(input.conversationId, input.requesterId, now)) return false;
     const offer = this.offers.take(input.conversationId, input.requesterId, now);
     if (!offer) return false;
@@ -130,5 +154,17 @@ export class ConfirmOffer {
       return false;
     }
     return true;
+  }
+}
+
+/** The code-written re-ask after an acknowledgement; it ends with a question like the offer itself. */
+function askAgain(command: OfferCommand): string {
+  switch (command.kind) {
+    case "raise":
+      return `I need a clear yes or no, so I haven't raised **${command.actionId}** in Jira yet. Shall I raise it (yes or no)?`;
+    case "close":
+      return `I need a clear yes or no, so I haven't closed anything yet. Shall I mark **${command.actionId}** done and close its Jira ticket (yes or no)?`;
+    case "reply":
+      return `I need a clear yes or no, so I haven't sent the reply to **${command.issueKey}** yet. Shall I send it (yes or no)?`;
   }
 }
