@@ -41,6 +41,7 @@ export function formatIssueStatus(snapshot: IssueSnapshot, replies?: string): st
 /**
  * Customer-facing replies, oldest first, each with author and time in the conversation's
  * timezone and its text quoted. Long replies are cut visibly; the ticket has the full text.
+ * Replies the bot sent from Wire are credited to the team, not the bot's tracker account.
  */
 export function formatReplies(replies: readonly IssueReply[], timeZone: string): string {
   if (replies.length === 0) return "No replies from the service desk yet.";
@@ -48,7 +49,8 @@ export function formatReplies(replies: readonly IssueReply[], timeZone: string):
     const body = reply.body.trim();
     const text = body.length <= REPLY_BODY_MAX ? body : `${body.slice(0, REPLY_BODY_MAX - 3).trimEnd()}...`;
     const quoted = text.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
-    return `**${reply.author}**, ${formatReplyTime(reply.created, timeZone)}\n${quoted}`;
+    const author = reply.fromThisBot ? "Your team (via Wire)" : reply.author;
+    return `**${author}**, ${formatReplyTime(reply.created, timeZone)}\n${quoted}`;
   });
   return [replies.length === 1 ? "Latest reply from the service desk:" : "Latest replies from the service desk:", ...blocks].join("\n");
 }
