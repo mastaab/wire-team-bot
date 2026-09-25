@@ -1682,7 +1682,20 @@ Found on 2026-09-25 in the Wire staging session: "whats the status of DS-4" and 
 - **Natural status questions:** `matchIssueStatusRequest` keeps the exact commands and, only when the bot is addressed, also accepts natural phrasing that names exactly one key of the configured project (or one action ID with "jira" or "ticket") with a status word or a question mark. Change requests ("close", "mark", "reply to", "raise") are left to Q&A, so the read-only lookup never answers them.
 - **Integration awareness:** when Jira is configured, the answer model's system prompt states the integration and its commands, forbids denying it, and forbids stating or guessing a ticket's status. Retrieved actions show their linked key as `Jira: DS-NN`. No ticket content, status or reply reaches the model; the answer path stays read-only.
 - **Evidence:** 569 tests pass. Real-model CLI check: the natural question returned the live DS-2 status and replies; "can you put the questionnaire action into Jira?" answered that ACT-0005 is already linked to DS-2 and gave `status of DS-2`; asking by name found the link without guessing its status; "what can you do with Jira?" listed the commands.
-- **Next options (not started):** give the answer model live ticket status and customer replies (requires deciding whether that content may go to the configured model provider; today it never does); confirmed conversational writes ("Shall I raise ACT-0010 in Jira?", then yes, running the existing audited use case after code validates the ID and scope); resolving names and "it" to records within the channel; and replying to the service desk from Wire.
+- **Next options (not started):** give the answer model live ticket status and customer replies (decided below); confirmed conversational writes ("Shall I raise ACT-0010 in Jira?", then yes, running the existing audited use case after code validates the ID and scope); resolving names and "it" to records within the channel; and replying to the service desk from Wire.
+
+### Decision: ticket content and the answer model (2026-09-25)
+
+For the customer demo, the answer model may receive live ticket status, SLAs and customer-facing replies from linked tickets, so it can answer questions such as "what's the latest on the proposal?" itself. Internal agent notes remain excluded under every setting.
+
+This is a demo decision, not a production one. With a remote model provider (the demo uses the Claude API), ticket content and customer replies leave the deployment and are processed by that provider. Service-desk replies can contain customer details, contract terms or security information, so for production this is probably not a good choice. The Wire encryption story also does not cover it: Wire protects the conversation, but the content is sent on to the model provider.
+
+Requirements when this is built:
+
+- Sharing ticket content with the model is a separate, explicit setting (for example `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL`), off by default. Enabling the Jira integration alone never sends ticket content to a model; without the setting, the current behaviour (ticket key only) stays.
+- README documents the setting next to the model configuration and states plainly that, with a remote provider, ticket status and customer replies are sent to that provider.
+- For production, prefer a local model endpoint when the setting is on, or leave it off and keep the command-based lookups, which show ticket content in Wire without passing it to a model.
+- Revisit this decision before any production or customer-hosted deployment, together with the provider's data-handling terms and the customer's own policy.
 
 ### Out of scope for the demo
 
