@@ -1,5 +1,6 @@
 import type { OfferCommand } from "../ports/PendingOfferPort";
 import { JIRA_KEY_PATTERN } from "../../domain/ids/jiraLink";
+import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
 
 /**
  * Offers let the answer model propose a supported Jira change in plain language. The model
@@ -61,17 +62,22 @@ function toCommand(json: string): OfferCommand | null {
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
-  const actionId = typeof v.actionId === "string" ? v.actionId.trim().toUpperCase() : "";
+  const issueKey = typeof v.issueKey === "string" ? v.issueKey.trim().toUpperCase() : "";
   switch (v.kind) {
-    case "raise":
-    case "close":
-      return /^ACT-\d+$/.test(actionId) ? { kind: v.kind, actionId } : null;
+    case "support": {
+      const summary = typeof v.summary === "string" ? v.summary.replace(/\s+/g, " ").trim() : "";
+      const description = typeof v.description === "string" ? v.description.trim() : "";
+      if (!summary || summary.length > SUPPORT_SUMMARY_MAX) return null;
+      if (!description || description.length > SUPPORT_DESCRIPTION_MAX) return null;
+      return { kind: "support", summary, description };
+    }
     case "reply": {
-      const issueKey = typeof v.issueKey === "string" ? v.issueKey.trim().toUpperCase() : "";
       const body = typeof v.body === "string" ? v.body.trim() : "";
       if (!JIRA_KEY_PATTERN.test(issueKey) || !body || body.length > REPLY_BODY_MAX) return null;
       return { kind: "reply", issueKey, body };
     }
+    case "resolve":
+      return JIRA_KEY_PATTERN.test(issueKey) ? { kind: "resolve", issueKey } : null;
     default:
       return null;
   }

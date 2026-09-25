@@ -6,9 +6,10 @@ import type { QualifiedId } from "../../domain/ids/QualifiedId";
  */
 
 export type OfferCommand =
-  | { kind: "raise"; actionId: string }
-  | { kind: "close"; actionId: string }
-  | { kind: "reply"; issueKey: string; body: string };
+  /** Raise a new support request: `summary` becomes the ticket title, `description` its body. */
+  | { kind: "support"; summary: string; description: string }
+  | { kind: "reply"; issueKey: string; body: string }
+  | { kind: "resolve"; issueKey: string };
 
 export interface PendingOffer {
   command: OfferCommand;

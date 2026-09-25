@@ -251,3 +251,23 @@ model ConversationSummary {
   @@unique([scopeType, scopeId, granularity, periodStart])
   @@map("conversation_summaries")
 }
+
+/// Customer demo: a service-desk request raised from Wire, identified by its tracker key.
+/// The problem description lives in the tracker only; the summary is the kept extract.
+model SupportRequest {
+  key             String   @id
+  conversationId  String   @map("conversation_id")
+  conversationDom String   @map("conversation_dom")
+  requesterId     String   @map("requester_id")
+  requesterDom    String   @map("requester_dom")
+  requesterName   String   @map("requester_name")
+  summary         String
+  statusCategory  String   @map("status_category") // todo | in_progress | done
+  createdAt       DateTime @map("created_at")
+  updatedAt       DateTime @map("updated_at")
+  deleted         Boolean  @default(false)
+  version         Int      @default(1)
+
+  @@index([conversationId, conversationDom])
+  @@map("support_requests")
+}
