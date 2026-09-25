@@ -36,6 +36,14 @@ export interface CreateIssueRequest {
   labels?: string[];
 }
 
+/** A reply visible to the customer. Internal agent notes are never represented. */
+export interface IssueReply {
+  author: string;
+  created: Date;
+  /** Plain text as entered in the tracker. Show it; never store, log or pass it to a model. */
+  body: string;
+}
+
 export interface CreatedIssue {
   key: string;
   url: string;
@@ -55,6 +63,11 @@ export interface IssueTrackerPort {
    * not be done if no path was found; callers must report the actual category.
    */
   resolveIssue(key: string): Promise<IssueSnapshot>;
+  /**
+   * The newest `limit` customer-facing replies, oldest first. Implementations must exclude
+   * internal notes even when the credential could read them.
+   */
+  listCustomerReplies(key: string, limit: number): Promise<IssueReply[]>;
 }
 
 /** Tracker failure. Messages never include response bodies or credentials. */

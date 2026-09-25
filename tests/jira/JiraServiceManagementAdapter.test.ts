@@ -299,3 +299,71 @@ describe("JiraServiceManagementAdapter.resolveIssue", () => {
     expect(sleep).toHaveBeenCalledWith(50);
   });
 });
+
+describe("JiraServiceManagementAdapter customer replies", () => {
+  const COMMENTS = (start: number) => `/rest/servicedeskapi/request/DS-1/comment?public=true&internal=false&start=${start}&limit=100`;
+  const comment = (id: string, isPublic: unknown, iso: string, body = `reply ${id}`) =>
+    ({ id, public: isPublic, body, author: { displayName: `Agent ${id}` }, created: { iso8601: iso, epochMillis: Date.parse(iso) } });
+
+  it("returns only comments explicitly flagged public, never internal notes", async () => {
+    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+      comment("1", true, "2026-09-25T10:00:00Z"),
+      comment("2", false, "2026-09-25T10:05:00Z", `internal ${MARKER}`),
+      comment("3", undefined, "2026-09-25T10:06:00Z", `unflagged ${MARKER}`),
+      comment("4", "true", "2026-09-25T10:07:00Z", `string flag ${MARKER}`),
+      comment("5", true, "2026-09-25T10:10:00Z"),
+    ] })] });
+    const replies = await adapter().listCustomerReplies("DS-1", 3);
+    expect(replies.map((r) => r.body)).toEqual(["reply 1", "reply 5"]);
+    expect(JSON.stringify(replies)).not.toContain(MARKER);
+    expect(replies[0]).toEqual({ author: "Agent 1", created: new Date("2026-09-25T10:00:00Z"), body: "reply 1" });
+  });
+
+  it("sorts by creation time and keeps the newest, oldest first", async () => {
+    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+      comment("c", true, "2026-09-25T12:00:00Z"), comment("a", true, "2026-09-25T09:00:00Z"),
+      comment("d", true, "2026-09-25T13:00:00Z"), comment("b", true, "2026-09-25T10:00:00Z"),
+    ] })] });
+    expect((await adapter().listCustomerReplies("DS-1", 3)).map((r) => r.author)).toEqual(["Agent b", "Agent c", "Agent d"]);
+  });
+
+  it("follows pages until the last one, within a bound", async () => {
+    const fetch = stubJira({
+      [`GET ${COMMENTS(0)}`]: [json({ isLastPage: false, values: [comment("1", true, "2026-09-25T09:00:00Z")] })],
+      [`GET ${COMMENTS(100)}`]: [json({ isLastPage: true, values: [comment("2", true, "2026-09-25T10:00:00Z")] })],
+    });
+    expect((await adapter().listCustomerReplies("DS-1", 3)).map((r) => r.author)).toEqual(["Agent 1", "Agent 2"]);
+    expect(calls(fetch)).toHaveLength(2);
+  });
+
+  it("stops after five pages even if Jira keeps reporting more", async () => {
+    const routes: Record<string, Reply[]> = {};
+    for (let page = 0; page < 6; page++) routes[`GET ${COMMENTS(page * 100)}`] = [json({ isLastPage: false, values: [] })];
+    const fetch = stubJira(routes);
+    await adapter().listCustomerReplies("DS-1", 3);
+    expect(calls(fetch)).toHaveLength(5);
+  });
+
+  it("skips replies without a usable body or date and names an unknown author", async () => {
+    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+      { id: "1", public: true, body: "  ", created: { iso8601: "2026-09-25T09:00:00Z" } },
+      { id: "2", public: true, body: "no date" },
+      { id: "3", public: true, body: "kept", created: { iso8601: "2026-09-25T10:00:00Z" } },
+    ] })] });
+    expect(await adapter().listCustomerReplies("DS-1", 3)).toEqual([
+      { author: "Service desk", created: new Date("2026-09-25T10:00:00Z"), body: "kept" },
+    ]);
+  });
+
+  it("rejects keys outside the project without calling Jira, and returns nothing for a zero limit", async () => {
+    const fetch = stubJira({});
+    await expect(adapter().listCustomerReplies("OPS-1", 3)).rejects.toThrow("outside the configured project");
+    expect(await adapter().listCustomerReplies("DS-1", 0)).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces failures as tracker errors without the body", async () => {
+    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ errorMessage: MARKER }, 403)] });
+    await expect(adapter().listCustomerReplies("DS-1", 3)).rejects.toThrow("Jira rejected the credentials or scopes (403)");
+  });
+});

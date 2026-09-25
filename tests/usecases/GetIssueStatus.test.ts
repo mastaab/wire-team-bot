@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
-import { formatIssueStatus, formatResolution, formatSla, statusLabel } from "../../src/application/usecases/jira/formatIssue";
+import { formatIssueStatus, formatReplies, formatResolution, formatSla, statusLabel } from "../../src/application/usecases/jira/formatIssue";
 import type { IssueSnapshot, IssueTrackerPort } from "../../src/application/ports/IssueTrackerPort";
 import type { ActionRepository } from "../../src/domain/repositories/ActionRepository";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
@@ -56,6 +56,7 @@ function setup(options: { found?: Action | null; queried?: Action[]; tracker?: P
     createIssue: vi.fn(),
     getIssue: vi.fn().mockResolvedValue(snapshot),
     resolveIssue: vi.fn(),
+    listCustomerReplies: vi.fn().mockResolvedValue([]),
     ...options.tracker,
   };
   const sent: string[] = [];
@@ -66,8 +67,9 @@ function setup(options: { found?: Action | null; queried?: Action[]; tracker?: P
     sendReaction: vi.fn(),
     sendFile: vi.fn(),
   };
-  const useCase = new GetIssueStatus(repo, tracker, wire);
-  return { repo, tracker, wire, sent, useCase };
+  const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: vi.fn() };
+  const useCase = new GetIssueStatus(repo, tracker, wire, logger);
+  return { repo, tracker, wire, sent, logger, useCase };
 }
 
 describe("GetIssueStatus", () => {
@@ -78,8 +80,45 @@ describe("GetIssueStatus", () => {
 
     expect(result).toBe(snapshot);
     expect(tracker.getIssue).toHaveBeenCalledWith("DS-42");
-    expect(sent).toEqual([formatIssueStatus(snapshot)]);
+    expect(sent).toEqual([formatIssueStatus(snapshot, "No replies from the service desk yet.")]);
     expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-1" });
+  });
+
+  it("shows the three latest customer replies in the conversation's timezone", async () => {
+    const replies = [
+      { author: "Dana Agent", created: new Date("2026-09-25T14:55:00Z"), body: "We have attached the template.\nPlease fill in section 3." },
+    ];
+    const { tracker, sent, useCase } = setup({ tracker: { listCustomerReplies: vi.fn().mockResolvedValue(replies) } });
+
+    await useCase.execute({ reference: "DS-42", conversationId: convId, timezone: "Europe/Berlin" });
+
+    expect(tracker.listCustomerReplies).toHaveBeenCalledWith("DS-42", 3);
+    expect(sent[0]).toContain([
+      "Latest reply from the service desk:",
+      "**Dana Agent**, 25 Sept, 16:55",
+      "> We have attached the template.",
+      "> Please fill in section 3.",
+    ].join("\n"));
+    expect(sent[0].endsWith(snapshot.url)).toBe(true);
+  });
+
+  it("keeps the status and says so when the replies cannot be read", async () => {
+    const { sent, logger, useCase } = setup({ tracker: { listCustomerReplies: vi.fn().mockRejectedValue(new Error("SECRET-REPLY-BODY")) } });
+
+    await useCase.execute({ reference: "DS-42", conversationId: convId });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Status: In progress");
+    expect(sent[0]).toContain("I'm afraid I couldn't load the replies from Jira just now.");
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("SECRET-REPLY-BODY");
+  });
+
+  it("does not read replies when the lookup is refused", async () => {
+    const { tracker, useCase } = setup();
+
+    await useCase.execute({ reference: "OPS-42", conversationId: convId });
+
+    expect(tracker.listCustomerReplies).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -168,6 +207,19 @@ describe("GetIssueStatus", () => {
 });
 
 describe("formatIssue", () => {
+  it("formats replies oldest first, cuts long ones visibly and falls back to UTC for a bad timezone", () => {
+    const text = formatReplies([
+      { author: "Dana", created: new Date("2026-09-25T09:00:00Z"), body: "First" },
+      { author: "Lee", created: new Date("2026-09-25T10:00:00Z"), body: "x".repeat(600) },
+    ], "Not/AZone");
+    expect(text.startsWith("Latest replies from the service desk:\n**Dana**, 25 Sept, 09:00\n> First\n**Lee**, 25 Sept, 10:00\n> ")).toBe(true);
+    expect(text.endsWith(`${"x".repeat(497)}...`)).toBe(true);
+  });
+
+  it("says when there are no replies yet", () => {
+    expect(formatReplies([], "UTC")).toBe("No replies from the service desk yet.");
+  });
+
   it("says 'under a minute' instead of Jira's rounded 0m", () => {
     expect(formatSla({ name: "Time to done", state: "met", elapsed: "0m", goal: "16h" })).toBe("Time to done: met in under a minute (target 16h)");
     expect(formatSla({ name: "Time to done", state: "met", elapsed: "3m", goal: "16h" })).toBe("Time to done: met in 3m (target 16h)");

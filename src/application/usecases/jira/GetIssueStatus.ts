@@ -6,18 +6,21 @@ import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
-import { formatIssueStatus } from "./formatIssue";
+import { formatIssueStatus, formatReplies } from "./formatIssue";
 
 export interface GetIssueStatusInput {
   /** Either an action ID (ACT-NNNN) or a tracker key. */
   reference: string;
   conversationId: QualifiedId;
+  /** Conversation timezone for reply times; UTC when absent. */
+  timezone?: string;
   replyToMessageId?: string;
 }
 
 type Reply = (text: string) => Promise<void>;
 
 const ACTION_ID_RE = /^ACT-\d+$/;
+const REPLIES_SHOWN = 3;
 
 /** Reads a linked ticket's live status, restricted to tickets linked from this conversation. */
 export class GetIssueStatus {
@@ -55,8 +58,18 @@ export class GetIssueStatus {
       await reply(`I'm afraid I couldn't find **${key}** in Jira.`);
       return null;
     }
-    await reply(formatIssueStatus(snapshot));
+    await reply(formatIssueStatus(snapshot, await this.repliesBlock(key, input.timezone ?? "UTC")));
     return snapshot;
+  }
+
+  /** Customer-facing replies only; a failed read keeps the status and says so. */
+  private async repliesBlock(key: string, timeZone: string): Promise<string> {
+    try {
+      return formatReplies(await this.tracker.listCustomerReplies(key, REPLIES_SHOWN), timeZone);
+    } catch (err) {
+      this.logger?.warn("GetIssueStatus: listCustomerReplies failed", trackerErrorFields(err));
+      return "I'm afraid I couldn't load the replies from Jira just now.";
+    }
   }
 
   private async keyFromAction(actionId: string, conversationId: QualifiedId, reply: Reply): Promise<string | null> {

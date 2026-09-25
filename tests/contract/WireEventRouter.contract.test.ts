@@ -938,7 +938,7 @@ describe("WireEventRouter contract: Jira demo commands", () => {
   it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"], ["jira status of ACT-0004", "ACT-0004"]])("'%s' → getIssueStatus(%s)", async (text, reference) => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
-    expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith({ reference, conversationId: convId, replyToMessageId: "msg-1" });
+    expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith({ reference, conversationId: convId, timezone: "Europe/Berlin", replyToMessageId: "msg-1" });
   });
 
   it.each(["status of ACT-0004", "status of DEC-0001", "status of REM-0001", "status of KB-3", "status of WPB-1234"])("leaves '%s' to the existing handling", async (text) => {

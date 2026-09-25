@@ -1665,9 +1665,19 @@ The message for security-minded customers: the team's work stays in Wire, and on
 - Every Jira write is audited through `AuditLogRepository` with the ticket key, including a failed close attempt, since some transitions may already have been applied. Failures are logged with the error name and status only.
 - The requester's name is not sent to Jira; the audit log records who ran the command.
 
+### Jira replies in Wire (on request)
+
+Requested 2026-09-25: show service-desk replies from Jira in Wire. Decisions: replies appear only when asked, as part of `status of DS-NN` and `jira status of ACT-NNNN`; nothing polls Jira or posts unprompted. Only customer-facing replies are shown. Internal agent notes stay in Jira.
+
+- **Why the filter must be client-side:** the service account is an agent, and the Service Management API returns internal notes as well as public replies to agents. The adapter requests public comments and still keeps only comments whose `public` flag is exactly `true`, so a missing or changed flag can never expose an internal note.
+- **Port:** `listCustomerReplies(key, limit)` returns the newest replies, oldest first, with author display name, creation time and plain-text body. The adapter reads `GET /rest/servicedeskapi/request/{key}/comment` (scope `read:servicedesk-request`, already granted), follows a bounded number of pages, and sorts by creation time because the order is not documented.
+- **Display:** the status reply adds up to three latest replies, each quoted with author and time in the conversation's timezone, and long bodies cut visibly. "No replies from the service desk yet." when there are none. A failed comment read leaves the status intact and says the replies could not be loaded.
+- **Guardrails:** the existing project and conversation scoping applies unchanged. Reply text is shown in Wire only; it is never stored, logged or passed to a model.
+- **Acceptance:** unit tests for the public filter (including a missing flag), paging, ordering, truncation and failure; a live check on a DS ticket carrying one customer reply and one internal note, where only the reply appears.
+
 ### Out of scope for the demo
 
-Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due`, cancellations and passive (unmentioned) completions to Jira, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
+Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), assignee mapping from Wire users to Jira accounts, raising on behalf of the Wire user, syncing `ACT-NNNN due`, cancellations and passive (unmentioned) completions to Jira, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
 
 ### Work breakdown and status
 

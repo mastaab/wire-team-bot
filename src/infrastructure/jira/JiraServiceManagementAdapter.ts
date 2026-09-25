@@ -14,6 +14,7 @@ import {
   type CreatedIssue,
   type IssueSnapshot,
   type IssueStatusCategory,
+  type IssueReply,
   type IssueTrackerPort,
   type SlaSummary,
 } from "../../application/ports/IssueTrackerPort";
@@ -29,6 +30,8 @@ export interface JiraAdapterOptions {
 
 const SUMMARY_MAX_LENGTH = 255;
 const MAX_TRANSITION_HOPS = 3;
+const COMMENT_PAGE_SIZE = 100;
+const MAX_COMMENT_PAGES = 5;
 
 interface JiraStatus {
   id?: string;
@@ -61,6 +64,13 @@ interface JiraSla {
   name?: string;
   ongoingCycle?: JiraSlaCycle;
   completedCycles?: JiraSlaCycle[];
+}
+
+interface JiraComment {
+  public?: unknown;
+  body?: unknown;
+  author?: { displayName?: string };
+  created?: { epochMillis?: number; iso8601?: string };
 }
 
 interface JiraResponse<T> {
@@ -198,6 +208,30 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
       snapshot = { ...snapshot, slas: await this.readSlas(key) };
     }
     return snapshot;
+  }
+
+  async listCustomerReplies(key: string, limit: number): Promise<IssueReply[]> {
+    this.assertInProject(key);
+    if (limit <= 0) return [];
+    const replies: IssueReply[] = [];
+    for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
+      const res = await this.request<{ values?: JiraComment[]; isLastPage?: boolean }>(
+        "GET",
+        `/rest/servicedeskapi/request/${key}/comment?public=true&internal=false&start=${page * COMMENT_PAGE_SIZE}&limit=${COMMENT_PAGE_SIZE}`,
+      );
+      for (const comment of res.data?.values ?? []) {
+        // An agent credential also receives internal notes, and the query filter is not relied
+        // on: only a comment explicitly flagged public reaches the customer-facing view.
+        if (comment.public !== true || typeof comment.body !== "string" || !comment.body.trim()) continue;
+        const millis = comment.created?.epochMillis ?? Date.parse(comment.created?.iso8601 ?? "");
+        if (!Number.isFinite(millis)) continue;
+        replies.push({ author: comment.author?.displayName?.trim() || "Service desk", created: new Date(millis), body: comment.body });
+      }
+      if (res.data?.isLastPage !== false) break;
+    }
+    // The comment order is not documented, so sort explicitly.
+    replies.sort((a, b) => a.created.getTime() - b.created.getTime());
+    return replies.slice(-limit);
   }
 
   private async requireIssue(key: string): Promise<IssueSnapshot> {

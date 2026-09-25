@@ -1,4 +1,6 @@
-import type { IssueSnapshot, IssueStatusCategory, SlaSummary } from "../../ports/IssueTrackerPort";
+import type { IssueReply, IssueSnapshot, IssueStatusCategory, SlaSummary } from "../../ports/IssueTrackerPort";
+
+const REPLY_BODY_MAX = 500;
 
 /** English label for a status category. Tracker status names are localised, so they are never shown. */
 export function statusLabel(category: IssueStatusCategory): string {
@@ -25,13 +27,41 @@ export function formatSla(sla: SlaSummary): string {
   }
 }
 
-export function formatIssueStatus(snapshot: IssueSnapshot): string {
+/** Status, SLAs and, when supplied, a block of service-desk replies before the link. */
+export function formatIssueStatus(snapshot: IssueSnapshot, replies?: string): string {
   return [
     `**${snapshot.key}** ${snapshot.summary}`,
     `Status: ${statusLabel(snapshot.statusCategory)}`,
     ...snapshot.slas.map(formatSla),
+    ...(replies ? ["", replies, ""] : []),
     snapshot.url,
   ].join("\n");
+}
+
+/**
+ * Customer-facing replies, oldest first, each with author and time in the conversation's
+ * timezone and its text quoted. Long replies are cut visibly; the ticket has the full text.
+ */
+export function formatReplies(replies: readonly IssueReply[], timeZone: string): string {
+  if (replies.length === 0) return "No replies from the service desk yet.";
+  const blocks = replies.map((reply) => {
+    const body = reply.body.trim();
+    const text = body.length <= REPLY_BODY_MAX ? body : `${body.slice(0, REPLY_BODY_MAX - 3).trimEnd()}...`;
+    const quoted = text.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
+    return `**${reply.author}**, ${formatReplyTime(reply.created, timeZone)}\n${quoted}`;
+  });
+  return [replies.length === 1 ? "Latest reply from the service desk:" : "Latest replies from the service desk:", ...blocks].join("\n");
+}
+
+function formatReplyTime(date: Date, timeZone: string): string {
+  const format = (tz: string): string => new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  }).format(date);
+  try {
+    return format(timeZone);
+  } catch {
+    return format("UTC");
+  }
 }
 
 export function formatResolution(snapshot: IssueSnapshot): string {

@@ -434,8 +434,10 @@ export class WireEventRouter extends WireEventsHandler {
       ? commandText.match(new RegExp(`^(?:jira\\s+status\\s+of\\s+(ACT-\\d+)|(?:jira\\s+)?status\\s+of\\s+(${jiraProjectKey}-\\d+))[?.]?\\s*$`, "i"))
       : null;
     if (issueStatusMatch && this.deps.getIssueStatus) {
+      const config = await this.deps.conversationConfig.get(convId);
       await this.deps.getIssueStatus.execute({
-        reference: (issueStatusMatch[1] ?? issueStatusMatch[2])!.toUpperCase(), conversationId: convId, replyToMessageId: wireMessage.id,
+        reference: (issueStatusMatch[1] ?? issueStatusMatch[2])!.toUpperCase(), conversationId: convId,
+        timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
       });
       return;
     }
