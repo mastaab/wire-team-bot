@@ -22,6 +22,8 @@ import type { SnoozeReminder } from "../../application/usecases/reminders/Snooze
 import type { AnswerQuestion } from "../../application/usecases/general/AnswerQuestion";
 import type { StatusCommand } from "../../application/usecases/general/StatusCommand";
 import type { CatchMeUpCommand } from "../../application/usecases/general/CatchMeUpCommand";
+import type { PushActionToJira } from "../../application/usecases/jira/PushActionToJira";
+import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
 import type { ConversationMessageBuffer } from "../../application/services/ConversationMessageBuffer";
 import type { DateTimeService } from "../../domain/services/DateTimeService";
 import type { ConversationMemberCache, CachedMember } from "../../domain/services/ConversationMemberCache";
@@ -80,6 +82,9 @@ export interface WireEventRouterDeps {
   statusCommand?: StatusCommand;
   /** Phase 4: optional — handles "catch me up" / "what did I miss" queries. */
   catchMeUpCommand?: CatchMeUpCommand;
+  /** Customer demo: present only when the Jira integration is configured. */
+  pushActionToJira?: PushActionToJira;
+  getIssueStatus?: GetIssueStatus;
   // Infrastructure
   botUserId: QualifiedId;
   wireOutbound: WireOutboundPort;
@@ -400,6 +405,34 @@ export class WireEventRouter extends WireEventsHandler {
         snoozeExpression: snoozeReminderMatch[2].trim(),
         timezone: config?.timezone ?? "UTC",
         replyToMessageId: wireMessage.id,
+      });
+      return;
+    }
+
+    // ACT-NNNN to jira / raise ACT-NNNN in jira (customer demo)
+    const jiraPushMatch = commandText.match(/^(?:(ACT-\d+)\s+to\s+jira|(?:raise|push|send)\s+(ACT-\d+)\s+(?:to|in)\s+jira)[.]?\s*$/i);
+    if (jiraPushMatch) {
+      const actionId = (jiraPushMatch[1] ?? jiraPushMatch[2])!.toUpperCase();
+      if (!this.deps.pushActionToJira) {
+        await this.deps.wireOutbound.sendPlainText(convId, "I'm afraid Jira isn't configured for this bot.", { replyToMessageId: wireMessage.id });
+        return;
+      }
+      const config = await this.deps.conversationConfig.get(convId);
+      await this.deps.pushActionToJira.execute({
+        actionId, conversationId: convId, actorId: sender, actorName: senderDisplayName ?? "a team member",
+        timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
+      });
+      return;
+    }
+
+    // status of DS-NN / jira status of ACT-NNNN (customer demo). Without the integration,
+    // or for a bare "status of ACT-NNNN", the text keeps its existing Q&A handling.
+    const issueStatusMatch = this.deps.getIssueStatus
+      ? commandText.match(/^(?:jira\s+status\s+of\s+(ACT-\d+)|(?:jira\s+)?status\s+of\s+(?!(?:ACT|DEC|REM|TASK)-)([A-Z][A-Z0-9]+-\d+))[?.]?\s*$/i)
+      : null;
+    if (issueStatusMatch && this.deps.getIssueStatus) {
+      await this.deps.getIssueStatus.execute({
+        reference: (issueStatusMatch[1] ?? issueStatusMatch[2])!.toUpperCase(), conversationId: convId, replyToMessageId: wireMessage.id,
       });
       return;
     }

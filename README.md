@@ -218,6 +218,23 @@ Set its endpoint and model using the keys in the template.
 | `MESSAGE_BUFFER_SIZE` | `50` | Recent messages kept per conversation for Q&A context (max 500). Does not affect the Tier 2 extraction window, which is always 30. |
 | `SECRET_MODE_INACTIVITY_MS` | `1800000` | Milliseconds of inactivity in SECURE mode before Wire Team Bot prompts the team to resume (minimum 60 000) |
 
+### Jira Service Management (optional, customer demo)
+
+Off unless all six required keys are set; a partial configuration stops startup with the names of the missing keys. With it on, `ACT-NNNN to jira` raises a service request for an open action, `ACT-NNNN done` also closes the linked request, and `status of DS-42` or `jira status of ACT-NNNN` reads its status and SLAs. Only the action's description, owner, deadline and ID are sent to Jira. See [PLAN.md §6](PLAN.md#6-customer-demo-jira-service-management-integration) for the design and guardrails.
+
+| Variable | Default | Description |
+|---|---|---|
+| `WIRE_TEAM_BOT_JIRA_BASE_URL` | required | REST base. Service-account (scoped) tokens must use the API gateway: `https://api.atlassian.com/ex/jira/<cloudId>` |
+| `WIRE_TEAM_BOT_JIRA_SITE_URL` | required | Site used for ticket links, e.g. `https://example.atlassian.net` |
+| `WIRE_TEAM_BOT_JIRA_API_TOKEN` | required | Service-account token with `read:servicedesk-request`, `write:servicedesk-request`, `read:jira-work`, `write:jira-work` and `read:jira-user`. The account needs the Agent role in the project |
+| `WIRE_TEAM_BOT_JIRA_PROJECT_KEY` | required | The only project the bot reads or writes, e.g. `DS` |
+| `WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID` | required | Numeric service desk ID (`GET /rest/servicedeskapi/servicedesk`) |
+| `WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID` | required | Numeric request type ID for new requests |
+| `WIRE_TEAM_BOT_JIRA_EMAIL` | unset | Set only to use Basic auth with a personal classic token against the site URL, for rehearsal |
+| `WIRE_TEAM_BOT_JIRA_TIMEOUT_MS` | `15000` | Per-request timeout (minimum 1000) |
+
+The due-date field must be on the request's work type; the bot sets it after creating the request. Treat the project's contents as visible to everyone with access to it, and use synthetic data for demos.
+
 ---
 
 ## Pilot command reference

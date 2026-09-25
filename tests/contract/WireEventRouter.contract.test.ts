@@ -911,3 +911,61 @@ it.each([
   await new WireEventRouter(deps).onTextMessageReceived(customMention(command));
   expect(deps[useCase].execute).toHaveBeenCalledWith(expect.objectContaining({ timezone: "Europe/London" }));
 });
+
+describe("WireEventRouter contract: Jira demo commands", () => {
+  const jiraDeps = () => makeDeps({
+    pushActionToJira: { execute: vi.fn().mockResolvedValue(null) },
+    getIssueStatus: { execute: vi.fn().mockResolvedValue(null) },
+    conversationConfig: { get: vi.fn().mockResolvedValue({ timezone: "Europe/Berlin" }), upsert: vi.fn() },
+  } as unknown as Partial<WireEventRouterDeps>);
+
+  it.each(["ACT-0004 to jira", "act-0004 to Jira", "raise ACT-0004 in jira", "push ACT-0004 to jira."])("'%s' → pushActionToJira with the channel timezone", async (text) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.pushActionToJira!.execute).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: "ACT-0004", conversationId: convId, actorId: sender, timezone: "Europe/Berlin", replyToMessageId: "msg-1",
+    }));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  it("explains that Jira is not configured instead of guessing when the integration is off", async () => {
+    const deps = makeDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("ACT-0004 to jira"));
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, "I'm afraid Jira isn't configured for this bot.", { replyToMessageId: "msg-1" });
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"], ["jira status of ACT-0004", "ACT-0004"]])("'%s' → getIssueStatus(%s)", async (text, reference) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith({ reference, conversationId: convId, replyToMessageId: "msg-1" });
+  });
+
+  it.each(["status of ACT-0004", "status of DEC-0001", "status of REM-0001"])("leaves '%s' to the existing handling", async (text) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not route Jira status lookups when the integration is off", async () => {
+    const deps = makeDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("status of DS-42"));
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId, expect.stringContaining("Jira"), expect.anything());
+  });
+
+  it("does not treat the bare channel status command as a Jira lookup", async () => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("status"));
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Jira escalation combined with another command in one message", async () => {
+    const deps = jiraDeps();
+    const message = makeMessage("ACT-0004 to jira and ACT-0005 done");
+    await new WireEventRouter(deps).onTextMessageReceived(message);
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
+      "Please send one command per message. I have not run any commands from this message.", { replyToMessageId: message.id });
+    expect(deps.pushActionToJira!.execute).not.toHaveBeenCalled();
+    expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
+  });
+});

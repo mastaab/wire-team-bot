@@ -8,7 +8,7 @@ interface Mention {
 
 // Only recognise explicit command starts. This is a rejection guard, not a batch
 // parser: ordinary conjunctions and multiline task descriptions remain intact.
-const COMMAND_START = /^(?:(?:decision|action|context):|remind(?:er)?\s|(?:make|set|create|add)\s+(?:a\s+)?reminder\b|(?:ACT-\d+)\s+(?:done|cancelled|in[_\s]progress|close|complete|cancel|reassign|due)\b|(?:done|close|complete|cancel|cancelled|in[_\s]progress)\s+ACT-\d+\b|(?:cancel|snooze)\s+REM-\d+\b|revoke\s+DEC-\d+\b|(?:my|team|overdue)\s+actions?\b|(?:my|show|list)\s+reminders?\b|list\s+decisions?\b|decisions?\s+(?:about|on|for|regarding)\b|search\s+decisions?\b|(?:pause|resume|secure mode|status|catch me up|what did I miss)[?.!`]*\s*$)/i;
+const COMMAND_START = /^(?:(?:decision|action|context):|remind(?:er)?\s|(?:make|set|create|add)\s+(?:a\s+)?reminder\b|(?:ACT-\d+)\s+(?:done|cancelled|in[_\s]progress|close|complete|cancel|reassign|due)\b|(?:done|close|complete|cancel|cancelled|in[_\s]progress)\s+ACT-\d+\b|ACT-\d+\s+to\s+jira\b|(?:raise|push|send)\s+ACT-\d+\s+(?:to|in)\s+jira\b|jira\s+status\s+of\s+ACT-\d+\b|(?:jira\s+)?status\s+of\s+(?!(?:ACT|DEC|REM|TASK)-)[A-Z][A-Z0-9]+-\d+\b|(?:cancel|snooze)\s+REM-\d+\b|revoke\s+DEC-\d+\b|(?:my|team|overdue)\s+actions?\b|(?:my|show|list)\s+reminders?\b|list\s+decisions?\b|decisions?\s+(?:about|on|for|regarding)\b|search\s+decisions?\b|(?:pause|resume|secure mode|status|catch me up|what did I miss)[?.!`]*\s*$)/i;
 
 export function hasMultipleCommands(text: string, mentions: readonly Mention[], botId: QualifiedId): boolean {
   // Work from original UTF-16 offsets. Mask person labels so a name containing

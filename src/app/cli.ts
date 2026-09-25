@@ -60,6 +60,9 @@ import { SupersedeDecision } from "../application/usecases/decisions/SupersedeDe
 import { RevokeDecision } from "../application/usecases/decisions/RevokeDecision";
 import { CreateActionFromExplicit } from "../application/usecases/actions/CreateActionFromExplicit";
 import { UpdateActionStatus } from "../application/usecases/actions/UpdateActionStatus";
+import { PushActionToJira } from "../application/usecases/jira/PushActionToJira";
+import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
+import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
 import { ReassignAction } from "../application/usecases/actions/ReassignAction";
@@ -243,6 +246,8 @@ async function main() {
   // Use cases
   const answerQuestion = new AnswerQuestion(generalAnswerAdapter(llmFactory, logger), wireOutbound, queryAnalysis, retrievalEngine, logger);
   const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound);
+  // Customer demo: Jira Service Management, wired only when fully configured.
+  const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
   const catchMeUp      = new CatchMeUpCommand(summaryRepo, generateSummary, wireOutbound);
 
   const router = new WireEventRouter({
@@ -254,7 +259,7 @@ async function main() {
     supersedeDecision:      new SupersedeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     revokeDecision:         new RevokeDecision(decisionsRepo, wireOutbound, auditLogRepo),
     createActionFromExplicit: new CreateActionFromExplicit(actionsRepo, convConfigRepo, dateTimeService, userResolution, wireOutbound, auditLogRepo, logger),
-    updateActionStatus:     new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo),
+    updateActionStatus:     new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker),
     updateActionDeadline:   new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo),
     listMyActions:          new ListMyActions(actionsRepo, wireOutbound),
     listTeamActions:        new ListTeamActions(actionsRepo, wireOutbound),
@@ -267,6 +272,8 @@ async function main() {
     answerQuestion,
     statusCommand,
     catchMeUpCommand:       catchMeUp,
+    pushActionToJira:       issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined,
+    getIssueStatus:         issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined,
     wireOutbound,
     dateTimeService,
     scheduler,

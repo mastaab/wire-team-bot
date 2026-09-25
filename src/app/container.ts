@@ -26,6 +26,9 @@ import { SupersedeDecision } from "../application/usecases/decisions/SupersedeDe
 import { RevokeDecision } from "../application/usecases/decisions/RevokeDecision";
 import { CreateActionFromExplicit } from "../application/usecases/actions/CreateActionFromExplicit";
 import { UpdateActionStatus } from "../application/usecases/actions/UpdateActionStatus";
+import { PushActionToJira } from "../application/usecases/jira/PushActionToJira";
+import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
+import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
 import { ReassignAction } from "../application/usecases/actions/ReassignAction";
@@ -178,7 +181,12 @@ export function createContainer(config: Config, logger: Logger): Container {
     auditLogRepo,
     logger,
   );
-  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo);
+  // Customer demo: Jira Service Management, wired only when fully configured.
+  const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
+  if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey });
+  const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo, issueTracker);
+  const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const getIssueStatus = issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined;
   const updateActionDeadline = new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo);
   const listMyActions = new ListMyActions(actionsRepo, wireOutbound);
   const listTeamActions = new ListTeamActions(actionsRepo, wireOutbound);
@@ -268,6 +276,8 @@ export function createContainer(config: Config, logger: Logger): Container {
     answerQuestion,
     statusCommand,
     catchMeUpCommand,
+    pushActionToJira,
+    getIssueStatus,
     wireOutbound,
     replyContext,
     messageBuffer,
