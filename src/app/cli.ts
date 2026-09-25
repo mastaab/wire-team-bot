@@ -263,7 +263,7 @@ async function main() {
   const pushActionToJira = issueTracker ? new PushActionToJira(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const replyToServiceDesk = issueTracker ? new ReplyToServiceDesk(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const confirmOffer = pendingOffers && pushActionToJira && replyToServiceDesk
-    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk }, wireOutbound)
+    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk, actions: actionsRepo }, wireOutbound)
     : undefined;
   const router = new WireEventRouter({
     logger,

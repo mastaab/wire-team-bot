@@ -199,7 +199,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   const getIssueStatus = issueTracker ? new GetIssueStatus(actionsRepo, issueTracker, wireOutbound, logger) : undefined;
   const replyToServiceDesk = issueTracker ? new ReplyToServiceDesk(actionsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const confirmOffer = pendingOffers && pushActionToJira && replyToServiceDesk
-    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk }, wireOutbound)
+    ? new ConfirmOffer(pendingOffers, { pushActionToJira, updateActionStatus, replyToServiceDesk, actions: actionsRepo }, wireOutbound)
     : undefined;
   const updateActionDeadline = new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo);
   const listMyActions = new ListMyActions(actionsRepo, wireOutbound);
