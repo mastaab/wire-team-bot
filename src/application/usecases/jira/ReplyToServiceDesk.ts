@@ -3,7 +3,7 @@ import { isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/id
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
-import { trackerErrorFields } from "../../ports/IssueTrackerPort";
+import { IssueTrackerError, trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
@@ -27,6 +27,14 @@ interface LinkedTicket {
 }
 
 const ACTION_ID_RE = /^ACT-\d+$/;
+
+/**
+ * Only a 4xx response means Jira refused the reply. A timeout, network error, 5xx or
+ * unexpected response may follow an accepted write, so it must not invite a resend.
+ */
+function wasRejected(err: unknown): boolean {
+  return err instanceof IssueTrackerError && err.status !== undefined && err.status >= 400 && err.status < 500;
+}
 
 /**
  * Sends one customer-facing reply to a ticket linked from this conversation. The reply
@@ -66,19 +74,26 @@ export class ReplyToServiceDesk {
       await this.tracker.addCustomerReply(ticket.key, `${body}\n\nSent from Wire (${ticket.actionId}).`);
     } catch (err) {
       this.logger?.warn("ReplyToServiceDesk: addCustomerReply failed", trackerErrorFields(err));
-      await reply(`I'm afraid I couldn't send the reply to **${ticket.key}** just now.`);
+      await reply(wasRejected(err)
+        ? `I'm afraid I couldn't send the reply to **${ticket.key}** just now.`
+        : `I'm afraid I couldn't confirm that the reply reached **${ticket.key}**. Please check the ticket before sending it again.`);
       return false;
     }
 
-    await this.auditLog.append({
-      timestamp: new Date(),
-      actorId: input.actorId,
-      conversationId: input.conversationId,
-      action: "entity_created",
-      entityType: "JiraComment",
-      entityId: ticket.key,
-      details: { actionId: ticket.actionId },
-    });
+    // The reply is public in Jira now, so an audit failure must not suggest otherwise.
+    try {
+      await this.auditLog.append({
+        timestamp: new Date(),
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+        action: "entity_created",
+        entityType: "JiraComment",
+        entityId: ticket.key,
+        details: { actionId: ticket.actionId },
+      });
+    } catch (err) {
+      this.logger?.error("ReplyToServiceDesk: audit append failed", { err: err instanceof Error ? err.name : "UnknownError" });
+    }
     await reply(`Sent your reply to **${ticket.key}** in Jira.`);
     return true;
   }

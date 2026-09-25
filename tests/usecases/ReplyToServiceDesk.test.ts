@@ -35,7 +35,7 @@ function makeAction(overrides: Partial<Action> = {}): Action {
   };
 }
 
-function setup(options: { found?: Action | null; queried?: Action[]; tracker?: Partial<IssueTrackerPort> } = {}) {
+function setup(options: { found?: Action | null; queried?: Action[]; tracker?: Partial<IssueTrackerPort>; auditError?: Error } = {}) {
   const repo = {
     findById: vi.fn().mockResolvedValue(options.found === undefined ? makeAction() : options.found),
     query: vi.fn().mockResolvedValue(options.queried ?? [makeAction()]),
@@ -60,7 +60,9 @@ function setup(options: { found?: Action | null; queried?: Action[]; tracker?: P
     sendReaction: vi.fn(),
     sendFile: vi.fn(),
   };
-  const audit = { append: vi.fn().mockResolvedValue(undefined) };
+  const audit = {
+    append: options.auditError ? vi.fn().mockRejectedValue(options.auditError) : vi.fn().mockResolvedValue(undefined),
+  };
   const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: vi.fn() };
   const useCase = new ReplyToServiceDesk(repo, tracker, wire, audit, logger);
   return { repo, tracker, wire, sent, audit, logger, useCase };
@@ -196,16 +198,45 @@ describe("ReplyToServiceDesk", () => {
     expect(over.tracker.addCustomerReply).not.toHaveBeenCalled();
   });
 
-  it("reports a failed send, logs only the error fields and does not audit", async () => {
+  it.each([400, 403, 404, 422, 499])("reports a send Jira refused with %i, logs only the error fields and does not audit", async (status) => {
     const { sent, audit, logger, useCase } = setup({
-      tracker: { addCustomerReply: vi.fn().mockRejectedValue(new IssueTrackerError(`failed ${BODY_MARKER}`, 500)) },
+      tracker: { addCustomerReply: vi.fn().mockRejectedValue(new IssueTrackerError(`failed ${BODY_MARKER}`, status)) },
     });
 
     expect(await useCase.execute({ ...base, reference: "ACT-0004", body: `Please see ${BODY_MARKER}` })).toBe(false);
 
     expect(sent).toEqual(["I'm afraid I couldn't send the reply to **DS-42** just now."]);
     expect(audit.append).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith("ReplyToServiceDesk: addCustomerReply failed", { err: "IssueTrackerError", status: 500 });
+    expect(logger.warn).toHaveBeenCalledWith("ReplyToServiceDesk: addCustomerReply failed", { err: "IssueTrackerError", status });
+  });
+
+  it.each([
+    ["a 5xx", new IssueTrackerError("server error", 500)],
+    ["a 503", new IssueTrackerError("unavailable", 503)],
+    ["a 3xx", new IssueTrackerError("unexpected response", 302)],
+    ["a tracker error with no status", new IssueTrackerError("timed out")],
+    ["a network error", new TypeError("fetch failed")],
+    ["a non-error value", "boom"],
+  ])("asks the user to check the ticket after %s, because Jira may have accepted it", async (_label, error) => {
+    const { sent, audit, logger, useCase } = setup({ tracker: { addCustomerReply: vi.fn().mockRejectedValue(error) } });
+
+    expect(await useCase.execute({ ...base, reference: "ACT-0004", body: "Hello" })).toBe(false);
+
+    expect(sent).toEqual(["I'm afraid I couldn't confirm that the reply reached **DS-42**. Please check the ticket before sending it again."]);
+    expect(audit.append).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports success when the audit fails after the reply was sent, logging only the error name", async () => {
+    const { tracker, sent, logger, useCase } = setup({ auditError: new Error(`db down ${BODY_MARKER}`) });
+
+    expect(await useCase.execute({ ...base, reference: "ACT-0004", body: `Reply ${BODY_MARKER}` })).toBe(true);
+
+    expect(tracker.addCustomerReply).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual(["Sent your reply to **DS-42** in Jira."]);
+    expect(logger.error).toHaveBeenCalledWith("ReplyToServiceDesk: audit append failed", { err: "Error" });
+    const logged = JSON.stringify([logger.warn.mock.calls, logger.info.mock.calls, logger.debug.mock.calls, logger.error.mock.calls]);
+    expect(logged).not.toContain(BODY_MARKER);
   });
 
   it("never logs the body on any path", async () => {

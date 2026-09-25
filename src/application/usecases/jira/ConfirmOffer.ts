@@ -1,4 +1,7 @@
+import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { jiraKeyFromLinks } from "../../../domain/ids/jiraLink";
+import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { PendingOfferStore } from "../../services/offers";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { PushActionToJira } from "./PushActionToJira";
@@ -8,6 +11,8 @@ import type { UpdateActionStatus } from "../actions/UpdateActionStatus";
 export type Confirmation = "yes" | "no";
 
 export interface ConfirmOfferHandlers {
+  /** Re-reads an action before a close; raise and reply re-validate inside their use cases. */
+  actions: ActionRepository;
   pushActionToJira: PushActionToJira;
   updateActionStatus: UpdateActionStatus;
   replyToServiceDesk: ReplyToServiceDesk;
@@ -21,9 +26,9 @@ export interface ConfirmOfferInput {
   replyToMessageId?: string;
 }
 
+/** Explicit forms only: the bot asks "(yes or no)?", so "ok" or "sure" does not approve a write. */
 const YES: ReadonlySet<string> = new Set([
-  "yes", "y", "yes please", "yep", "yeah", "sure", "ok", "okay",
-  "go ahead", "do it", "please do", "confirm", "confirmed",
+  "yes", "yes please", "yep", "yeah", "go ahead", "do it", "please do", "confirm", "confirmed",
 ]);
 const NO: ReadonlySet<string> = new Set(["no", "n", "nope", "no thanks", "cancel", "don't", "do not", "stop"]);
 
@@ -92,6 +97,7 @@ export class ConfirmOffer {
         });
         break;
       case "close":
+        if (!(await this.closeStillApplies(command.actionId, conversationId, replyToMessageId))) break;
         await this.handlers.updateActionStatus.execute({
           actionId: command.actionId, newStatus: "done", conversationId, actorId, replyToMessageId,
         });
@@ -101,6 +107,27 @@ export class ConfirmOffer {
           reference: command.issueKey, body: command.body, conversationId, actorId, replyToMessageId,
         });
         break;
+    }
+    return true;
+  }
+
+  /**
+   * The action may have changed since the offer was made. A close only proceeds for a
+   * visible, still-active action that is still linked to a ticket; otherwise it explains why.
+   */
+  private async closeStillApplies(actionId: string, conversationId: QualifiedId, replyToMessageId?: string): Promise<boolean> {
+    const action = await this.handlers.actions.findById(actionId);
+    if (!action || action.deleted || !sameQualifiedId(action.conversationId, conversationId)) {
+      await this.wireOutbound.sendPlainText(
+        conversationId, `I'm afraid I can't find **${actionId}** in this conversation.`, { replyToMessageId },
+      );
+      return false;
+    }
+    if (action.status === "done" || action.status === "cancelled" || !jiraKeyFromLinks(action.linkedIds)) {
+      await this.wireOutbound.sendPlainText(
+        conversationId, `I'm afraid **${action.id}** has changed since I asked, so I haven't changed anything.`, { replyToMessageId },
+      );
+      return false;
     }
     return true;
   }

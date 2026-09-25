@@ -4,6 +4,7 @@ import type { ConfirmOfferHandlers } from "../../src/application/usecases/jira/C
 import { InMemoryPendingOfferStore } from "../../src/infrastructure/services/InMemoryPendingOfferStore";
 import type { OfferCommand, PendingOfferStore } from "../../src/application/services/offers";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
+import type { Action } from "../../src/domain/entities/Action";
 
 const convId: QualifiedId = { id: "conv-1", domain: "wire.com" };
 const alice: QualifiedId = { id: "user-1", domain: "wire.com" };
@@ -12,8 +13,8 @@ const now = new Date("2026-09-25T10:00:00Z");
 
 describe("classifyConfirmation", () => {
   it.each([
-    "yes", "y", "yes please", "yep", "yeah", "sure", "ok", "okay", "go ahead", "do it", "please do", "confirm", "confirmed",
-    "Yes", "  YES!  ", "yes.", "`yes`", "ok, thanks", "yes thank you", "sure please", "go ahead, thanks!", "Yep!!",
+    "yes", "yes please", "yep", "yeah", "go ahead", "do it", "please do", "confirm", "confirmed",
+    "Yes", "  YES!  ", "yes.", "`yes`", "yes, thanks", "yes thank you", "yeah please", "go ahead, thanks!", "Yep!!",
   ])("treats %j as yes", (text) => {
     expect(classifyConfirmation(text)).toBe("yes");
   });
@@ -28,14 +29,46 @@ describe("classifyConfirmation", () => {
   it.each([
     "", "   ", "yes but change the owner first", "no, raise ACT-0002 instead", "maybe", "thanks", "please",
     "yes yes", "what is the status of DS-42?", "okay so what's next", "yesterday", "ok ok",
+    "ok", "okay", "sure", "ok thanks", "ok, thanks", "sure please", "y", "OK!",
   ])("does not treat %j as a confirmation", (text) => {
     expect(classifyConfirmation(text)).toBeNull();
   });
 });
 
-function setup(options: { store?: PendingOfferStore; clock?: () => Date } = {}) {
+function makeAction(overrides: Partial<Action> = {}): Action {
+  return {
+    id: "ACT-0010",
+    description: "Send the security questionnaire",
+    rawMessageId: "",
+    assigneeId: bob,
+    assigneeName: "Bob",
+    creatorId: alice,
+    authorName: "Alice",
+    conversationId: convId,
+    deadline: null,
+    status: "open",
+    linkedIds: ["jira:DS-42"],
+    reminderAt: [],
+    completionNote: null,
+    timestamp: now,
+    updatedAt: now,
+    tags: [],
+    deleted: false,
+    version: 1,
+    ...overrides,
+  };
+}
+
+function setup(options: { store?: PendingOfferStore; clock?: () => Date; found?: Action | null } = {}) {
   const store = options.store ?? new InMemoryPendingOfferStore();
   const handlers = {
+    actions: {
+      findById: vi.fn().mockResolvedValue(options.found === undefined ? makeAction() : options.found),
+      query: vi.fn(),
+      update: vi.fn(),
+      create: vi.fn(),
+      nextId: vi.fn(),
+    },
     pushActionToJira: { execute: vi.fn().mockResolvedValue(null) },
     updateActionStatus: { execute: vi.fn().mockResolvedValue(null) },
     replyToServiceDesk: { execute: vi.fn().mockResolvedValue(true) },
@@ -101,12 +134,67 @@ describe("ConfirmOffer", () => {
     const { handlers, useCase, offer } = setup();
     offer({ kind: "close", actionId: "ACT-0010" });
 
-    expect(await useCase.execute({ ...input, text: "ok" })).toBe(true);
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
 
+    expect(handlers.actions.findById).toHaveBeenCalledWith("ACT-0010");
     expect(handlers.updateActionStatus.execute).toHaveBeenCalledWith({
       actionId: "ACT-0010", newStatus: "done", conversationId: convId, actorId: alice, replyToMessageId: "msg-9",
     });
     expect(handlers.pushActionToJira.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", null],
+    ["deleted", makeAction({ deleted: true })],
+    ["in another conversation", makeAction({ conversationId: { id: "conv-2", domain: "wire.com" } })],
+    ["in the same conversation ID on another domain", makeAction({ conversationId: { id: "conv-1", domain: "other.example" } })],
+  ])("does not close an action that is %s and consumes the offer", async (_label, found) => {
+    const { handlers, wire, sent, store, useCase, offer } = setup({ found });
+    offer({ kind: "close", actionId: "ACT-0010" });
+
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+    expect(sent).toEqual(["I'm afraid I can't find **ACT-0010** in this conversation."]);
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+    expectNothingDispatched(handlers);
+    expect(store.has(convId, alice, now)).toBe(false);
+  });
+
+  it.each([
+    ["already done", makeAction({ status: "done" })],
+    ["cancelled", makeAction({ status: "cancelled" })],
+    ["no longer linked to Jira", makeAction({ linkedIds: ["DEC-0001"] })],
+  ])("does not close an action that is %s since the offer and consumes the offer", async (_label, found) => {
+    const { handlers, wire, sent, store, useCase, offer } = setup({ found });
+    offer({ kind: "close", actionId: "ACT-0010" });
+
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+    expect(sent).toEqual(["I'm afraid **ACT-0010** has changed since I asked, so I haven't changed anything."]);
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+    expectNothingDispatched(handlers);
+    expect(store.has(convId, alice, now)).toBe(false);
+  });
+
+  it("does not read the action for a raise or a reply", async () => {
+    const { handlers, useCase, offer } = setup();
+    offer({ kind: "raise", actionId: "ACT-0010" });
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+    offer({ kind: "reply", issueKey: "DS-42", body: "Hello" });
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+    expect(handlers.actions.findById).not.toHaveBeenCalled();
+  });
+
+  it("does not confirm on a casual acknowledgement and keeps the offer", async () => {
+    const { handlers, wire, store, useCase, offer } = setup();
+    offer({ kind: "close", actionId: "ACT-0010" });
+
+    expect(await useCase.execute({ ...input, text: "ok thanks" })).toBe(false);
+
+    expectNothingDispatched(handlers);
+    expect(wire.sendPlainText).not.toHaveBeenCalled();
+    expect(store.has(convId, alice, now)).toBe(true);
   });
 
   it("sends the offered reply with the requester as actor", async () => {
