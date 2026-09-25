@@ -11,8 +11,9 @@ export function botActor(conversationId: QualifiedId): QualifiedId {
 
 /**
  * Stores the category just read from the tracker when it differs from the last known one,
- * and audits the change. An unchanged category writes nothing. A failed write is logged and
- * never breaks the reply: the live value always comes from the tracker.
+ * and audits the change. Returns the updated record, or null when nothing was written: an
+ * unchanged category, a record that no longer exists, or a failed write. A failure is logged
+ * and never breaks the reply, since the live value always comes from the tracker.
  */
 export async function refreshStatusCategory(
   requests: SupportRequestRepository,
@@ -21,12 +22,14 @@ export async function refreshStatusCategory(
   statusCategory: SupportRequestStatusCategory,
   actorId: QualifiedId,
   logger?: Logger,
-): Promise<void> {
-  if (request.statusCategory === statusCategory) return;
+  now: Date = new Date(),
+): Promise<SupportRequest | null> {
+  if (request.statusCategory === statusCategory) return null;
   try {
-    await requests.updateStatusCategory(request.key, statusCategory, new Date());
+    const updated = await requests.updateStatusCategory(request.key, statusCategory, now);
+    if (!updated) return null;
     await auditLog.append({
-      timestamp: new Date(),
+      timestamp: now,
       actorId,
       conversationId: request.conversationId,
       action: "entity_updated",
@@ -34,8 +37,10 @@ export async function refreshStatusCategory(
       entityId: request.key,
       details: { statusCategory },
     });
+    return updated;
   } catch (err) {
     logger?.warn("Support request status refresh failed", { key: request.key, err: err instanceof Error ? err.name : "UnknownError" });
+    return null;
   }
 }
 

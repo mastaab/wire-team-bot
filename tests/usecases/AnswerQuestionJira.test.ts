@@ -418,7 +418,7 @@ describe("AnswerQuestion with Jira: status refresh", () => {
     expect(ofType("jira_ticket").map((r) => r.id)).toEqual(["DS-6"]);
     expect(ofType("support_request")[0]!.content).toContain("Last known status: To do");
     expect(sent).toEqual(["Here is the answer."]);
-    expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: support request status refresh failed", { err: "Error" });
+    expect(logger.warn).toHaveBeenCalledWith("Support request status refresh failed", { key: "DS-6", err: "Error" });
   });
 });
 

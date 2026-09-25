@@ -53,7 +53,7 @@ describe("refreshStatusCategory", () => {
     const audit = makeAudit();
     const logger = makeLogger();
 
-    await expect(refreshStatusCategory(requests, audit, makeRequest(), "done", alice, logger)).resolves.toBeUndefined();
+    await expect(refreshStatusCategory(requests, audit, makeRequest(), "done", alice, logger)).resolves.toBeNull();
 
     expect(audit.append).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith("Support request status refresh failed", { key: "DS-6", err: "Error" });

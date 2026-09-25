@@ -14,6 +14,7 @@ import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import { OFFER_TTL_MS, parseOfferMarker } from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
+import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
 import { findSupportRequestInConversation } from "../jira/supportRequestScope";
 
@@ -80,8 +81,6 @@ const TICKETS_SHARED = 3;
 const REPLIES_SHARED = 3;
 const SHARED_REPLY_MAX = 500;
 const FALLBACK_ANSWER = "I wasn't able to generate a response.";
-/** Actor of audit entries for writes the bot makes on its own, such as a status refresh. */
-const SYSTEM_ACTOR_ID = "wire-team-bot";
 
 /**
  * Questions that may need live ticket data: Jira, service-desk or support wording, or asking
@@ -303,41 +302,12 @@ export class AnswerQuestion {
           confidence: 1,
           pathsMatched: ["jira"],
         },
-        refreshed: await this.refreshStatus(jira, request, snapshot, input.conversationId, now),
+        refreshed: await refreshStatusCategory(
+          jira.requests, jira.auditLog, request, snapshot.statusCategory, botActor(input.conversationId), this.logger, now,
+        ),
       };
     }));
     return tickets.filter((t): t is LiveTicket => t !== null);
-  }
-
-  /**
-   * Stores the live category when it differs from the last known one and audits the change.
-   * An unchanged category writes nothing. A failure is logged and leaves the record as it was.
-   */
-  private async refreshStatus(
-    jira: AnswerQuestionJira,
-    request: SupportRequest,
-    snapshot: IssueSnapshot,
-    conversationId: QualifiedId,
-    now: Date,
-  ): Promise<SupportRequest | null> {
-    if (snapshot.statusCategory === request.statusCategory) return null;
-    try {
-      const updated = await jira.requests.updateStatusCategory(request.key, snapshot.statusCategory, now);
-      if (!updated) return null;
-      await jira.auditLog.append({
-        timestamp: now,
-        actorId: { id: SYSTEM_ACTOR_ID, domain: conversationId.domain },
-        conversationId,
-        action: "entity_updated",
-        entityType: "SupportRequest",
-        entityId: request.key,
-        details: { statusCategory: snapshot.statusCategory },
-      });
-      return updated;
-    } catch (err) {
-      this.logger?.warn("AnswerQuestion: support request status refresh failed", { err: err instanceof Error ? err.name : "UnknownError" });
-      return null;
-    }
   }
 
   /**
