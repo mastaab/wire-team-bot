@@ -26,7 +26,7 @@ import type { PushActionToJira } from "../../application/usecases/jira/PushActio
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
 import type { ConfirmOffer } from "../../application/usecases/jira/ConfirmOffer";
 import type { ReplyToServiceDesk } from "../../application/usecases/jira/ReplyToServiceDesk";
-import type { PendingOfferStore } from "../../application/services/offers";
+import type { PendingOfferStore } from "../../application/ports/PendingOfferPort";
 import type { ConversationMessageBuffer } from "../../application/services/ConversationMessageBuffer";
 import type { DateTimeService } from "../../domain/services/DateTimeService";
 import type { ConversationMemberCache, CachedMember } from "../../domain/services/ConversationMemberCache";
@@ -321,16 +321,9 @@ export class WireEventRouter extends WireEventsHandler {
     }
 
     // Reject a command bundle before any write, buffering or model work.
-    if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {
-      await this.deps.wireOutbound.sendPlainText(convId,
-        "Please send one command per message. I have not run any commands from this message.",
-        { replyToMessageId: wireMessage.id });
-      return;
-    }
-
     // A short "yes"/"no" to a pending Jira offer (customer demo). Checked before commands and
-    // before the follow-up handling further down, which would otherwise send the "yes" to the
-    // read-only Q&A path. Only the member who received the offer can confirm it, and only with
+    // before the multi-command guard and the follow-up handling further down, which would otherwise
+    // send the "yes" to the read-only Q&A path. Only the member who received the offer can confirm it, and only with
     // their next message: anything else drops the offer, so a later "yes" meant for a different
     // question can never confirm it.
     if (this.deps.confirmOffer && this.deps.pendingOffers?.has(convId, sender)) {
@@ -347,6 +340,13 @@ export class WireEventRouter extends WireEventsHandler {
         return;
       }
       this.deps.pendingOffers.take(convId, sender);
+    }
+
+    if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {
+      await this.deps.wireOutbound.sendPlainText(convId,
+        "Please send one command per message. I have not run any commands from this message.",
+        { replyToMessageId: wireMessage.id });
+      return;
     }
 
     // ── ACTIVE — state-change commands ────────────────────────────────────────
@@ -456,7 +456,9 @@ export class WireEventRouter extends WireEventsHandler {
 
     // reply to DS-NN: <text> / reply to ACT-NNNN: <text> (customer demo). Only keys of the
     // configured project match, so "reply to" in ordinary chat keeps its existing handling.
-    const replyProjectKey = this.deps.replyToServiceDesk ? this.deps.getIssueStatus?.projectKey : undefined;
+    // The bot must be addressed: this posts a customer-visible comment, so a teammate's chat
+    // that happens to start with "reply to DS-4:" must never reach Jira.
+    const replyProjectKey = this.deps.replyToServiceDesk && isBotAddressed ? this.deps.getIssueStatus?.projectKey : undefined;
     const replyMatch = replyProjectKey
       ? commandText.match(new RegExp(`^reply\\s+to\\s+(ACT-\\d+|${replyProjectKey}-\\d+)\\s*:\\s*([\\s\\S]+)$`, "i"))
       : null;

@@ -41,4 +41,24 @@ describe("parseOfferMarker", () => {
       command: null,
     });
   });
+
+  it("parses a marker spread over several lines and hides all of it", () => {
+    const answer = 'ACT-0010 is linked to DS-4.\nOFFER: {\n  "kind": "reply",\n  "issueKey": "DS-4",\n  "body": "The draft is attached."\n}';
+    expect(parseOfferMarker(answer)).toEqual({
+      text: "ACT-0010 is linked to DS-4.",
+      command: { kind: "reply", issueKey: "DS-4", body: "The draft is attached." },
+    });
+  });
+
+  it("hides an invalid multi-line marker completely, including its drafted text", () => {
+    const answer = 'Answer.\nOFFER: {\n  "kind": "reply",\n  "body": "SECRET DRAFT"';
+    const parsed = parseOfferMarker(answer);
+    expect(parsed).toEqual({ text: "Answer.", command: null });
+    expect(parsed.text).not.toContain("SECRET DRAFT");
+  });
+
+  it("hides a multi-line marker in the middle of the answer without honouring it", () => {
+    const answer = 'Before.\nOFFER: {\n  "kind": "raise",\n  "actionId": "ACT-1"\n}\nAfter the marker.';
+    expect(parseOfferMarker(answer)).toEqual({ text: "Before.\nAfter the marker.", command: null });
+  });
 });

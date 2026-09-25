@@ -1,5 +1,5 @@
 import type { QualifiedId } from "../../domain/ids/QualifiedId";
-import type { PendingOffer, PendingOfferStore } from "../../application/services/offers";
+import type { PendingOffer, PendingOfferStore } from "../../application/ports/PendingOfferPort";
 
 function key(q: QualifiedId): string {
   return `${q.id}@${q.domain}`;

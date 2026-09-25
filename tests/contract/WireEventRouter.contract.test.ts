@@ -1052,17 +1052,31 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     ["reply to DS-4: The draft is attached.", "DS-4", "The draft is attached."],
     ["reply to ds-4:the draft is attached", "DS-4", "the draft is attached"],
     ["reply to ACT-0010: Line one\nLine two", "ACT-0010", "Line one\nLine two"],
-  ])("routes '%s' to ReplyToServiceDesk", async (text, reference, body) => {
+  ])("routes '%s' to ReplyToServiceDesk when the bot is mentioned", async (text, reference, body) => {
     const deps = offerDeps(false);
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.replyToServiceDesk!.execute).toHaveBeenCalledWith({
       reference, body, conversationId: convId, actorId: sender, replyToMessageId: "msg-1",
     });
   });
 
+  it("never posts a service-desk reply from chat that does not address the bot", async () => {
+    const deps = offerDeps(false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("reply to DS-4: I think we should wait until the contract is signed"));
+    expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
+  });
+
+  it("drops a pending offer when the requester's next message is rejected as several commands", async () => {
+    const deps = offerDeps(true, false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("ACT-0001 done\nACT-0002 done"));
+    expect(deps.pendingOffers!.take).toHaveBeenCalledWith(convId, sender);
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
+      "Please send one command per message. I have not run any commands from this message.", expect.anything());
+  });
+
   it.each(["reply to WPB-12: thanks", "reply to DS-4 thanks", "reply to Bob: thanks"])("does not treat '%s' as a service-desk reply", async (text) => {
     const deps = offerDeps(false);
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
   });
 
@@ -1080,7 +1094,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
 
   it("refuses a service-desk reply combined with another command in one message", async () => {
     const deps = offerDeps(false);
-    const message = makeMessage("reply to DS-4: done\nACT-0005 done");
+    const message = customMention("reply to DS-4: done\nACT-0005 done");
     await new WireEventRouter(deps).onTextMessageReceived(message);
     expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
     expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,

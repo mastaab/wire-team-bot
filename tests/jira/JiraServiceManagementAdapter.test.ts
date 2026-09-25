@@ -454,3 +454,19 @@ describe("JiraServiceManagementAdapter.addCustomerReply", () => {
     expect(JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.error.mock.calls, log.debug.mock.calls])).not.toContain(MARKER);
   });
 });
+
+describe("JiraServiceManagementAdapter own account lookup", () => {
+  it("requests /myself once when replies for several tickets are read at the same time", async () => {
+    const COMMENTS = (key: string) => `/rest/servicedeskapi/request/${key}/comment?public=true&internal=false&start=0&limit=100`;
+    const page = () => json({ isLastPage: true, values: [{ id: "1", public: true, body: "hi", author: { displayName: "A", accountId: "bot" }, created: { iso8601: "2026-09-25T10:00:00Z" } }] });
+    const fetch = stubJira({
+      "GET /rest/api/3/myself": [json({ accountId: "bot" })],
+      [`GET ${COMMENTS("DS-1")}`]: [page()], [`GET ${COMMENTS("DS-2")}`]: [page()], [`GET ${COMMENTS("DS-3")}`]: [page()],
+    });
+    const jira = adapter();
+    const results = await Promise.all(["DS-1", "DS-2", "DS-3"].map((key) => jira.listCustomerReplies(key, 3)));
+    expect(results.every((r) => r[0]!.fromThisBot === true)).toBe(true);
+    expect(calls(fetch).filter((c) => c === "GET /rest/api/3/myself")).toHaveLength(1);
+  });
+});
+

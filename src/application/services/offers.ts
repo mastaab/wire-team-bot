@@ -1,4 +1,4 @@
-import type { QualifiedId } from "../../domain/ids/QualifiedId";
+import type { OfferCommand } from "../ports/PendingOfferPort";
 import { JIRA_KEY_PATTERN } from "../../domain/ids/jiraLink";
 
 /**
@@ -7,30 +7,7 @@ import { JIRA_KEY_PATTERN } from "../../domain/ids/jiraLink";
  * runs the existing audited use case after the requester confirms.
  */
 
-export type OfferCommand =
-  | { kind: "raise"; actionId: string }
-  | { kind: "close"; actionId: string }
-  | { kind: "reply"; issueKey: string; body: string };
-
-export interface PendingOffer {
-  command: OfferCommand;
-  conversationId: QualifiedId;
-  /** Only this member's confirmation counts. */
-  requesterId: QualifiedId;
-  createdAt: Date;
-  expiresAt: Date;
-}
-
-export interface PendingOfferStore {
-  /** Stores the offer, replacing any pending one for the same requester in the conversation. */
-  put(offer: PendingOffer): void;
-  /** Removes and returns the requester's pending offer, or null if there is none or it expired. */
-  take(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): PendingOffer | null;
-  /** True when the requester has an unexpired offer, without removing it. */
-  has(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): boolean;
-  /** Drops every pending offer in the conversation, e.g. when it is paused or made secure. */
-  clearConversation(conversationId: QualifiedId): void;
-}
+export type { OfferCommand, PendingOffer, PendingOfferStore } from "../ports/PendingOfferPort";
 
 /** How long an offer can be confirmed. */
 export const OFFER_TTL_MS = 10 * 60 * 1000;
@@ -44,23 +21,35 @@ export const OFFER_MARKER_PREFIX = "OFFER:";
 export interface ParsedAnswer {
   /** The answer with every marker line removed. */
   text: string;
-  /** The command from a well-formed marker on the last non-empty line, if any. */
+  /** The command from a well-formed marker block that ends the answer, if any. */
   command: OfferCommand | null;
 }
 
 /**
- * Separates the model's optional offer marker from its answer. Only a marker on the last
- * non-empty line is honoured, and only when it is valid JSON of a known shape. Marker lines
- * elsewhere are removed without being honoured, so a raw marker is never shown.
+ * Separates the model's optional offer marker from its answer. A marker is an `OFFER:` line
+ * plus any following JSON continuation lines, since the model may spread the JSON over
+ * several lines. Every marker block is removed, so raw JSON is never shown. Only a block that
+ * ends the answer (nothing but blank lines after it) is honoured, and only when it is valid
+ * JSON of a known shape.
  */
 export function parseOfferMarker(answer: string): ParsedAnswer {
   const lines = answer.split(/\r?\n/);
-  let lastIndex = lines.length - 1;
-  while (lastIndex >= 0 && !lines[lastIndex]!.trim()) lastIndex--;
-  const last = lastIndex >= 0 ? lines[lastIndex]!.trim() : "";
-  const command = last.startsWith(OFFER_MARKER_PREFIX) ? toCommand(last.slice(OFFER_MARKER_PREFIX.length)) : null;
-  const text = lines.filter((line) => !line.trim().startsWith(OFFER_MARKER_PREFIX)).join("\n").trim();
-  return { text, command };
+  const kept: string[] = [];
+  let command: OfferCommand | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (!line.startsWith(OFFER_MARKER_PREFIX)) {
+      kept.push(lines[i]!);
+      continue;
+    }
+    const block = [line.slice(OFFER_MARKER_PREFIX.length)];
+    // JSON strings cannot contain raw line breaks, so a continuation line of the marker starts
+    // with a structural character or a quote.
+    while (i + 1 < lines.length && /^[{}[\]",:]/.test(lines[i + 1]!.trim())) block.push(lines[++i]!);
+    const endsAnswer = lines.slice(i + 1).every((rest) => !rest.trim());
+    command = endsAnswer ? toCommand(block.join("\n")) : null;
+  }
+  return { text: kept.join("\n").trim(), command };
 }
 
 function toCommand(json: string): OfferCommand | null {

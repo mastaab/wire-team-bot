@@ -123,6 +123,8 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
   private readonly slaPollIntervalMs: number;
   /** The service account's own Jira account ID, cached after the first successful lookup. */
   private ownAccountId: string | undefined;
+  /** The lookup in progress, shared by concurrent reads so /myself is requested once. */
+  private ownAccountLookup: Promise<string | undefined> | undefined;
 
   constructor(
     private readonly config: JiraConfig,
@@ -277,6 +279,12 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
    */
   private async readOwnAccountId(): Promise<string | undefined> {
     if (this.ownAccountId !== undefined) return this.ownAccountId;
+    // A failed lookup is not cached, so the next read tries again.
+    this.ownAccountLookup ??= this.lookUpOwnAccountId().finally(() => { this.ownAccountLookup = undefined; });
+    return this.ownAccountLookup;
+  }
+
+  private async lookUpOwnAccountId(): Promise<string | undefined> {
     try {
       const res = await this.request<{ accountId?: unknown }>("GET", "/rest/api/3/myself");
       const accountId = res.data?.accountId;
