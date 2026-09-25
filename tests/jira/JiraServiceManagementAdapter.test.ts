@@ -302,11 +302,13 @@ describe("JiraServiceManagementAdapter.resolveIssue", () => {
 
 describe("JiraServiceManagementAdapter customer replies", () => {
   const COMMENTS = (start: number) => `/rest/servicedeskapi/request/DS-1/comment?public=true&internal=false&start=${start}&limit=100`;
-  const comment = (id: string, isPublic: unknown, iso: string, body = `reply ${id}`) =>
-    ({ id, public: isPublic, body, author: { displayName: `Agent ${id}` }, created: { iso8601: iso, epochMillis: Date.parse(iso) } });
+  const comment = (id: string, isPublic: unknown, iso: string, body = `reply ${id}`, accountId = `acc-${id}`) =>
+    ({ id, public: isPublic, body, author: { accountId, displayName: `Agent ${id}` }, created: { iso8601: iso, epochMillis: Date.parse(iso) } });
+  const MYSELF = "GET /rest/api/3/myself";
+  const ME = json({ accountId: "acc-bot", displayName: "WireTeamBotDemo" });
 
   it("returns only comments explicitly flagged public, never internal notes", async () => {
-    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+    stubJira({ [MYSELF]: [ME], [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
       comment("1", true, "2026-09-25T10:00:00Z"),
       comment("2", false, "2026-09-25T10:05:00Z", `internal ${MARKER}`),
       comment("3", undefined, "2026-09-25T10:06:00Z", `unflagged ${MARKER}`),
@@ -316,11 +318,11 @@ describe("JiraServiceManagementAdapter customer replies", () => {
     const replies = await adapter().listCustomerReplies("DS-1", 3);
     expect(replies.map((r) => r.body)).toEqual(["reply 1", "reply 5"]);
     expect(JSON.stringify(replies)).not.toContain(MARKER);
-    expect(replies[0]).toEqual({ author: "Agent 1", created: new Date("2026-09-25T10:00:00Z"), body: "reply 1" });
+    expect(replies[0]).toEqual({ author: "Agent 1", created: new Date("2026-09-25T10:00:00Z"), body: "reply 1", fromThisBot: false });
   });
 
   it("sorts by creation time and keeps the newest, oldest first", async () => {
-    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+    stubJira({ [MYSELF]: [ME], [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
       comment("c", true, "2026-09-25T12:00:00Z"), comment("a", true, "2026-09-25T09:00:00Z"),
       comment("d", true, "2026-09-25T13:00:00Z"), comment("b", true, "2026-09-25T10:00:00Z"),
     ] })] });
@@ -329,11 +331,12 @@ describe("JiraServiceManagementAdapter customer replies", () => {
 
   it("follows pages until the last one, within a bound", async () => {
     const fetch = stubJira({
+      [MYSELF]: [ME],
       [`GET ${COMMENTS(0)}`]: [json({ isLastPage: false, values: [comment("1", true, "2026-09-25T09:00:00Z")] })],
       [`GET ${COMMENTS(100)}`]: [json({ isLastPage: true, values: [comment("2", true, "2026-09-25T10:00:00Z")] })],
     });
     expect((await adapter().listCustomerReplies("DS-1", 3)).map((r) => r.author)).toEqual(["Agent 1", "Agent 2"]);
-    expect(calls(fetch)).toHaveLength(2);
+    expect(calls(fetch).filter((c) => c !== MYSELF)).toHaveLength(2);
   });
 
   it("stops after five pages even if Jira keeps reporting more", async () => {
@@ -345,13 +348,13 @@ describe("JiraServiceManagementAdapter customer replies", () => {
   });
 
   it("skips replies without a usable body or date and names an unknown author", async () => {
-    stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+    stubJira({ [MYSELF]: [ME], [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
       { id: "1", public: true, body: "  ", created: { iso8601: "2026-09-25T09:00:00Z" } },
       { id: "2", public: true, body: "no date" },
       { id: "3", public: true, body: "kept", created: { iso8601: "2026-09-25T10:00:00Z" } },
     ] })] });
     expect(await adapter().listCustomerReplies("DS-1", 3)).toEqual([
-      { author: "Service desk", created: new Date("2026-09-25T10:00:00Z"), body: "kept" },
+      { author: "Service desk", created: new Date("2026-09-25T10:00:00Z"), body: "kept", fromThisBot: false },
     ]);
   });
 
@@ -365,5 +368,89 @@ describe("JiraServiceManagementAdapter customer replies", () => {
   it("surfaces failures as tracker errors without the body", async () => {
     stubJira({ [`GET ${COMMENTS(0)}`]: [json({ errorMessage: MARKER }, 403)] });
     await expect(adapter().listCustomerReplies("DS-1", 3)).rejects.toThrow("Jira rejected the credentials or scopes (403)");
+  });
+
+  it("marks replies from the bot's own account and no others", async () => {
+    stubJira({ [MYSELF]: [ME], [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+      comment("1", true, "2026-09-25T09:00:00Z", "from wire", "acc-bot"),
+      comment("2", true, "2026-09-25T10:00:00Z"),
+      { id: "3", public: true, body: "no author", created: { iso8601: "2026-09-25T11:00:00Z" } },
+      comment("4", false, "2026-09-25T12:00:00Z", `internal ${MARKER}`, "acc-bot"),
+    ] })] });
+    const replies = await adapter().listCustomerReplies("DS-1", 5);
+    expect(replies.map((r) => [r.body, r.fromThisBot])).toEqual([["from wire", true], ["reply 2", false], ["no author", false]]);
+    expect(JSON.stringify(replies)).not.toContain(MARKER);
+    expect(JSON.stringify(replies)).not.toContain("acc-");
+  });
+
+  it("looks up the bot's own account once per adapter", async () => {
+    const fetch = stubJira({ [MYSELF]: [ME], [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+      comment("1", true, "2026-09-25T09:00:00Z", "from wire", "acc-bot"),
+    ] })] });
+    const jira = adapter();
+    expect((await jira.listCustomerReplies("DS-1", 3))[0].fromThisBot).toBe(true);
+    expect((await jira.listCustomerReplies("DS-1", 3))[0].fromThisBot).toBe(true);
+    expect(calls(fetch).filter((c) => c === MYSELF)).toHaveLength(1);
+  });
+
+  it("still returns replies when the account lookup fails, and retries on the next call", async () => {
+    const log = logger();
+    const fetch = stubJira({
+      [MYSELF]: [json({ message: MARKER }, 500), ME],
+      [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [comment("1", true, "2026-09-25T09:00:00Z", "from wire", "acc-bot")] })],
+    });
+    const jira = adapter(log);
+    const first = await jira.listCustomerReplies("DS-1", 3);
+    expect(first.map((r) => [r.body, r.fromThisBot])).toEqual([["from wire", false]]);
+    expect(log.warn).toHaveBeenCalledWith(expect.any(String), { status: 500 });
+    expect((await jira.listCustomerReplies("DS-1", 3))[0].fromThisBot).toBe(true);
+    expect(calls(fetch).filter((c) => c === MYSELF)).toHaveLength(2);
+    expect(JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.error.mock.calls])).not.toContain(MARKER);
+  });
+
+  it("does not look up the account when there are no public replies", async () => {
+    const fetch = stubJira({ [`GET ${COMMENTS(0)}`]: [json({ isLastPage: true, values: [
+      comment("1", false, "2026-09-25T09:00:00Z", "internal note"),
+    ] })] });
+    expect(await adapter().listCustomerReplies("DS-1", 3)).toEqual([]);
+    expect(calls(fetch)).toEqual([`GET ${COMMENTS(0)}`]);
+  });
+});
+
+describe("JiraServiceManagementAdapter.addCustomerReply", () => {
+  const POST_COMMENT = "POST /rest/servicedeskapi/request/DS-1/comment";
+
+  it("posts a public comment through the Service Management API", async () => {
+    const log = logger();
+    const fetch = stubJira({ [POST_COMMENT]: [json({ id: "10001", public: true }, 201)] });
+    await adapter(log).addCustomerReply("DS-1", `Thanks, on it. ${MARKER}`);
+    expect(calls(fetch)).toEqual([POST_COMMENT]);
+    const init = fetch.mock.calls[0][1];
+    expect(JSON.parse(init.body as string)).toEqual({ body: `Thanks, on it. ${MARKER}`, public: true });
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect(JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.error.mock.calls, log.debug.mock.calls])).not.toContain(MARKER);
+  });
+
+  it("accepts any success status", async () => {
+    stubJira({ [POST_COMMENT]: [empty(204)] });
+    await expect(adapter().addCustomerReply("DS-1", "Done")).resolves.toBeUndefined();
+  });
+
+  it("rejects keys outside the project without calling Jira", async () => {
+    const fetch = stubJira({});
+    await expect(adapter().addCustomerReply("OPS-1", "Hello")).rejects.toThrow("Issue key is outside the configured project");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, "Jira rejected the credentials or scopes (403)"],
+    [500, "Jira request failed (500)"],
+  ])("maps a %s failure without the request or response body", async (status, message) => {
+    const log = logger();
+    stubJira({ [POST_COMMENT]: [json({ errorMessage: `echo ${MARKER}` }, status)] });
+    const error = await adapter(log).addCustomerReply("DS-1", `reply ${MARKER}`).catch((e: Error) => e);
+    expect((error as Error).message).toBe(message);
+    expect(JSON.stringify(error)).not.toContain(MARKER);
+    expect(JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.error.mock.calls, log.debug.mock.calls])).not.toContain(MARKER);
   });
 });

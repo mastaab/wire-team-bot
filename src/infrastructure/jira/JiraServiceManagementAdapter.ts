@@ -69,7 +69,7 @@ interface JiraSla {
 interface JiraComment {
   public?: unknown;
   body?: unknown;
-  author?: { displayName?: string };
+  author?: { accountId?: string; displayName?: string };
   created?: { epochMillis?: number; iso8601?: string };
 }
 
@@ -121,6 +121,8 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly slaPollAttempts: number;
   private readonly slaPollIntervalMs: number;
+  /** The service account's own Jira account ID, cached after the first successful lookup. */
+  private ownAccountId: string | undefined;
 
   constructor(
     private readonly config: JiraConfig,
@@ -213,7 +215,7 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
   async listCustomerReplies(key: string, limit: number): Promise<IssueReply[]> {
     this.assertInProject(key);
     if (limit <= 0) return [];
-    const replies: IssueReply[] = [];
+    const replies: Array<IssueReply & { accountId?: string }> = [];
     for (let page = 0; page < MAX_COMMENT_PAGES; page++) {
       const res = await this.request<{ values?: JiraComment[]; isLastPage?: boolean }>(
         "GET",
@@ -225,18 +227,30 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
         if (comment.public !== true || typeof comment.body !== "string" || !comment.body.trim()) continue;
         const millis = comment.created?.epochMillis ?? Date.parse(comment.created?.iso8601 ?? "");
         if (!Number.isFinite(millis)) continue;
-        replies.push({ author: comment.author?.displayName?.trim() || "Service desk", created: new Date(millis), body: comment.body });
+        replies.push({
+          author: comment.author?.displayName?.trim() || "Service desk",
+          created: new Date(millis),
+          body: comment.body,
+          accountId: comment.author?.accountId,
+        });
       }
       if (res.data?.isLastPage !== false) break;
     }
+    // Only look up the bot's own account when there is a reply to mark.
+    const ownAccountId = replies.length > 0 ? await this.readOwnAccountId() : undefined;
     // The comment order is not documented, so sort explicitly.
     replies.sort((a, b) => a.created.getTime() - b.created.getTime());
-    return replies.slice(-limit);
+    return replies.slice(-limit).map(({ accountId, ...reply }) => ({
+      ...reply,
+      fromThisBot: ownAccountId !== undefined && accountId === ownAccountId,
+    }));
   }
 
-  async addCustomerReply(key: string, _body: string): Promise<void> {
+  async addCustomerReply(key: string, body: string): Promise<void> {
     this.assertInProject(key);
-    throw new IssueTrackerError("Adding replies is not implemented yet");
+    // The service account is an agent, so the comment is an internal note unless it is
+    // explicitly marked public. Always send the flag; never rely on the default.
+    await this.request("POST", `/rest/servicedeskapi/request/${key}/comment`, { body, public: true });
   }
 
   private async requireIssue(key: string): Promise<IssueSnapshot> {
@@ -254,6 +268,25 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
         key, status: err instanceof IssueTrackerError ? err.status : undefined,
       });
       return [];
+    }
+  }
+
+  /**
+   * The bot's own Jira account ID, used to recognise replies sent from Wire. A failed lookup
+   * is not cached, so the next call tries again; until then no reply is marked as the bot's.
+   */
+  private async readOwnAccountId(): Promise<string | undefined> {
+    if (this.ownAccountId !== undefined) return this.ownAccountId;
+    try {
+      const res = await this.request<{ accountId?: unknown }>("GET", "/rest/api/3/myself");
+      const accountId = res.data?.accountId;
+      if (typeof accountId === "string" && accountId) this.ownAccountId = accountId;
+      return this.ownAccountId;
+    } catch (err) {
+      this.logger.warn("Jira own account lookup failed; not marking replies from this bot", {
+        status: err instanceof IssueTrackerError ? err.status : undefined,
+      });
+      return undefined;
     }
   }
 
