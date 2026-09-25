@@ -5,14 +5,14 @@ import type { RetrievalPort, RetrievalResult, RetrievalScope } from "../../ports
 import type { ChannelContext } from "../../ports/ClassifierPort";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
-import { isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/ids/jiraLink";
+import { JIRA_KEY_PATTERN, isKeyInProject, jiraKeyFromLinks, toJiraLink } from "../../../domain/ids/jiraLink";
 import type { Action } from "../../../domain/entities/Action";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import { OFFER_TTL_MS, parseOfferMarker } from "../../services/offers";
-import type { OfferCommand, PendingOfferStore } from "../../services/offers";
+import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { formatSla, statusLabel } from "../jira/formatIssue";
 
 /**
@@ -72,11 +72,41 @@ const REPLIES_SHARED = 3;
 const SHARED_REPLY_MAX = 500;
 const LINK_QUERY_LIMIT = 20;
 const FALLBACK_ANSWER = "I wasn't able to generate a response.";
-/** A model-written offer question that the code-written one replaces. */
+
+/**
+ * Questions that may need live ticket data: Jira or service-desk wording, or asking for the
+ * status or news of something. Other questions make no tracker call. A named project key
+ * also counts (see `asksAboutTickets`).
+ */
+const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|slas?|repl(?:y|ies)|status|latest|updates?|progress|heard|answers?)\b/i;
+
+/*
+ * Change intent that the requester's own question must express before a model offer is
+ * accepted. The model is untrusted and, with sharing on, reads customer-written ticket text,
+ * so an offer on a question that asks for no change ("what did we decide about lunch?") is
+ * dropped. A named project key also counts as a reply target (see `asksForChange`).
+ */
+/** raise: Jira or ticket wording, "raise", "escalate", "open a (...) request", "put ... into". */
+const RAISE_INTENT = /\b(?:jira|tickets?|rais(?:e|es|ed|ing)|escalat(?:e|es|ed|ing)|open\s+(?:a|an)\s+(?:\w+\s+)?request|put\b.*\binto)\b/i;
+/** close: "done", "close", "complete", "finish", "resolve" and their inflections. */
+const CLOSE_INTENT = /\b(?:done|clos(?:e|es|ed|ing)|complet(?:e|es|ed|ing)|finish(?:es|ed|ing)?|resolv(?:e|es|ed|ing))\b/i;
+/** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
+const REPLY_VERB = /\b(?:repl(?:y|ies|ied|ying)|tell|send|let\b.*\bknow|message|answer)\b/i;
+/** reply, second part: the service desk as recipient. */
+const REPLY_TARGET = /\b(?:service\s+desk|jira|tickets?)\b/i;
+
+/** Requester names shorter than this are not checked in reply bodies. */
+const NAME_MIN_LENGTH = 2;
 
 interface TicketCandidate {
   key: string;
   actionId: string;
+}
+
+/** A validated offer and the code-written question that asks the requester to confirm it. */
+interface PreparedOffer {
+  question: string;
+  offer: PendingOffer;
 }
 
 /**
@@ -147,7 +177,7 @@ export class AnswerQuestion {
       }
     }
 
-    if (this.jira?.shareWithModel) {
+    if (this.jira?.shareWithModel && asksAboutTickets(input.question, this.jira.tracker.projectKey)) {
       retrievalResults = [...retrievalResults, ...(await this.linkedTickets(this.jira, input, retrievalResults))];
     }
 
@@ -161,22 +191,42 @@ export class AnswerQuestion {
       input.requester,
     );
 
-    const answer = this.jira ? await this.withOffer(this.jira, input, modelAnswer) : modelAnswer;
+    if (!this.jira) {
+      await this.send(input, modelAnswer, true);
+      return modelAnswer;
+    }
 
-    const mentions = extractMentions(answer, input.members ?? []);
+    // The raw marker is never sent, whether or not the offer is valid.
+    const parsed = parseOfferMarker(modelAnswer);
+    const text = parsed.text || FALLBACK_ANSWER;
+    const prepared = parsed.command ? await this.prepareOffer(this.jira, input, parsed.command) : null;
+    if (!prepared) {
+      await this.send(input, text, true);
+      return text;
+    }
 
-    await this.wireOutbound.sendPlainText(input.conversationId, answer, {
+    // Only the code-written question is sent: the model's own lead-in can imply the change
+    // already happened ("I'll send that ..."), which is wrong until the requester confirms.
+    // No mentions: a quoted reply body may contain @names that must not ping members.
+    // The offer is stored only after the question was sent, so it is never confirmable unseen.
+    await this.send(input, prepared.question, false);
+    this.jira.offers.put(prepared.offer);
+    return prepared.question;
+  }
+
+  private async send(input: AnswerQuestionInput, text: string, withMentions: boolean): Promise<void> {
+    const mentions = withMentions ? extractMentions(text, input.members ?? []) : [];
+    await this.wireOutbound.sendPlainText(input.conversationId, text, {
       replyToMessageId: input.replyToMessageId,
       mentions: mentions.length > 0 ? mentions : undefined,
     });
-
-    return answer;
   }
 
   /**
    * Live data for tickets linked from this conversation: keys of the configured project named
-   * in the question, then keys linked from retrieved actions. The content goes to the model
-   * only; it is never stored or logged.
+   * in the question, then keys shown on retrieved action results (`Jira: <KEY>`; retrieval has
+   * already scoped those to this channel, so no action is read again). The content goes to the
+   * model only; it is never stored or logged.
    */
   private async linkedTickets(jira: AnswerQuestionJira, input: AnswerQuestionInput, results: RetrievalResult[]): Promise<RetrievalResult[]> {
     const candidates: TicketCandidate[] = [];
@@ -192,10 +242,8 @@ export class AnswerQuestion {
       }
       for (const result of results.filter((r) => r.type === "action").slice(0, ACTION_RESULTS_INSPECTED)) {
         if (candidates.length >= TICKETS_SHARED) break;
-        const action = await jira.actions.findById(result.id);
-        if (!action || action.deleted || !sameQualifiedId(action.conversationId, input.conversationId)) continue;
-        const key = jiraKeyFromLinks(action.linkedIds);
-        if (key && isKeyInProject(key, jira.tracker.projectKey)) add({ key, actionId: action.id });
+        const key = linkedKeyInContent(result.content);
+        if (key && isKeyInProject(key, jira.tracker.projectKey)) add({ key, actionId: result.id });
       }
     } catch (err) {
       this.logger?.warn("AnswerQuestion: linked ticket lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
@@ -234,51 +282,56 @@ export class AnswerQuestion {
   }
 
   /**
-   * Strips the model's offer marker and, when code validates the proposed command, stores the
-   * offer and appends a code-written confirmation question. The raw marker is never sent.
+   * Validates a model-proposed offer. Returns the offer with its code-written question, or null
+   * when the offer is dropped. Nothing is stored here: the caller stores the offer after sending.
    */
-  private async withOffer(jira: AnswerQuestionJira, input: AnswerQuestionInput, modelAnswer: string): Promise<string> {
-    const parsed = parseOfferMarker(modelAnswer);
-    const text = parsed.text;
-    const command = parsed.command;
-    if (!command) return text || FALLBACK_ANSWER;
+  private async prepareOffer(jira: AnswerQuestionJira, input: AnswerQuestionInput, command: OfferCommand): Promise<PreparedOffer | null> {
+    if (!asksForChange(command.kind, input.question, jira.tracker.projectKey)) {
+      this.logger?.warn("AnswerQuestion: offer dropped, the question asks for no change", { kind: command.kind });
+      return null;
+    }
 
     const requester = input.requester;
     let question: string | null = null;
     if (requester?.domain) {
       try {
-        question = await this.offerQuestion(jira, command, input.conversationId);
+        question = await this.offerQuestion(jira, command, input.conversationId, requester.name);
       } catch (err) {
         this.logger?.warn("AnswerQuestion: offer validation failed", { kind: command.kind, err: err instanceof Error ? err.name : "UnknownError" });
-        return text || FALLBACK_ANSWER;
+        return null;
       }
     }
     if (!question || !requester?.domain) {
       this.logger?.warn("AnswerQuestion: offer dropped", { kind: command.kind });
-      return text || FALLBACK_ANSWER;
+      return null;
     }
 
     const now = (jira.now ?? (() => new Date()))();
-    jira.offers.put({
-      command,
-      conversationId: input.conversationId,
-      requesterId: { id: requester.id, domain: requester.domain },
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + OFFER_TTL_MS),
-    });
-    // Only the code-written question is sent: the model's own lead-in can imply the change
-    // already happened ("I'll send that ..."), which is wrong until the requester confirms.
-    return question;
+    return {
+      question,
+      offer: {
+        command,
+        conversationId: input.conversationId,
+        requesterId: { id: requester.id, domain: requester.domain },
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + OFFER_TTL_MS),
+      },
+    };
   }
 
-  /** Validates the proposed command against the records; returns the question, or null when invalid. */
-  private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId): Promise<string | null> {
+  /**
+   * Validates the proposed command against the records; returns the question, or null when invalid.
+   * Every question ends with "?" so the router treats a non-exact answer as a follow-up.
+   */
+  private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId, requesterName: string | undefined): Promise<string | null> {
     const projectKey = jira.tracker.projectKey;
     if (command.kind === "reply") {
       if (!isKeyInProject(command.issueKey, projectKey)) return null;
+      // Customer-facing replies never carry the requester's name, whatever the model wrote.
+      if (requesterName && containsName(command.body, requesterName)) return null;
       if (!(await this.actionLinkingKey(jira.actions, command.issueKey, conversationId))) return null;
       const quoted = command.body.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
-      return `Shall I send this reply to **${command.issueKey}** in Jira?\n${quoted}\n\nReply yes or no.`;
+      return `Here is the reply for **${command.issueKey}**:\n${quoted}\n\nShall I send it (yes or no)?`;
     }
 
     const action = await jira.actions.findById(command.actionId);
@@ -286,10 +339,10 @@ export class AnswerQuestion {
     const key = jiraKeyFromLinks(action.linkedIds);
     if (command.kind === "raise") {
       if (action.status === "done" || action.status === "cancelled" || key) return null;
-      return `Shall I raise **${action.id}** "${action.description.replace(/\s+/g, " ").trim()}" in Jira? Reply yes or no.`;
+      return `Shall I raise **${action.id}** "${action.description.replace(/\s+/g, " ").trim()}" in Jira (yes or no)?`;
     }
-    if (action.status === "done" || !key || !isKeyInProject(key, projectKey)) return null;
-    return `Shall I mark **${action.id}** done and close **${key}** in Jira? Reply yes or no.`;
+    if (action.status === "done" || action.status === "cancelled" || !key || !isKeyInProject(key, projectKey)) return null;
+    return `Shall I mark **${action.id}** done and close **${key}** in Jira (yes or no)?`;
   }
 }
 
@@ -303,6 +356,44 @@ function namedKeys(text: string, projectKey: string): string[] {
     if (isKeyInProject(key, projectKey) && !keys.includes(key)) keys.push(key);
   }
   return keys;
+}
+
+/** True when the question may need live ticket data (see `TICKET_QUESTION`). */
+function asksAboutTickets(question: string, projectKey: string): boolean {
+  return TICKET_QUESTION.test(question) || namedKeys(question, projectKey).length > 0;
+}
+
+/** True when the requester's question expresses the change that the offer proposes. */
+function asksForChange(kind: OfferCommand["kind"], question: string, projectKey: string): boolean {
+  switch (kind) {
+    case "raise":
+      return RAISE_INTENT.test(question);
+    case "close":
+      return CLOSE_INTENT.test(question);
+    case "reply":
+      return REPLY_VERB.test(question) && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
+  }
+}
+
+/** Whole-word, case-insensitive match of a display name. Names under two characters never match. */
+function containsName(text: string, name: string): boolean {
+  const trimmed = name.trim();
+  if (trimmed.length < NAME_MIN_LENGTH) return false;
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "iu").test(text);
+}
+
+/**
+ * The ticket key of an action result, from its ` | `-separated `Jira: <KEY>` field. The last
+ * such field wins because the real one follows the free-text description.
+ */
+function linkedKeyInContent(content: string): string | null {
+  let key: string | null = null;
+  for (const field of content.split(" | ")) {
+    const match = /^Jira: (\S+)$/.exec(field.trim());
+    if (match && JIRA_KEY_PATTERN.test(match[1]!)) key = match[1]!;
+  }
+  return key;
 }
 
 /** Compact ticket text for the model. Uses the English status label, never the tracker's status name. */
