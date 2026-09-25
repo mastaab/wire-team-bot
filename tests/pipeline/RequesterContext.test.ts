@@ -28,13 +28,14 @@ it("tells the answer model about the Jira integration only when it is configured
   expect(configured).toContain("connected to the Jira Service Management project DS");
   expect(configured).toContain("Never say that it has no Jira integration");
   expect(configured).toContain("`status of DS-NN`");
-  expect(configured).toContain("`ACT-NNNN to jira`");
-  expect(configured).toContain("`reply to DS-NN: <text>`");
+  expect(configured).toContain("`@Wire Team Bot support: <problem>`");
+  expect(configured).not.toContain("ACT-NNNN");
+  expect(configured).toContain("`@Wire Team Bot reply to DS-NN: <text>`");
   expect(configured).toContain("never call that offer pending");
   expect(configured).toContain("Call them replies from the service desk");
   expect(configured).toContain("You cannot read or change Jira while writing this answer");
   expect(configured).toContain("do not describe internal mechanics");
-  expect(configured).toContain("never state or guess a ticket's status in Jira");
+  expect(configured).toContain("never state or guess a ticket's live status in Jira");
 
   await ask(new OpenAIGeneralAnswerAdapter(llm as never, logger));
   expect(llm.chatCompletion.mock.calls[1][1][0].content).not.toContain("Jira");
