@@ -40,11 +40,11 @@ const ROUTINE_LINE = "- routine: greetings, acknowledgements, chit-chat, bot com
 const LOW_SIGNAL_LINE = "Low signal (discussion-only, question, routine): is_high_signal=false.\n";
 
 const GENERIC_SERVICE_REQUEST_LINE =
-  "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n";
+  "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places), or says a reported problem is solved or asks to close a request\n";
 
 /** The `service_request` line when the operator described what the desk handles. */
 function scopedServiceRequestLine(scope: string): string {
-  return `- service_request: someone brings the service desk something it handles (${scope}): a question to the desk, a fault or need, a replacement part order or a scheduled service all count; or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n`;
+  return `- service_request: someone brings the service desk something it handles (${scope}): a question to the desk, a fault or need, a replacement part order or a scheduled service all count; or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places); or says a reported problem is solved or asks to close a request\n`;
 }
 
 function serviceDeskPrompt(serviceRequestLine: string): string {

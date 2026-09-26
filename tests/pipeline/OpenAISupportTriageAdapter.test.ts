@@ -3,6 +3,7 @@ import { OpenAISupportTriageAdapter } from "../../src/infrastructure/llm/OpenAIS
 import type { LLMClientFactory } from "../../src/infrastructure/llm/LLMClientFactory";
 import type { Logger } from "../../src/application/ports/Logger";
 import { PART_DETAIL_MAX } from "../../src/domain/entities/SupportRequest";
+import { REPLY_BODY_MAX } from "../../src/application/services/offers";
 
 function makeLogger() {
   return { child: vi.fn().mockReturnThis(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;
@@ -42,7 +43,7 @@ describe("OpenAISupportTriageAdapter", () => {
     it("returns a trimmed draft with a listed duplicate key", async () => {
       const { llm } = makeLLM("```json\n" + JSON.stringify({ summary: "  Printer\n jams ", description: " It jams on every job. ", duplicateOf: "ds-7" }) + "\n```");
       const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
-      expect(draft).toEqual({ requestKind: "fault", summary: "Printer jams", description: "It jams on every job.", duplicateOf: "DS-7", addition: null });
+      expect(draft).toEqual({ requestKind: "fault", summary: "Printer jams", description: "It jams on every job.", duplicateOf: "DS-7", addition: null, resolves: null, closingComment: null });
     });
 
     it("asks for the new information as the addition and marks the speaker's recent request", async () => {
@@ -67,13 +68,13 @@ describe("OpenAISupportTriageAdapter", () => {
     it("returns a trimmed addition with a listed duplicate key", async () => {
       const { llm } = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition: "  It jams on floor 2 too. " }));
       const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
-      expect(draft).toEqual({ requestKind: "fault", summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition: "It jams on floor 2 too." });
+      expect(draft).toEqual({ requestKind: "fault", summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition: "It jams on floor 2 too.", resolves: null, closingComment: null });
     });
 
     it("keeps an addition to a listed request even without a summary of its own", async () => {
       const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: "DS-7", addition: "It only happens on the 3rd floor." }));
       const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest("it only happens on the 3rd floor", OPEN);
-      expect(draft).toEqual({ requestKind: "fault", summary: "", description: "", duplicateOf: "DS-7", addition: "It only happens on the 3rd floor." });
+      expect(draft).toEqual({ requestKind: "fault", summary: "", description: "", duplicateOf: "DS-7", addition: "It only happens on the 3rd floor.", resolves: null, closingComment: null });
     });
 
     it("drops a draft with neither a summary nor an addition", async () => {
@@ -105,6 +106,75 @@ describe("OpenAISupportTriageAdapter", () => {
         const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
         expect(draft?.duplicateOf).toBeNull();
       }
+    });
+
+    describe("resolves and closing comment", () => {
+      const COMMENT = "The mirror arrived at depot north.";
+
+      it("asks for a listed request the message resolves and a closing comment from this message only", async () => {
+        const { llm, chatCompletion } = makeLLM("null");
+        await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
+        const system = chatCompletion.mock.calls[0]![1][0].content as string;
+        expect(system).toContain("resolves: the key of a listed open request only when this message says that request is solved, fixed or no longer needed, or asks to close or resolve it");
+        expect(system).toContain("only when the message clearly names or means that one listed request");
+        expect(system).toContain("Good news that does not clearly name or mean one listed request gets null.");
+        expect(system).toContain("closingComment: only when resolves is set");
+        expect(system).toContain("in the speaker's words and from this message only");
+        expect(system).toContain("\"The mirror arrived at depot north.\"");
+        expect(system).toContain("Never invent one.");
+        expect(system).toContain("Use null when the message only asks to close the request");
+        expect(system).toContain("A message that resolves a listed request still gets a result");
+        expect(system).toContain("\"resolves\":\"<listed key>\"|null,\"closingComment\":\"<closing remark>\"|null");
+      });
+
+      it("returns a listed key, normalised to the listed form, with a trimmed comment", async () => {
+        const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: null, addition: null, resolves: " ds-6 ", closingComment: `  ${COMMENT} ` }));
+        const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest("the mirror was delivered, close DS-6 and note it arrived at depot north", OPEN);
+        expect(draft).toEqual({ requestKind: "fault", summary: "", description: "", duplicateOf: null, addition: null, resolves: "DS-6", closingComment: COMMENT });
+      });
+
+      it("keeps a resolve without a comment and without a summary", async () => {
+        for (const closingComment of [null, "   ", 5, undefined]) {
+          const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: null, addition: null, resolves: "DS-7", closingComment }));
+          const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest("please close DS-7", OPEN);
+          expect(draft).toEqual({ requestKind: "fault", summary: "", description: "", duplicateOf: null, addition: null, resolves: "DS-7", closingComment: null });
+        }
+      });
+
+      it("rejects a key that is not among the open requests, with its comment", async () => {
+        for (const resolves of ["DS-99", "OPS-6", 7, ""]) {
+          const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: null, addition: null, resolves, closingComment: COMMENT }));
+          expect(await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
+
+          const withDraft = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf: null, resolves, closingComment: COMMENT }));
+          const draft = await new OpenAISupportTriageAdapter(withDraft.llm, makeLogger()).draftRequest(MESSAGE, OPEN);
+          expect(draft).toMatchObject({ summary: "Printer jams", resolves: null, closingComment: null });
+        }
+      });
+
+      it("drops a comment without a listed request to resolve", async () => {
+        const { llm } = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf: null, resolves: null, closingComment: COMMENT }));
+        const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
+        expect(draft).toMatchObject({ resolves: null, closingComment: null });
+
+        const alone = makeLLM(JSON.stringify({ summary: "", description: "", closingComment: COMMENT }));
+        expect(await new OpenAISupportTriageAdapter(alone.llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
+      });
+
+      it("accepts a comment exactly at the reply limit and drops a longer one, keeping the resolve", async () => {
+        const at = makeLLM(JSON.stringify({ summary: "", description: "", resolves: "DS-6", closingComment: "c".repeat(REPLY_BODY_MAX) }));
+        expect(await new OpenAISupportTriageAdapter(at.llm, makeLogger()).draftRequest(MESSAGE, OPEN))
+          .toMatchObject({ resolves: "DS-6", closingComment: "c".repeat(REPLY_BODY_MAX) });
+
+        const over = makeLLM(JSON.stringify({ summary: "", description: "", resolves: "DS-6", closingComment: "c".repeat(REPLY_BODY_MAX + 1) }));
+        expect(await new OpenAISupportTriageAdapter(over.llm, makeLogger()).draftRequest(MESSAGE, OPEN))
+          .toMatchObject({ resolves: "DS-6", closingComment: null });
+      });
+
+      it("returns null for a missing resolves on an old-shape answer without a summary", async () => {
+        const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: null, addition: null }));
+        expect(await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
+      });
     });
 
     it("shows (none) when there are no open requests", async () => {
@@ -160,6 +230,8 @@ describe("OpenAISupportTriageAdapter", () => {
           description: "The brake warning light is on.",
           duplicateOf: null,
           addition: null,
+          resolves: null,
+          closingComment: null,
         });
       });
 
@@ -191,7 +263,7 @@ describe("OpenAISupportTriageAdapter", () => {
 
       it("keeps the kind on an addition without a summary", async () => {
         const draft = await draftWith({ summary: "", description: "", duplicateOf: "DS-7", addition: "It happened again.", requestKind: "fault" });
-        expect(draft).toEqual({ requestKind: "fault", summary: "", description: "", duplicateOf: "DS-7", addition: "It happened again." });
+        expect(draft).toEqual({ requestKind: "fault", summary: "", description: "", duplicateOf: "DS-7", addition: "It happened again.", resolves: null, closingComment: null });
       });
 
       it("asks for the kind and only the stated essentials", async () => {

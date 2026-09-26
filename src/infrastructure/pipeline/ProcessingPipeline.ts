@@ -83,8 +83,9 @@ export class ProcessingPipeline {
   ): Promise<void> {
     const supportHelp = this.deps.supportHelp;
     if (!supportHelp) return;
-    // Updates and blockers too: they may add information to an open request (see the use case).
-    const relevant: MessageCategory[] = ["service_request", "request_status", "update", "blocker"];
+    // Updates, blockers, actions and decisions too: they may add information to or resolve an
+    // open request (see the use case).
+    const relevant: MessageCategory[] = ["service_request", "request_status", "update", "blocker", "action", "decision"];
     if (!result.categories.some((category) => relevant.includes(category))) return;
     try {
       await supportHelp.execute({

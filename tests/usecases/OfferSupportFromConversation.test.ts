@@ -4,7 +4,7 @@ import type { OfferSupportInput } from "../../src/application/usecases/jira/Offe
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
 import { formatIssueStatus } from "../../src/application/usecases/jira/formatIssue";
 import {
-  OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatMissingPartsQuestion, formatReplyQuestion, formatSupportQuestion,
+  OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatMissingPartsQuestion, formatReplyQuestion, formatResolveQuestion, formatSupportQuestion,
 } from "../../src/application/services/offers";
 import { PART_DETAIL_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
@@ -18,6 +18,8 @@ const DRAFT: SupportDraft = {
   description: "The printer on floor 3 jams on every job.",
   duplicateOf: null,
   addition: null,
+  resolves: null,
+  closingComment: null,
 };
 
 function input(overrides: Partial<OfferSupportInput> = {}): OfferSupportInput {
@@ -86,7 +88,7 @@ describe("OfferSupportFromConversation", () => {
       expect(sent).toHaveLength(1);
     });
 
-    it("does nothing without a service-desk, update or blocker category", async () => {
+    it("does nothing without a service-desk, update, blocker, action or decision category", async () => {
       const { triage, sent, useCase } = setup();
 
       await useCase.execute(input({ categories: ["discussion", "question"] }));
@@ -98,7 +100,7 @@ describe("OfferSupportFromConversation", () => {
   });
 
   describe("update or blocker", () => {
-    it.each([["update"], ["blocker"]])("offers to add new information to an open request for a %s", async (category) => {
+    it.each([["update"], ["blocker"], ["action"], ["decision"]])("offers to add new information to an open request for a %s", async (category) => {
       const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It only happens on the new ThinkPads." });
 
       await useCase.execute(input({ categories: [category] }));
@@ -111,9 +113,12 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it.each([
-      ["update", { duplicateOf: null, addition: null }],
-      ["blocker", { duplicateOf: null, addition: null }],
+      ["update", { duplicateOf: null, addition: null, resolves: null, closingComment: null }],
+      ["blocker", { duplicateOf: null, addition: null, resolves: null, closingComment: null }],
       ["update", { duplicateOf: "DS-99", addition: "It happened again." }],
+      ["action", { duplicateOf: null, addition: null, resolves: null, closingComment: null }],
+      ["decision", { duplicateOf: null, addition: null, resolves: null, closingComment: null }],
+      ["action", { duplicateOf: null, addition: null, resolves: "DS-99", closingComment: null }],
     ] as const)("never offers to raise a new request from a %s (draft %j)", async (category, overrides) => {
       const { offers, sent, useCase } = setup(undefined, { ...DRAFT, ...overrides });
 
@@ -165,7 +170,7 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("collapses whitespace in the summary and trims the description", async () => {
-      const { offers, sent, useCase } = setup(undefined, { requestKind: "fault", summary: "  Printer\n jams  ", description: "\n Printer jams on every job. \n", duplicateOf: null, addition: null });
+      const { offers, sent, useCase } = setup(undefined, { requestKind: "fault", summary: "  Printer\n jams  ", description: "\n Printer jams on every job. \n", duplicateOf: null, addition: null, resolves: null, closingComment: null });
 
       await useCase.execute(input());
 
@@ -174,7 +179,7 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("shows only the summary when the description repeats it", async () => {
-      const { sent, useCase } = setup(undefined, { requestKind: "fault", summary: "Printer jams", description: "printer jams", duplicateOf: null, addition: null });
+      const { sent, useCase } = setup(undefined, { requestKind: "fault", summary: "Printer jams", description: "printer jams", duplicateOf: null, addition: null, resolves: null, closingComment: null });
 
       await useCase.execute(input());
 
@@ -363,7 +368,7 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("accepts a draft exactly at the bounds", async () => {
-      const draft: SupportDraft = { requestKind: "fault", summary: "x".repeat(SUPPORT_SUMMARY_MAX), description: "y".repeat(OFFER_DESCRIPTION_MAX), duplicateOf: null, addition: null };
+      const draft: SupportDraft = { requestKind: "fault", summary: "x".repeat(SUPPORT_SUMMARY_MAX), description: "y".repeat(OFFER_DESCRIPTION_MAX), duplicateOf: null, addition: null, resolves: null, closingComment: null };
       const { offers, useCase } = setup(undefined, draft);
 
       await useCase.execute(input());
@@ -584,7 +589,7 @@ describe("OfferSupportFromConversation", () => {
 
     it("never logs the message, the draft, the addition or the summaries", async () => {
       const records = [makeRequest({ summary: "PRIVATE_SUMMARY_MARKER" })];
-      const draft: SupportDraft = { requestKind: "fault", summary: "PRIVATE_DRAFT_MARKER", description: "PRIVATE_DESCRIPTION_MARKER", duplicateOf: null, addition: null };
+      const draft: SupportDraft = { requestKind: "fault", summary: "PRIVATE_DRAFT_MARKER", description: "PRIVATE_DESCRIPTION_MARKER", duplicateOf: null, addition: null, resolves: null, closingComment: null };
       const addition = "PRIVATE_ADDITION_MARKER";
       for (const d of [
         draft,
@@ -599,6 +604,172 @@ describe("OfferSupportFromConversation", () => {
         for (const marker of ["PRIVATE_MESSAGE_MARKER", "PRIVATE_SUMMARY_MARKER", "PRIVATE_DRAFT_MARKER", "PRIVATE_DESCRIPTION_MARKER", "PRIVATE_ADDITION_MARKER"]) {
           expect(logged).not.toContain(marker);
         }
+      }
+    });
+  });
+
+  describe("resolve", () => {
+    const COMMENT = "The mirror arrived at depot north.";
+    const RESOLVE: SupportDraft = { ...DRAFT, summary: "", description: "", resolves: "DS-6", closingComment: COMMENT };
+
+    it("offers to resolve with the closing comment as a native reply, then stores a resolve offer", async () => {
+      const { offers, wire, sent, useCase } = setup(undefined, RESOLVE);
+
+      await useCase.execute(input());
+
+      expect(sent).toEqual([formatResolveQuestion("DS-6", "VPN drops every ten minutes", COMMENT)]);
+      expect(sent[0]).toBe(`Shall I resolve **DS-6** "VPN drops every ten minutes" with the service desk and add this comment?\n> ${COMMENT}\n\n(yes or no)?`);
+      expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+      expect(offers.put).toHaveBeenCalledTimes(1);
+      const offer = offers.put.mock.calls[0]![0];
+      expect(offer).toMatchObject({ command: { kind: "resolve", issueKey: "DS-6", comment: COMMENT }, conversationId: convId, requesterId: alice });
+      expect(offer.expiresAt.getTime() - offer.createdAt.getTime()).toBe(OFFER_TTL_MS);
+      expect(wire.sendPlainText.mock.invocationCallOrder[0]).toBeLessThan(offers.put.mock.invocationCallOrder[0]!);
+    });
+
+    it("offers a plain resolve without a comment", async () => {
+      const { offers, sent, useCase } = setup(undefined, { ...RESOLVE, closingComment: null });
+
+      await useCase.execute(input());
+
+      expect(sent).toEqual([`Shall I resolve **DS-6** "VPN drops every ten minutes" with the service desk (yes or no)?`]);
+      expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6" });
+    });
+
+    it("treats a blank comment as none and trims the comment", async () => {
+      const blank = setup(undefined, { ...RESOLVE, closingComment: "   " });
+      await blank.useCase.execute(input());
+      expect(blank.offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6" });
+
+      const padded = setup(undefined, { ...RESOLVE, closingComment: `  ${COMMENT}\n` });
+      await padded.useCase.execute(input());
+      expect(padded.offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6", comment: COMMENT });
+    });
+
+    it("normalises the key to the listed form", async () => {
+      const { offers, useCase } = setup(undefined, { ...RESOLVE, resolves: " ds-6 " });
+
+      await useCase.execute(input());
+
+      expect(offers.put.mock.calls[0]![0].command).toMatchObject({ kind: "resolve", issueKey: "DS-6" });
+    });
+
+    it("accepts a comment exactly at the reply limit and offers nothing for a longer one", async () => {
+      const at = setup(undefined, { ...RESOLVE, closingComment: "c".repeat(REPLY_BODY_MAX) });
+      await at.useCase.execute(input());
+      expect(at.offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6", comment: "c".repeat(REPLY_BODY_MAX) });
+
+      const over = setup(undefined, { ...RESOLVE, closingComment: "c".repeat(REPLY_BODY_MAX + 1) });
+      await over.useCase.execute(input());
+      expect(over.sent).toEqual([]);
+      expect(over.offers.put).not.toHaveBeenCalled();
+    });
+
+    it("takes precedence over an addition", async () => {
+      const { offers, sent, useCase } = setup(undefined, { ...RESOLVE, duplicateOf: "DS-6", addition: "It arrived today." });
+
+      await useCase.execute(input());
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain("Shall I resolve **DS-6**");
+      expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6", comment: COMMENT });
+    });
+
+    it("takes precedence over raising a new request", async () => {
+      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, resolves: "DS-6", closingComment: null });
+
+      await useCase.execute(input());
+
+      expect(sent).toEqual([formatResolveQuestion("DS-6", "VPN drops every ten minutes")]);
+      expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6" });
+    });
+
+    it("ignores a key that is not an open request of this conversation and falls back to the other paths", async () => {
+      const records = [makeRequest(), makeRequest({ key: "DS-7", statusCategory: "done" })];
+      for (const resolves of ["DS-99", "DS-7"]) {
+        const { offers, useCase } = setup(records, { ...DRAFT, resolves, closingComment: COMMENT });
+        await useCase.execute(input());
+        expect(offers.put.mock.calls[0]![0].command).toMatchObject({ kind: "support" });
+      }
+
+      const additionOnly = setup(records, { ...RESOLVE, resolves: "DS-99" });
+      await additionOnly.useCase.execute(input({ categories: ["update"] }));
+      expect(additionOnly.sent).toEqual([]);
+    });
+
+    it.each([["update"], ["blocker"], ["action"], ["decision"]])("offers to resolve for a %s", async (category) => {
+      const { offers, sent, useCase } = setup(undefined, RESOLVE);
+
+      await useCase.execute(input({ categories: [category] }));
+
+      expect(sent).toHaveLength(1);
+      expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6", comment: COMMENT });
+    });
+
+    it.each([["action"], ["decision"]])("makes no model call for an %s when the conversation has no open request", async (category) => {
+      const { triage, sent, useCase } = setup([], RESOLVE);
+
+      await useCase.execute(input({ categories: [category] }));
+
+      expect(triage.draftRequest).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
+    });
+
+    it("does not offer while the speaker has a live offer, nor replace one made during the draft", async () => {
+      const live = setup(undefined, RESOLVE);
+      live.offers.has.mockReturnValue(true);
+      await live.useCase.execute(input());
+      expect(live.triage.draftRequest).not.toHaveBeenCalled();
+      expect(live.sent).toEqual([]);
+
+      const busy = setup(undefined, RESOLVE);
+      busy.offers.has.mockReturnValueOnce(false).mockReturnValue(true);
+      await busy.useCase.execute(input());
+      expect(busy.sent).toEqual([]);
+      expect(busy.offers.put).not.toHaveBeenCalled();
+    });
+
+    it("sends and stores nothing when the job was cancelled during the draft", async () => {
+      const controller = new AbortController();
+      const { triage, offers, sent, useCase } = setup(undefined, RESOLVE);
+      triage.draftRequest.mockImplementation(async () => { controller.abort(); return RESOLVE; });
+
+      await useCase.execute(input({ signal: controller.signal }));
+
+      expect(sent).toEqual([]);
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("does not store the offer when the channel is paused while the question is being sent", async () => {
+      const controller = new AbortController();
+      const { wire, offers, sent, useCase } = setup(undefined, RESOLVE);
+      wire.sendPlainText.mockImplementation(async (_conv: unknown, text: string) => { sent.push(text); controller.abort(); });
+
+      await useCase.execute(input({ signal: controller.signal }));
+
+      expect(sent).toHaveLength(1);
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("does not store the offer when sending the question failed", async () => {
+      const { wire, offers, useCase } = setup(undefined, RESOLVE);
+      wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
+
+      await expect(useCase.execute(input())).resolves.toBeUndefined();
+
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("never logs the closing comment", async () => {
+      const marker = "PRIVATE_COMMENT_MARKER";
+      for (const closingComment of [marker, marker.repeat(200)]) {
+        const { logger, wire, useCase } = setup(undefined, { ...RESOLVE, closingComment });
+        await useCase.execute(input());
+        expect(loggedText(logger)).not.toContain(marker);
+
+        wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
+        await useCase.execute(input());
+        expect(loggedText(logger)).not.toContain(marker);
       }
     });
   });
