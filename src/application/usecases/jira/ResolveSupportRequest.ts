@@ -85,7 +85,9 @@ export class ResolveSupportRequest {
         this.requests, this.auditLog, request, live.statusCategory, botActor(input.conversationId), this.logger,
       );
       if (live.statusCategory === "done") {
-        await reply(`**${key}** is already resolved.`);
+        await reply(comment !== undefined
+          ? `**${key}** is already resolved, so I haven't added your comment.`
+          : `**${key}** is already resolved.`);
         return null;
       }
       current = refreshed ?? { ...request, statusCategory: live.statusCategory };

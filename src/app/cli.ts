@@ -305,7 +305,7 @@ async function main() {
     snoozeReminder:         new SnoozeReminder(remindersRepo, dateTimeService, scheduler, wireOutbound, auditLogRepo),
     answerQuestion,
     statusCommand,
-    setChannelTimezone: new SetChannelTimezone(channelConfigRepo, auditLogRepo, wireOutbound, config.app.defaultTimezone),
+    setChannelTimezone: new SetChannelTimezone(channelConfigRepo, auditLogRepo, wireOutbound, config.app.defaultTimezone, undefined, logger),
     defaultTimezone: config.app.defaultTimezone,
     catchMeUpCommand:       catchMeUp,
     raiseSupportRequest,

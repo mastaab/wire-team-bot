@@ -96,11 +96,14 @@ function toCommand(json: string): OfferCommand | null {
     }
     case "resolve": {
       if (!JIRA_KEY_PATTERN.test(issueKey)) return null;
-      // A comment is optional, but one that is present and unusable drops the offer, so the
-      // requester is never asked to resolve without the note they asked for.
+      // A comment is optional and an empty one counts as absent, but a comment that is not text
+      // or is too long drops the offer, so the requester is never asked to resolve without the
+      // note they asked for.
       if (v.comment === undefined || v.comment === null) return { kind: "resolve", issueKey };
-      const comment = typeof v.comment === "string" ? v.comment.trim() : "";
-      if (!comment || comment.length > REPLY_BODY_MAX) return null;
+      if (typeof v.comment !== "string") return null;
+      const comment = v.comment.trim();
+      if (!comment) return { kind: "resolve", issueKey };
+      if (comment.length > REPLY_BODY_MAX) return null;
       return { kind: "resolve", issueKey, comment };
     }
     default:

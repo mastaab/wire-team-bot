@@ -158,7 +158,7 @@ describe("AnswerQuestion with Jira: stored support requests", () => {
     const action: RetrievalResult = { id: "ACT-0001", type: "action", content: "ACT-0001", sourceChannel: "conv-1@wire.com", sourceDate: NOW, confidence: 0.9, pathsMatched: ["structured"] };
     const { run, passedResults } = setup({ requests: [makeRequest("DS-6")], results: [action] });
     await run("Anything recorded?");
-    expect(passedResults().map((r) => r.id)).toEqual(["ACT-0001", "DS-6"]);
+    expect(passedResults().map((r) => r.id)).toEqual(["ACT-0001", "DS-6", "channel-timezone"]);
   });
 
   it("bounds the stored requests to the newest ten plus named keys of this conversation", async () => {
@@ -211,7 +211,7 @@ describe("AnswerQuestion with Jira: stored support requests", () => {
   it("answers without the requests when the lookup fails", async () => {
     const { run, passedResults, sent, logger } = setup({ repo: { listByConversation: vi.fn(async () => { throw new Error("db down"); }) } });
     await run("Anything?");
-    expect(passedResults()).toEqual([]);
+    expect(passedResults().map((r) => r.id)).toEqual(["channel-timezone"]);
     expect(sent).toEqual(["Here is the answer."]);
     expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: support request lookup failed", { err: "Error" });
   });
@@ -235,10 +235,24 @@ describe("AnswerQuestion with Jira: live ticket data", () => {
         "DS-6: Summary of DS-6",
         "Status: To do",
         "Time to done: running, 15h left of 16h",
-        "Reply from Service Desk Agent at 2026-09-24T09:00:00.000Z: We are looking into it.",
-        "Reply from your team via Wire at 2026-09-24T10:00:00.000Z: Thanks.",
+        "Reply from Service Desk Agent at 24 Sept, 09:00 UTC: We are looking into it.",
+        "Reply from your team via Wire at 24 Sept, 10:00 UTC: Thanks.",
       ].join("\n"),
     }]);
+  });
+
+  it("shows reply times in the channel's timezone and tells the model the zone", async () => {
+    const replies: IssueReply[] = [{ author: "Agent", created: new Date("2026-09-24T09:00:00Z"), body: "On it." }];
+    const { run, ofType, passedResults } = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true,
+      tracker: { listCustomerReplies: vi.fn(async () => replies) },
+    });
+    await run("Any news on my VPN issue?", { timezone: "Europe/Berlin" });
+    expect(ofType("jira_ticket")[0]!.content).toContain("Reply from Agent at 24 Sept, 11:00 CEST: On it.");
+    expect(passedResults().find((r) => r.id === "channel-timezone")).toEqual({
+      id: "channel-timezone", type: "summary", sourceChannel: "conv-1@wire.com", sourceDate: NOW, confidence: 1, pathsMatched: ["channel_config"],
+      content: "This channel's timezone is Europe/Berlin; times of day in service-desk replies are shown in it.",
+    });
   });
 
   it("says when there are no service-desk replies", async () => {
@@ -867,12 +881,19 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
     }]);
   });
 
-  it("does not pass a pending resolve offer or an absent one", async () => {
-    for (const pendingOffer of [{ kind: "resolve", issueKey: "DS-6" } as const, undefined]) {
-      const { run, passedResults } = setup({ requests: [vpn()], modelAnswer: "Noted." });
-      await run("It started on Monday", { pendingOffer });
-      expect(pendingResults(passedResults())).toEqual([]);
-    }
+  it("passes a plain pending resolve offer, so a comment can be added to it", async () => {
+    const pendingOffer: OfferCommand = { kind: "resolve", issueKey: "DS-6" };
+    const { run, passedResults } = setup({ requests: [vpn()], modelAnswer: "Noted." });
+    await run("also add the comment 'thanks'", { pendingOffer });
+    expect(pendingResults(passedResults()).map((r) => r.content)).toEqual([
+      `Pending offer being amended (not confirmed, nothing was sent; the requester's message changes it): ${JSON.stringify(pendingOffer)}`,
+    ]);
+  });
+
+  it("does not pass a pending offer when there is none", async () => {
+    const { run, passedResults } = setup({ requests: [vpn()], modelAnswer: "Noted." });
+    await run("It started on Monday");
+    expect(pendingResults(passedResults())).toEqual([]);
   });
 
   it("accepts a revised support offer without change intent, shows it in full and stores it", async () => {
@@ -929,9 +950,18 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
     expect(sent).toEqual(["I haven't changed anything with the service desk.\nTo resolve it, use `@Wire Team Bot resolve DS-6`."]);
   });
 
-  it("does not exempt a revision of a pending resolve offer", async () => {
-    const { stored, run } = setup({ requests: [vpn()], modelAnswer: 'OFFER: {"kind":"resolve","issueKey":"DS-6"}' });
-    await run("It started on Monday", { pendingOffer: { kind: "resolve", issueKey: "DS-6" } });
+  it("turns a plain resolve offer into a resolve with a comment when the requester adds one", async () => {
+    const withComment = `OFFER: ${JSON.stringify({ kind: "resolve", issueKey: "DS-6", comment: "thanks" })}`;
+    const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: withComment });
+    await run("also add the comment 'thanks'", { pendingOffer: { kind: "resolve", issueKey: "DS-6" }, amendOnly: true });
+    expect(sent).toEqual(['Shall I resolve **DS-6** "VPN drops" with the service desk and add this comment?\n> thanks\n\n(yes or no)?']);
+    expect(stored.map((o) => o.command)).toEqual([{ kind: "resolve", issueKey: "DS-6", comment: "thanks" }]);
+  });
+
+  it("applies the change-intent check to a resolve revision for another request", async () => {
+    const other = `OFFER: ${JSON.stringify({ kind: "resolve", issueKey: "DS-7", comment: "thanks" })}`;
+    const { stored, run } = setup({ requests: [vpn(), makeRequest("DS-7")], modelAnswer: other });
+    await run("also add the comment 'thanks'", { pendingOffer: { kind: "resolve", issueKey: "DS-6" } });
     expect(stored).toHaveLength(0);
   });
 

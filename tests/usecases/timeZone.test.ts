@@ -3,12 +3,12 @@ import { canonicalTimeZone } from "../../src/domain/services/timeZone";
 import { resolveDefaultTimezone } from "../../src/app/config";
 
 describe("canonicalTimeZone", () => {
-  it.each([["Europe/Berlin", "Europe/Berlin"], ["europe/berlin", "Europe/Berlin"], [" UTC ", "UTC"], ["America/New_York", "America/New_York"]])(
+  it.each([["Europe/Berlin", "Europe/Berlin"], ["europe/berlin", "Europe/Berlin"], [" UTC ", "UTC"], ["utc", "UTC"],["America/New_York", "America/New_York"]])(
     "accepts %s as %s", (input, expected) => {
       expect(canonicalTimeZone(input)).toBe(expected);
     });
 
-  it.each(["", "Mars/Olympus", "CEST", "Berlin time"])("rejects %j", (input) => {
+  it.each(["", "Mars/Olympus", "CEST", "Berlin time", "est", "cet", "gmt", "+01:00", "Etc/GMT+1"])("rejects %j", (input) => {
     expect(canonicalTimeZone(input)).toBeNull();
   });
 });

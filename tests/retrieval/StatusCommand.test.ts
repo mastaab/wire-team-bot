@@ -10,7 +10,7 @@ interface RecordCounts {
 
 function makeDeps(channelCfg: ChannelConfig | null, entityNames: string[] = [], records: RecordCounts = {}) {
   return {
-    channelConfig: { get: vi.fn().mockResolvedValue(channelCfg), upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]) },
+    channelConfig: { get: vi.fn().mockResolvedValue(channelCfg), upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]) },
     entityRepo: { listNames: vi.fn().mockResolvedValue(entityNames), upsertWithDedup: vi.fn(), upsertRelationship: vi.fn() },
     actionRepo: { query: vi.fn().mockResolvedValue(records.actions ?? []), create: vi.fn(), update: vi.fn(), findById: vi.fn(), nextId: vi.fn() },
     reminderRepo: { query: vi.fn().mockResolvedValue(records.reminders ?? []), create: vi.fn(), update: vi.fn(), findById: vi.fn(), nextId: vi.fn() },

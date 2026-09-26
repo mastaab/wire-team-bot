@@ -28,3 +28,20 @@ export function formatTimeInZone(date: Date, zone: string, style: TimeInZoneStyl
     return format("UTC");
   }
 }
+
+/**
+ * The calendar date in the given IANA zone as `YYYY-MM-DD`, e.g. the instant
+ * 2026-09-30T23:30Z is "2026-10-01" in Europe/Berlin. An unknown zone falls back to UTC.
+ */
+export function formatDateInZone(date: Date, zone: string): string {
+  const format = (timeZone: string): string => {
+    const parts = new Intl.DateTimeFormat("en-GB", { year: "numeric", month: "2-digit", day: "2-digit", timeZone }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes): string => parts.find((p) => p.type === type)?.value ?? "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  };
+  try {
+    return format(zone);
+  } catch {
+    return format("UTC");
+  }
+}
