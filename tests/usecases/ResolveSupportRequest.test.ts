@@ -170,7 +170,7 @@ describe("ResolveSupportRequest", () => {
 
       expect(tracker.getIssue).toHaveBeenCalledWith("DS-6");
       expect(tracker.addCustomerReply).not.toHaveBeenCalled();
-      expect(sent).toEqual(["**DS-6** is already resolved."]);
+      expect(sent).toEqual(["**DS-6** is already resolved, so I haven't added your comment."]);
     });
 
     it("sends the comment and resolves a request the desk reopened, after the live read", async () => {
