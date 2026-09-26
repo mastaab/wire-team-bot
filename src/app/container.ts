@@ -38,6 +38,8 @@ import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraService
 import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPendingOfferStore";
 import { ReplyToServiceDesk } from "../application/usecases/jira/ReplyToServiceDesk";
 import { ConfirmOffer } from "../application/usecases/jira/ConfirmOffer";
+import { WatchSupportRequests } from "../application/usecases/jira/WatchSupportRequests";
+import { startIntervalRunner, type IntervalRunner } from "./intervalRunner";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
 import { ReassignAction } from "../application/usecases/actions/ReassignAction";
@@ -220,6 +222,10 @@ export function createContainer(config: Config, logger: Logger): Container {
   const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  // Announces changes made in Jira; started once the Wire client is ready (see getWireClient).
+  const watchSupportRequests = issueTracker && supportRequestsRepo && config.jira?.watchSeconds
+    ? new WatchSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, channelConfigRepo, logger)
+    : undefined;
   const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
     ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)
     : undefined;
@@ -344,6 +350,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   scheduler.schedule({ id: "weekly_summary_all", type: "weekly_summary_all", runAt: nextMondayAt8UTC(),  payload: {} });
 
   let sdkPromise: Promise<WireAppSdk> | null = null;
+  let jiraWatch: IntervalRunner | undefined;
 
   return {
     async getWireClient(): Promise<WireAppSdk> {
@@ -395,12 +402,18 @@ export function createContainer(config: Config, logger: Logger): Container {
             logger.error("Failed to hydrate member cache from SDK store", { err: (err instanceof Error ? err.name : "UnknownError") });
           }
 
+          if (watchSupportRequests && config.jira?.watchSeconds) {
+            jiraWatch = startIntervalRunner("Jira watch", () => watchSupportRequests.check(), config.jira.watchSeconds * 1000, logger);
+            logger.info("Watching support requests for Jira changes", { intervalSeconds: config.jira.watchSeconds });
+          }
+
           return sdk;
         });
       }
       return sdkPromise;
     },
     async shutdown(): Promise<void> {
+      jiraWatch?.stop();
       await getPrismaClient().$disconnect();
     },
   };
