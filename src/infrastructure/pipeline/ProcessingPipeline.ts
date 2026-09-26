@@ -14,7 +14,7 @@ import type { AuditLogRepository } from "../../domain/repositories/AuditLogRepos
  * All errors are caught and logged; the pipeline never throws.
  */
 
-import type { ClassifierPort, ChannelContext } from "../../application/ports/ClassifierPort";
+import type { ClassifierPort, ChannelContext, ClassifyResult } from "../../application/ports/ClassifierPort";
 import type { ExtractionPort, KnownAction } from "../../application/ports/ExtractionPort";
 import type { EmbeddingService } from "../../application/ports/EmbeddingPort";
 import type { EntityRepository } from "../../domain/repositories/EntityRepository";
@@ -30,6 +30,7 @@ import type { QualifiedId } from "../../domain/ids/QualifiedId";
 import type { LLMClientFactory } from "../llm/LLMClientFactory";
 import type { Decision } from "../../domain/entities/Decision";
 import type { Action } from "../../domain/entities/Action";
+import type { OfferSupportFromConversationPort } from "../../application/usecases/jira/OfferSupportFromConversation";
 
 export interface MessageJob {
   messageId: string;
@@ -64,6 +65,8 @@ export interface PipelineDeps {
   extractConfidenceMin: number;
   /** Cosine similarity threshold for contradiction detection (default 0.78). */
   contradictionThreshold: number;
+  /** Passive service-desk help; set only when Jira is configured and passive help is on. */
+  supportHelp?: OfferSupportFromConversationPort;
 }
 
 export class ProcessingPipeline {
@@ -72,6 +75,30 @@ export class ProcessingPipeline {
   async process(job: MessageJob, signal?: AbortSignal): Promise<void> {
     try { await this.processActive(job, signal); }
     catch (err) { this.deps.logger.error("Pipeline processing failed", { channelId: job.channelId, messageId: job.messageId, errorType: err instanceof Error ? err.name : "UnknownError" }); }
+  }
+
+  /** Passive service-desk help for a service-desk category; its failures never affect the rest of the pipeline. */
+  private async offerSupportHelp(
+    job: MessageJob, result: ClassifyResult, timezone: string | undefined, log: Logger, signal?: AbortSignal,
+  ): Promise<void> {
+    const supportHelp = this.deps.supportHelp;
+    if (!supportHelp) return;
+    if (!result.categories.includes("service_request") && !result.categories.includes("request_status")) return;
+    try {
+      await supportHelp.execute({
+        text: job.text,
+        messageId: job.messageId,
+        conversationId: job.conversationId,
+        senderId: job.senderId,
+        senderName: job.senderName || undefined,
+        categories: result.categories,
+        confidence: result.confidence,
+        timezone,
+        signal,
+      });
+    } catch (err) {
+      log.warn("Pipeline: passive service-desk help failed", { err: (err instanceof Error ? err.name : "UnknownError") });
+    }
   }
 
   private async processActive(job: MessageJob, signal?: AbortSignal): Promise<void> {
@@ -115,6 +142,9 @@ export class ProcessingPipeline {
       is_high_signal: classifyResult.is_high_signal,
       confidence: classifyResult.confidence,
     });
+
+    await this.offerSupportHelp(job, classifyResult, channelCtx.timezone, log, signal);
+    if (signal?.aborted) return;
 
     if (!classifyResult.is_high_signal) {
       // Low-signal: write a lightweight discussion signal and stop
