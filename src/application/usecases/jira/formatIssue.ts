@@ -1,4 +1,5 @@
 import type { IssueReply, IssueSnapshot, IssueStatusCategory, SlaSummary } from "../../ports/IssueTrackerPort";
+import { formatTimeInZone } from "../../services/formatTimeInZone";
 
 /** Longest service-desk reply shown in Wire; the ticket has the full text. */
 const REPLY_DISPLAY_MAX = 500;
@@ -60,21 +61,10 @@ export function formatReplies(replies: readonly IssueReply[], timeZone: string):
     // Every quoted line is non-empty: an empty "> " line ends the quote in Markdown.
     const quoted = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`).join("\n");
     const author = reply.fromThisBot ? "Your team (via Wire)" : reply.author;
-    return `**${author}**, ${formatReplyTime(reply.created, timeZone)}\n${quoted}`;
+    return `**${author}**, ${formatTimeInZone(reply.created, timeZone, "dayMonth")}\n${quoted}`;
   });
   // Blank lines between blocks, so a following author line is not pulled into the quote above.
   return [replies.length === 1 ? "Latest reply on the ticket:" : "Latest replies on the ticket:", ...blocks].join("\n\n");
-}
-
-function formatReplyTime(date: Date, timeZone: string): string {
-  const format = (tz: string): string => new Intl.DateTimeFormat("en-GB", {
-    timeZone: tz, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
-  }).format(date);
-  try {
-    return format(timeZone);
-  } catch {
-    return format("UTC");
-  }
 }
 
 export function formatResolution(snapshot: IssueSnapshot): string {
