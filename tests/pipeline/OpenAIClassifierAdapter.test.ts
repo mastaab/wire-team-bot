@@ -146,6 +146,49 @@ describe("OpenAIClassifierAdapter service-desk categories", () => {
     expect(onPrompt.split("\n").filter((line) => !added.includes(line)).join("\n")).toBe(offPrompt);
   });
 
+  describe("service scope", () => {
+    const SCOPE = "questions about the truck, faults, breakdowns, damage, service and maintenance, and replacement part orders";
+    const promptFor = async (options: { serviceDeskCategories?: boolean; serviceScope?: string }) => {
+      const llm = makeLLM("{}");
+      await new OpenAIClassifierAdapter(llm, logger, options).classify("Truck 17 is due for its 60,000 km service", ctx, []);
+      return sentMessages(llm)[1][0].content as string;
+    };
+
+    it("leaves the request byte-for-byte unchanged with a scope but the option off", async () => {
+      for (const options of [{ serviceScope: SCOPE }, { serviceDeskCategories: false, serviceScope: SCOPE }]) {
+        const llm = makeLLM("{}");
+        await new OpenAIClassifierAdapter(llm, logger, options).classify("Printer is broken", fullCtx, ["[Alice] hi"]);
+        expect(createHash("sha256").update(JSON.stringify(sentMessages(llm))).digest("hex"))
+          .toBe("70202e54b1ca95c6fd1e2710b1ec2247966e83ea7f5d34782a4d0596b362ebc5");
+      }
+    });
+
+    it("keeps the generic service_request line with the option on and no scope", async () => {
+      for (const serviceScope of [undefined, "", "   "]) {
+        const prompt = await promptFor({ serviceDeskCategories: true, serviceScope });
+        expect(prompt).toContain("- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information");
+      }
+    });
+
+    it("describes service_request with the scope when the option is on", async () => {
+      const prompt = await promptFor({ serviceDeskCategories: true, serviceScope: ` ${SCOPE.replace(", damage", ",\n damage")}. ` });
+      expect(prompt).toContain(
+        `- service_request: someone brings the service desk something it handles (${SCOPE}): a question to the desk, a fault or need, a replacement part order or a scheduled service all count; or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n`,
+      );
+      expect(prompt).not.toContain("access they need");
+      expect(prompt).toContain("- request_status: ");
+      expect(prompt).toContain("service_request and request_status never make a message high signal on their own.");
+      const generic = await promptFor({ serviceDeskCategories: true });
+      const changed = prompt.split("\n").filter((line) => !generic.split("\n").includes(line));
+      expect(changed).toHaveLength(1);
+    });
+
+    it("inserts the scope literally, even with replacement patterns in it", async () => {
+      const prompt = await promptFor({ serviceDeskCategories: true, serviceScope: "trucks $& parts $1" });
+      expect(prompt).toContain("(trucks $& parts $1)");
+    });
+  });
+
   it("never makes a service-desk category alone high signal", async () => {
     for (const categories of [["service_request"], ["request_status"], ["service_request", "question", "discussion"]]) {
       const llm = makeLLM(JSON.stringify({ categories, confidence: 0.95, entities: [], is_high_signal: true }));

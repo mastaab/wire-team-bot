@@ -1,15 +1,18 @@
 import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { isKeyInProject } from "../../../domain/ids/jiraLink";
-import { SUPPORT_SUMMARY_MAX } from "../../../domain/entities/SupportRequest";
-import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import { PART_DETAIL_MAX, SUPPORT_REQUEST_KINDS, SUPPORT_SUMMARY_MAX } from "../../../domain/entities/SupportRequest";
+import type { PartDetails, SupportRequest, SupportRequestKind } from "../../../domain/entities/SupportRequest";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import type { MessageCategory } from "../../ports/ClassifierPort";
 import type { OfferCommand, PendingOfferStore } from "../../ports/PendingOfferPort";
 import type { OpenRequestRef, SupportDraft, SupportTriagePort } from "../../ports/SupportTriagePort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
-import { OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatReplyQuestion, formatSupportQuestion } from "../../services/offers";
+import {
+  OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, PART_DETAIL_FIELDS, REPLY_BODY_MAX,
+  formatMissingPartsQuestion, formatReplyQuestion, formatSupportQuestion, missingPartDetails,
+} from "../../services/offers";
 import type { GetIssueStatus } from "./GetIssueStatus";
 
 /** Classifier confidence required before passive help acts on a message. */
@@ -175,7 +178,14 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       this.logger?.debug("OfferSupportFromConversation: draft outside the offer bounds");
       return;
     }
-    await this.offer(input, formatSupportQuestion(command.summary, command.description), command);
+    // A part order without all its essentials asks for what is missing instead. The incomplete
+    // order is stored like any offer: the speaker's answer amends it, and it cannot be confirmed
+    // until it is complete.
+    const missing = missingPartDetails(command);
+    const question = missing.length > 0
+      ? formatMissingPartsQuestion(missing)
+      : formatSupportQuestion(command.summary, command.description, command.requestKind, command.part);
+    await this.offer(input, question, command);
   }
 
   /** Sends the code-written question as a native reply to the source message, then stores the offer for the speaker. */
@@ -207,7 +217,22 @@ function toSupportCommand(draft: SupportDraft): Extract<OfferCommand, { kind: "s
   const description = typeof draft.description === "string" ? draft.description.trim() : "";
   if (!summary || summary.length > SUPPORT_SUMMARY_MAX) return null;
   if (!description || description.length > OFFER_DESCRIPTION_MAX) return null;
-  return { kind: "support", summary, description };
+  const requestKind: SupportRequestKind = SUPPORT_REQUEST_KINDS.includes(draft.requestKind) ? draft.requestKind : "fault";
+  if (requestKind !== "part") return { kind: "support", requestKind, summary, description };
+  return { kind: "support", requestKind, summary, description, part: toPartDetails(draft.part) };
+}
+
+/**
+ * The part essentials, each collapsed to one line. A value that is empty or longer than
+ * `PART_DETAIL_MAX` is left out, so it counts as missing and is asked for.
+ */
+function toPartDetails(part: PartDetails | undefined): PartDetails {
+  const details: PartDetails = {};
+  for (const { key } of PART_DETAIL_FIELDS) {
+    const value = typeof part?.[key] === "string" ? part[key]!.replace(/\s+/g, " ").trim() : "";
+    if (value && value.length <= PART_DETAIL_MAX) details[key] = value;
+  }
+  return details;
 }
 
 function errorName(err: unknown): string {

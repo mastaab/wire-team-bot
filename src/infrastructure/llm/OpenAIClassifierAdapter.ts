@@ -39,18 +39,31 @@ const SERVICE_DESK_CATEGORIES: MessageCategory[] = ["service_request", "request_
 const ROUTINE_LINE = "- routine: greetings, acknowledgements, chit-chat, bot commands — no team knowledge\n";
 const LOW_SIGNAL_LINE = "Low signal (discussion-only, question, routine): is_high_signal=false.\n";
 
-const SERVICE_DESK_PROMPT = SYSTEM_PROMPT
-  .replace(ROUTINE_LINE, ROUTINE_LINE +
-    "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n" +
-    "- request_status: someone asks about the state of a problem or service request they or others reported\n")
-  .replace(LOW_SIGNAL_LINE, LOW_SIGNAL_LINE +
-    "service_request and request_status never make a message high signal on their own. They come in addition to every other category that applies: a problem that blocks work is also a blocker, and a commitment to fix it is also an action.\n");
+const GENERIC_SERVICE_REQUEST_LINE =
+  "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n";
+
+/** The `service_request` line when the operator described what the desk handles. */
+function scopedServiceRequestLine(scope: string): string {
+  return `- service_request: someone brings the service desk something it handles (${scope}): a question to the desk, a fault or need, a replacement part order or a scheduled service all count; or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n`;
+}
+
+function serviceDeskPrompt(serviceRequestLine: string): string {
+  return SYSTEM_PROMPT
+    // A replacer function, so "$" in the operator's scope text is not read as a replacement pattern.
+    .replace(ROUTINE_LINE, () => ROUTINE_LINE +
+      serviceRequestLine +
+      "- request_status: someone asks about the state of a problem or service request they or others reported\n")
+    .replace(LOW_SIGNAL_LINE, LOW_SIGNAL_LINE +
+      "service_request and request_status never make a message high signal on their own. They come in addition to every other category that applies: a problem that blocks work is also a blocker, and a commitment to fix it is also an action.\n");
+}
 
 const HIGH_SIGNAL_CATEGORIES: MessageCategory[] = ["decision", "action", "blocker", "update"];
 
 export interface ClassifierOptions {
   /** Adds `service_request` and `request_status` to the prompt and the accepted list (passive service-desk help). */
   serviceDeskCategories?: boolean;
+  /** What the service desk handles (`WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE`); used for the `service_request` line only with `serviceDeskCategories`. */
+  serviceScope?: string;
 }
 
 const FALLBACK: ClassifyResult = {
@@ -71,7 +84,9 @@ export class OpenAIClassifierAdapter implements ClassifierPort {
     options: ClassifierOptions = {},
   ) {
     this.serviceDesk = options.serviceDeskCategories === true;
-    this.systemPrompt = this.serviceDesk ? SERVICE_DESK_PROMPT : SYSTEM_PROMPT;
+    const scope = options.serviceScope?.replace(/\s+/g, " ").trim().replace(/\.+$/, "");
+    this.systemPrompt = !this.serviceDesk ? SYSTEM_PROMPT
+      : serviceDeskPrompt(scope ? scopedServiceRequestLine(scope) : GENERIC_SERVICE_REQUEST_LINE);
     this.validCategories = this.serviceDesk ? [...VALID_CATEGORIES, ...SERVICE_DESK_CATEGORIES] : VALID_CATEGORIES;
   }
 
