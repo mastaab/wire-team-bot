@@ -2015,7 +2015,7 @@ Committed by the main session before the parallel build. Builders code against t
   - Several changes to one request in one poll become one message.
 - Never announced: replies the bot sent from Wire, internal notes (the adapter only returns public comments), changes the bot made itself (a resolve from Wire already stores the new status), and status changes inside a category (Jira status names are localised, so only the category counts, as everywhere else).
 - Paused or secure channels get nothing, and their changes stay pending; after `resume`, the next poll posts at most one catch-up message per request.
-- Messages are standalone, not replies, since the message that raised the request may be old.
+- Each update is posted as a native Wire reply to the bot's last message about that request (operator, 2026-09-26), so every ticket reads as a thread-like chain in the channel: the "Raised DS-16…" confirmation, "Sent your reply…", a `status of` answer, a resolve or an earlier update. Without a stored reference (older requests, a failed send) the update is posted standalone.
 - Only the requests' keys and statuses are read in the regular check; replies are fetched only for requests Jira reports as changed.
 
 **Design.**
@@ -2025,13 +2025,20 @@ Committed by the main session before the parallel build. Builders code against t
 - A small interval runner in the composition root starts it; one check at a time, a failed check is logged by error name and retried at the next interval. The time of the last check lives in memory; after a restart the stored markers prevent repeats.
 - `status of` and the answer path update `lastSeenReplyAt` when they show replies, so a reply someone has already looked at is not announced again.
 
+**Quoting the last ticket message (design).**
+- A Wire reply carries the quoted message's ID and an integrity hash the SDK computes from its content (`TextMessage.createReply` uses `MessageContentEncoder.encodeMessageContent(original).sha256Digest`). Today only the reply context of the message being handled holds these (`WireReplyContext`).
+- `SupportRequest` gains `lastMessageId` and `lastMessageSha256` (nullable; the same migration as `lastSeenReplyAt`). They hold only the bot's own message ID and hash, never text. This changes the rule "keep only the SDK quote ID/hash during the handler" for support requests: the reference outlives the handler, still without any message content.
+- `WireOutboundPort.sendPlainText` returns a reference `{ messageId, sha256 }` for the sent message (the SDK's `sendMessage` returns the ID; the adapter computes the hash from the message it built), and gains an option to quote a stored reference. The CLI outbound returns a synthetic reference.
+- Every use case whose bot message names a request stores the reference after sending: `RaiseSupportRequest`, `ReplyToServiceDesk`, `GetIssueStatus`, `ResolveSupportRequest`, passive offers and the watch updates themselves. `WatchSupportRequests` quotes the stored reference and then stores the reference of its own update.
+- Wire shows a reply to a deleted message as quoting "message deleted"; that is acceptable.
+
 **Evidence required.** Unit tests with mocked ports; a check against DS with the bot's token (read-only) that the JQL search works with the scoped token; a live staging check where the operator, as the desk agent, adds a public reply, an internal note (must not appear), moves a request to In progress and resolves one in Jira, and watches the channel.
 
-**Work split.** Main session: contract (port method, entity field and migration, setting, use-case signature), the runner and wiring, docs. One subagent: adapter method and tests, `WatchSupportRequests` and tests, `lastSeenReplyAt` updates in `status of` and the answer path. Then an independent review, the read-only JQL check and the live check.
+**Work split.** Main session: contract (port method, entity fields and migration, the outbound reference and quote option, setting, use-case signature), the runner and wiring, the Wire and CLI outbound adapters, docs. Subagents: (a) the Jira adapter method and `WatchSupportRequests` with tests; (b) storing the reference and `lastSeenReplyAt` in the existing use cases (`RaiseSupportRequest`, `ReplyToServiceDesk`, `GetIssueStatus`, `ResolveSupportRequest`, passive offers, the answer path) with tests. Then an independent review, the read-only JQL check and the live check.
 
-### Handover for the next session (2026-09-26)
+### Handover for the next session (2026-09-26, evening)
 
-**Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`), adding to an open request, truck premium support (request kinds mapped to request types, part essentials, service scope), resolving with a closing comment, the channel timezone command, and passive resolve offers. What remains is Jira clean-up (operator approval) and the open items listed below.
+**Start here.** Read AGENTS.md, then this section 6. The next task is "Jira updates in Wire by polling", including quoting the last ticket message: the plan is confirmed by the operator and nothing of it is built yet. Follow the usual pattern: write and commit the contract, parallel subagents in worktrees, an independent review, CLI checks (scripts grepped for write lines, offers answered no), then a live staging check where the operator acts as the desk agent in Jira. Everything listed below the plan is built, reviewed and checked live on staging, most recently on the local Ollama model.
 
 **State.**
 - Branch `demo/jira`, working tree clean, not pushed. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
