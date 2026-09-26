@@ -342,9 +342,16 @@ export class WireEventRouter extends WireEventsHandler {
         requesterName: senderDisplayName, replyToMessageId: wireMessage.id,
       });
       if (handled) {
-        // Record the answer so the answer model sees the offer as closed, not pending.
+        // Record the answer so the answer model sees the offer as closed, not pending, and a bot
+        // entry after it, so the offer's "(yes or no)?" no longer counts as the bot's latest
+        // question: otherwise the requester's next message would be taken as a follow-up.
+        const now = new Date();
         this.deps.messageBuffer.push(convId, {
-          messageId: wireMessage.id, senderId: sender, senderName: senderDisplayName ?? "", text, timestamp: new Date(),
+          messageId: wireMessage.id, senderId: sender, senderName: senderDisplayName ?? "", text, timestamp: now,
+        });
+        this.deps.messageBuffer.push(convId, {
+          messageId: `bot-${now.getTime()}`, senderId: this.deps.botUserId, senderName: "Wire Team Bot",
+          text: "(Answered the offer above.)", timestamp: now,
         });
         return;
       }

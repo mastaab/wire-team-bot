@@ -269,7 +269,7 @@ async function main() {
   const answerQuestion = new AnswerQuestion(
     generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey, shareWithModel), wireOutbound, queryAnalysis, retrievalEngine, logger,
     issueTracker && pendingOffers && supportRequestsRepo
-      ? { tracker: issueTracker, requests: supportRequestsRepo, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel }
+      ? { tracker: issueTracker, requests: supportRequestsRepo, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel, passive: passiveOn }
       : undefined,
   );
   const statusCommand  = new StatusCommand(channelConfigRepo, entityRepo, actionsRepo, remindersRepo, decisionsRepo, wireOutbound, supportRequestsRepo);

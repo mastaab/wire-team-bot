@@ -1106,6 +1106,14 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.pendingOffers!.drop).toHaveBeenCalledWith(convId, sender);
   });
 
+  it("records a bot entry after a handled offer answer, so the offer question stops counting as the latest", async () => {
+    const deps = offerDeps(true, true);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
+    const pushed = vi.mocked(deps.messageBuffer.push).mock.calls.map(([, message]) => message);
+    expect(pushed.map((m) => m.text)).toEqual(["yes", "(Answered the offer above.)"]);
+    expect(pushed[1]!.senderId).toEqual(deps.botUserId);
+  });
+
   it("keeps the offer when it was handled by the confirmation", async () => {
     const deps = offerDeps(true, true);
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));

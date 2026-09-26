@@ -188,7 +188,7 @@ export function createContainer(config: Config, logger: Logger): Container {
     retrievalEngine,
     logger,
     issueTracker && pendingOffers
-      ? { tracker: issueTracker, requests: supportRequestsRepo!, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel: config.jira?.shareWithModel ?? false }
+      ? { tracker: issueTracker, requests: supportRequestsRepo!, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel: config.jira?.shareWithModel ?? false, passive: passiveOn }
       : undefined,
   );
 

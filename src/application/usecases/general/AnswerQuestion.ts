@@ -80,6 +80,11 @@ export interface AnswerQuestionJira {
   offers: PendingOfferStore;
   /** Pass live status, SLAs and service-desk replies of this conversation's support requests to the answer model. */
   shareWithModel: boolean;
+  /**
+   * Passive service-desk help is on: the operator has opted in to offers for plain problem
+   * statements, so a support offer needs no raising wording in the question.
+   */
+  passive?: boolean;
   now?: () => Date;
 }
 
@@ -350,7 +355,8 @@ export class AnswerQuestion {
   private async prepareOffer(jira: AnswerQuestionJira, input: AnswerQuestionInput, command: OfferCommand): Promise<PreparedOffer | null> {
     // A revision of the offer this message displaced needs no fresh change intent: the
     // original offer established it. Scope and bounds are still checked below.
-    if (!isRevision(input.pendingOffer, command) && !asksForChange(command.kind, input.question, jira.tracker.projectKey)) {
+    const passiveSupport = command.kind === "support" && jira.passive === true;
+    if (!passiveSupport && !isRevision(input.pendingOffer, command) && !asksForChange(command.kind, input.question, jira.tracker.projectKey)) {
       this.logger?.warn("AnswerQuestion: offer dropped, the question asks for no change", { kind: command.kind });
       return null;
     }

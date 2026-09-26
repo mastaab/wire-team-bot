@@ -51,6 +51,7 @@ interface SetupOptions {
   results?: RetrievalResult[];
   modelAnswer?: string;
   shareWithModel?: boolean;
+  passive?: boolean;
   withJira?: boolean;
   tracker?: Partial<IssueTrackerPort>;
   repo?: Partial<SupportRequestRepository>;
@@ -115,7 +116,7 @@ function setup(options: SetupOptions = {}) {
   const logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn(), child: vi.fn() };
   const jira = options.withJira === false
     ? undefined
-    : { tracker, requests: repo, auditLog, offers, shareWithModel: options.shareWithModel ?? false, now: () => NOW };
+    : { tracker, requests: repo, auditLog, offers, shareWithModel: options.shareWithModel ?? false, passive: options.passive, now: () => NOW };
   const useCase = new AnswerQuestion(general, wire as never, analysis, retrieval, logger, jira);
   const run = (question: string, overrides: Partial<AnswerQuestionInput> = {}) => useCase.execute({
     question, conversationContext: [], conversationId: convId, replyToMessageId: "q", requester,
@@ -769,6 +770,30 @@ describe("AnswerQuestion with Jira: offers", () => {
     await run("Raise it");
     expect(stored).toHaveLength(0);
     expect(sent).toEqual([answer]);
+  });
+});
+
+describe("AnswerQuestion with Jira: passive service-desk help on", () => {
+  const support = `OFFER: ${JSON.stringify({ kind: "support", summary: "Printer on floor 2 is out of toner", description: "The printer on floor 2 is out of toner." })}`;
+
+  it("accepts a support offer for a plain problem statement, since the operator opted in", async () => {
+    const { stored, sent, run } = setup({ passive: true, modelAnswer: support });
+    await run("the printer on floor 2 is out of toner");
+    expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer on floor 2 is out of toner**\n> The printer on floor 2 is out of toner.\n\n(yes or no)?"]);
+    expect(stored).toHaveLength(1);
+  });
+
+  it("still needs raising wording for a support offer when passive help is off", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: support });
+    await run("the printer on floor 2 is out of toner");
+    expect(stored).toHaveLength(0);
+    expect(sent[0]).toContain("I haven't changed anything with the service desk.");
+  });
+
+  it("keeps the change-intent check for reply and resolve offers when passive help is on", async () => {
+    const { stored, run } = setup({ passive: true, requests: [makeRequest("DS-6")], modelAnswer: `OFFER: {"kind":"resolve","issueKey":"DS-6"}` });
+    await run("the printer on floor 2 is out of toner");
+    expect(stored).toHaveLength(0);
   });
 });
 
