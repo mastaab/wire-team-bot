@@ -1734,7 +1734,7 @@ Built by three parallel subagents (answer side, action side, adapter) on the mai
 
 ### Out of scope for the demo
 
-Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), raising on behalf of the Wire user (mapping Wire users to Jira accounts by email), attachments, request types other than the configured one, posting Jira replies into Wire unprompted, Jira-to-Wire updates (webhooks), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
+Choosing among several done-category transitions (the adapter takes the first; DS has only Resolved, but some workflows also offer a done-category Canceled), raising on behalf of the Wire user (mapping Wire users to Jira accounts by email), attachments, request types other than the configured one, Jira-to-Wire updates by webhook (polling is planned, see "Jira updates in Wire by polling"), and per-channel opt-in. Each is a production step, not needed for the four-beat story.
 
 ### Work breakdown and status
 
@@ -2000,6 +2000,34 @@ Committed by the main session before the parallel build. Builders code against t
 **Contract.** `SupportTriagePort.extractPartDetails(message)` returns the essentials the message states (never invented, bounded); `CompletePartOrder(triage, offers, wireOutbound, logger?)` with `execute({ text, conversationId, requesterId, pending, replyToMessageId? }): Promise<boolean>` (true when it replied); `OfferSupportFromConversationPort.execute` returns `Promise<boolean>`.
 
 **Work split.** Main session: contract, router hook (before the amend path), wiring, docs. One subagent: `CompletePartOrder`, the triage method and prompt, `OfferSupportFromConversation` returning whether it replied, the pipeline skip, tests. Then an independent review, CLI checks on the local model (offers answered no) and a live check.
+
+### Jira updates in Wire by polling (planned 2026-09-26)
+
+**Why.** For the demo, the channel should learn about changes the service desk makes in Jira without anyone asking: a new reply from the desk, work starting, the request being resolved or reopened. A Jira webhook is not possible for now (the bot runs behind no public endpoint), so the bot checks Jira periodically. This reverses the earlier out-of-scope item "posting Jira replies into Wire unprompted", at the operator's request.
+
+**Behaviour.**
+- Off unless `WIRE_TEAM_BOT_JIRA_WATCH_SECONDS` is set (for example `30` for the demo; at least 15). It watches the open support requests of every channel.
+- On a change the bot posts one message in the request's channel:
+  - a new public reply from the desk: `**DS-16** Brake warning light on truck 12: new reply from the service desk` followed by the reply, quoted and shortened as in `status of` (author and time in the channel's timezone);
+  - work started: `**DS-16** … is now in progress.`;
+  - resolved in Jira: `**DS-16** … was resolved by the service desk.` plus the SLA outcome;
+  - reopened: `**DS-16** … was reopened by the service desk.`
+  - Several changes to one request in one poll become one message.
+- Never announced: replies the bot sent from Wire, internal notes (the adapter only returns public comments), changes the bot made itself (a resolve from Wire already stores the new status), and status changes inside a category (Jira status names are localised, so only the category counts, as everywhere else).
+- Paused or secure channels get nothing, and their changes stay pending; after `resume`, the next poll posts at most one catch-up message per request.
+- Messages are standalone, not replies, since the message that raised the request may be old.
+- Only the requests' keys and statuses are read in the regular check; replies are fetched only for requests Jira reports as changed.
+
+**Design.**
+- `IssueTrackerPort.listChangedSince(keys, since)` returns key, status category and last update time for the given keys updated since `since`, through one JQL search (`/rest/api/3/search/jql`, scope `read:jira-work`, already granted), in batches.
+- `SupportRequest` gains `lastSeenReplyAt` (the creation time of the newest public reply already shown or announced; migration adding a nullable column). A request without it gets a baseline on the first check, so nothing old is announced when the feature is switched on.
+- Use case `WatchSupportRequests` in `src/application/usecases/jira/`: lists open requests (plus those resolved in the last day, to catch a reopen), asks the tracker what changed since the last check, reads replies for the changed ones, compares with `lastSeenReplyAt` and the stored status category, posts, then stores the new status (the existing audited refresh) and the new `lastSeenReplyAt` (bookkeeping, not audited). It checks each channel's state before posting.
+- A small interval runner in the composition root starts it; one check at a time, a failed check is logged by error name and retried at the next interval. The time of the last check lives in memory; after a restart the stored markers prevent repeats.
+- `status of` and the answer path update `lastSeenReplyAt` when they show replies, so a reply someone has already looked at is not announced again.
+
+**Evidence required.** Unit tests with mocked ports; a check against DS with the bot's token (read-only) that the JQL search works with the scoped token; a live staging check where the operator, as the desk agent, adds a public reply, an internal note (must not appear), moves a request to In progress and resolves one in Jira, and watches the channel.
+
+**Work split.** Main session: contract (port method, entity field and migration, setting, use-case signature), the runner and wiring, docs. One subagent: adapter method and tests, `WatchSupportRequests` and tests, `lastSeenReplyAt` updates in `status of` and the answer path. Then an independent review, the read-only JQL check and the live check.
 
 ### Handover for the next session (2026-09-26)
 
