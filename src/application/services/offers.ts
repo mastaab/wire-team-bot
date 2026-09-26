@@ -13,6 +13,9 @@ export type { OfferCommand, PendingOffer, PendingOfferStore } from "../ports/Pen
 /** How long an offer can be confirmed. */
 export const OFFER_TTL_MS = 10 * 60 * 1000;
 
+/** How long a dropped or expired offer is remembered, so a late "yes" can be answered. */
+export const RECENT_DROP_MS = 10 * 60 * 1000;
+
 /** Longest reply the bot will send to a ticket. */
 export const REPLY_BODY_MAX = 2000;
 

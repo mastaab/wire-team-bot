@@ -12,7 +12,11 @@ export type MessageCategory =
   | "update"
   | "discussion"
   | "reference"
-  | "routine";
+  | "routine"
+  /** Someone describes a problem, fault or need a service desk could handle. Only offered to the model when passive service-desk help is on. */
+  | "service_request"
+  /** Someone asks about the state of a problem or service request. Only offered to the model when passive service-desk help is on. */
+  | "request_status";
 
 export interface ClassifyResult {
   /** One or more applicable categories — a message may be both a 'decision' and an 'action'. */

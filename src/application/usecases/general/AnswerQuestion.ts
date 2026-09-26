@@ -55,6 +55,11 @@ export interface AnswerQuestionInput {
   orgId?: string;
   /** Phase 3: Defined in personal 1:1 mode — restricts retrieval to user's own entities. */
   userId?: string;
+  /**
+   * The requester's offer that this message just displaced (dropped by the router), so a
+   * correction such as "the description should mention X" can produce a revised offer.
+   */
+  pendingOffer?: OfferCommand;
 }
 
 /**

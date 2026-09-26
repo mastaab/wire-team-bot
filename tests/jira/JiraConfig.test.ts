@@ -43,6 +43,12 @@ describe("resolveJiraConfig", () => {
     expect(resolveJiraConfig(full)!.shareWithModel).toBe(false);
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "ON" })!.shareWithModel).toBe(true);
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "off" })!.shareWithModel).toBe(false);
+  });
+
+  it("keeps passive service-desk help off unless explicitly switched on", () => {
+    expect(resolveJiraConfig(full)!.passive).toBe(false);
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_PASSIVE: "On" })!.passive).toBe(true);
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_PASSIVE: "yes" })).toThrow(/on or off/);
     expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "yes" })).toThrow(/on or off/);
   });
 

@@ -29,4 +29,14 @@ export interface PendingOfferStore {
   has(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): boolean;
   /** Drops every pending offer in the conversation, e.g. when it is paused or made secure. */
   clearConversation(conversationId: QualifiedId): void;
+  /**
+   * Removes the requester's pending offer without running it and remembers it as recently
+   * dropped. Returns the dropped command, or null when there was no live offer.
+   */
+  drop(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): OfferCommand | null;
+  /**
+   * The requester's offer dropped or expired within `RECENT_DROP_MS`, without removing it.
+   * `put` for that requester and `clearConversation` forget it.
+   */
+  recentlyDropped(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): OfferCommand | null;
 }
