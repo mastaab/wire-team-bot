@@ -1896,6 +1896,39 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Work split.** Main session: contract (port fields, formatter signature) and PLAN/README; one subagent in a worktree: adapter prompt, classifier line, use case, `AnswerQuestion` reply wording and intent, tests. Then an independent review, CLI checks and the live check.
 
+### Truck premium support (planned 2026-09-26)
+
+**Use case (operator, 2026-09-26).** The customer sells the bot as an add-on to the trucks they sell: premium support in Wire. The people in the channel are drivers of those trucks, possibly defence or military personnel. They ask questions about the vehicle, report faults and breakdowns, and order replacement parts. The service desk is the manufacturer's premium support. The demo must show exactly this, not office IT.
+
+**Evidence that led here.** With the current generic wording, faults and damage already worked in a real-model check: brake warning light, tyre pressure sensor and damaged charging cable each got an offer. "truck 17 is due for its 60,000 km service next week" was classified as an update and got nothing, and the prompts mention "access they need" and similar IT examples.
+
+**Decisions (operator, 2026-09-26).**
+1. Separate request types, so desk agents get proper queues: questions go to "Ask a question" (`11809`), faults, breakdowns and service needs to "Submit a request or incident" (`11808`), and replacement parts to a new "Replacement part" request type the operator creates in DS.
+2. For a part order the bot collects all essentials before offering: the vehicle (fleet number or chassis number/VIN), the part (name or number), the quantity and the delivery location. It asks for whatever is missing.
+3. The bot understands drivers in any language, but its own texts (offers, questions, confirmations) stay in English for the demo. Tickets carry the driver's words.
+
+**Behaviour.**
+- **Kinds:** every request has a kind: `question`, `part` or `fault` (faults, breakdowns, damage, service and maintenance needs). The kind decides the Jira request type and the offer's wording: `Shall I ask the service desk?`, `Shall I order this part?`, `Shall I report this to the service desk?`, each followed by the full text that will be sent and "(yes or no)?".
+- **Part orders:** the offer shows the essentials as lines (`Vehicle: …`, `Part: …`, `Quantity: …`, `Deliver to: …`) above the driver's description, and the same lines go into the ticket. When something is missing, the bot asks one short question naming what is missing ("To order it I need the vehicle (fleet or chassis number) and the delivery location. What are they?"). The driver's next message fills the draft through the existing amend path, and the bot asks again or makes the offer. A yes before the draft is complete gets "I still need …". Anything unrelated drops the draft as today.
+- **Scope:** a setting `WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE` describes what the desk handles (for the demo: "questions about the truck, faults, breakdowns, damage, service and maintenance, and replacement part orders"). It feeds the classifier, the triage prompt and the answer prompt; without it the current generic wording stays.
+- **Where it applies:** passive offers (setting on) and the answer path when the bot is mentioned. The `support:` command keeps raising directly with the fault type, since it has no model step to classify or collect essentials.
+- **Listing and status:** `support requests` shows the kind ("Part order DS-12 …").
+
+**Design.**
+- Configuration: `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES` as `question=11809,part=<id>,fault=11808`; kinds without an entry use `WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID`, so existing deployments are unchanged. `IssueTrackerPort.createIssue` takes an optional request type ID.
+- `SupportRequest` gains `kind` (migration adding a column with default `fault`).
+- The `support` offer command gains `requestKind` and, for parts, `part: { vehicle?, part?, quantity?, deliverTo? }`. A part draft with missing essentials is stored as a pending offer that cannot be confirmed, only amended.
+- `SupportTriagePort.draftRequest` returns the kind and, for parts, the essentials found in the message (never invented).
+- Classifier, triage and answer prompts use the scope text and name the three kinds.
+
+**Security note for the customer (not built).** The demo sends every message in an active channel to the Claude API for classification, and tickets live in Jira Cloud. For defence or military customers that is likely unacceptable. Production would need a local model endpoint (the configuration already accepts OpenAI-compatible endpoints) and Jira Data Center or another tracker hosted by the customer. This belongs in the customer conversation, next to the Wire encryption story.
+
+**Needs from the operator.** Create the "Replacement part" request type in DS (the service account needs no new scopes) and send its ID. Until then, part orders use `11808`.
+
+**Evidence required.** Unit tests; real-model CLI checks with truck messages (questions, faults, scheduled service, part orders with and without essentials), offers answered no; a live staging journey with one question, one fault and one part order confirmed with yes (Jira writes, with approval).
+
+**Work split.** Main session: contract (configuration, kinds, port and entity changes, migration, offer shape) and the demo story rewrite. Two subagents in parallel worktrees: (a) passive side: classifier and triage prompts, part essentials, use case; (b) answer and action side: answer prompt and offer validation, `ConfirmOffer` for incomplete drafts, `RaiseSupportRequest` request-type selection and part lines, listing. Then an independent review, CLI checks and the live check.
+
 ### Handover for the next session (2026-09-26)
 
 **Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`) and adding to an open request. What remains is Jira clean-up (operator approval) and the open items listed below.
