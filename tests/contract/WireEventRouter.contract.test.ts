@@ -1281,7 +1281,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ pendingOffer: pending, amendOnly: true }));
   });
 
-  it("does not try to complete an offer that is not an incomplete part order", async () => {
+  it("does not try to complete an offer that is not a part order", async () => {
     const completePartOrder = { execute: vi.fn() };
     const deps = offerDeps(true, false);
     Object.assign(deps, { completePartOrder });

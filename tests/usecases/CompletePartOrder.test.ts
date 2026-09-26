@@ -39,8 +39,29 @@ function setup(extracted: PartDetails = { deliverTo: "depot north" }) {
 }
 
 describe("CompletePartOrder", () => {
+  it("corrects a value in a complete part order and shows the updated offer", async () => {
+    const complete: OfferCommand = { ...DRAFT, part: { ...DRAFT.part, deliverTo: "depot south" } };
+    const { offers, sent, useCase } = setup({ quantity: "3" });
+
+    await expect(useCase.execute(input({ pending: complete, text: "actually three" }))).resolves.toBe(true);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Shall I order this part?");
+    expect(sent[0]).toContain("> Quantity: 3");
+    expect(offers.put.mock.calls[0]![0].command).toMatchObject({ part: { quantity: "3", deliverTo: "depot south" } });
+  });
+
+  it("leaves a message that only restates the draft to normal routing", async () => {
+    const complete: OfferCommand = { ...DRAFT, part: { ...DRAFT.part, deliverTo: "depot south" } };
+    const { offers, sent, useCase } = setup({ deliverTo: "depot south" });
+
+    await expect(useCase.execute(input({ pending: complete, text: "to depot south" }))).resolves.toBe(false);
+
+    expect(sent).toEqual([]);
+    expect(offers.put).not.toHaveBeenCalled();
+  });
+
   it.each<[string, OfferCommand]>([
-    ["a complete part order", { ...DRAFT, part: { ...DRAFT.part, deliverTo: "depot south" } }],
     ["a fault", { kind: "support", requestKind: "fault", summary: "Brake light", description: "The brake light is on." }],
     ["a question", { kind: "support", requestKind: "question", summary: "Oil", description: "Which oil?" }],
     ["a reply offer", { kind: "reply", issueKey: "DS-6", body: "It happened again." }],

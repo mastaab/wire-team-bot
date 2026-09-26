@@ -25,7 +25,6 @@ import type { CatchMeUpCommand } from "../../application/usecases/general/CatchM
 import type { RaiseSupportRequest } from "../../application/usecases/jira/RaiseSupportRequest";
 import type { SetChannelTimezone } from "../../application/usecases/general/SetChannelTimezone";
 import type { CompletePartOrder } from "../../application/usecases/jira/CompletePartOrder";
-import { missingPartDetails } from "../../application/services/offers";
 import type { ListSupportRequests } from "../../application/usecases/jira/ListSupportRequests";
 import type { ResolveSupportRequest } from "../../application/usecases/jira/ResolveSupportRequest";
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
@@ -60,6 +59,11 @@ const NAME_TTL_MS = 24 * 60 * 60 * 1000; // re-fetch display names after 24 h to
  * from the package entrypoint, so we build it from the exported union instead.
  */
 type ButtonActionConfirmation = Extract<WireMessage, { type: "composite_button_action_confirmation" }>;
+
+/** True for a support offer that orders a replacement part, complete or not. */
+function isPartOrder(command: OfferCommand): boolean {
+  return command.kind === "support" && command.requestKind === "part";
+}
 
 function toCachedRole(role: ConversationRole): CachedMember["role"] {
   return role === ConversationRole.ADMIN ? "admin" : "member";
@@ -368,9 +372,9 @@ export class WireEventRouter extends WireEventsHandler {
       // With no live offer, only a recently dropped one brought us here and the requester has
       // moved on, so a later yes (perhaps to a colleague) is not answered about it.
       if (!droppedOffer) pendingOffers.forgetDropped(convId, sender);
-      // A part order waiting for essentials: the answer ("two, deliver to depot north") is
-      // merged in code, without relying on the answer model to return a revised offer.
-      if (droppedOffer && this.deps.completePartOrder && missingPartDetails(droppedOffer).length > 0) {
+      // A part-order draft: an answer ("two, deliver to depot north") or a correction ("actually
+      // three") is merged in code, without relying on the answer model to return a revised offer.
+      if (droppedOffer && this.deps.completePartOrder && isPartOrder(droppedOffer)) {
         const completed = await this.deps.completePartOrder.execute({
           text: commandText, conversationId: convId, requesterId: sender, pending: droppedOffer, replyToMessageId: wireMessage.id,
         });

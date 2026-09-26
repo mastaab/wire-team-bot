@@ -37,7 +37,8 @@ export class CompletePartOrder {
   /** True when it replied (a question for what is still missing, or the complete offer) and stored the updated draft. */
   async execute(input: CompletePartOrderInput): Promise<boolean> {
     const pending = input.pending;
-    if (pending.kind !== "support" || pending.requestKind !== "part" || missingPartDetails(pending).length === 0) return false;
+    // Any part-order draft: an incomplete one is filled, a complete one corrected ("actually three").
+    if (pending.kind !== "support" || pending.requestKind !== "part") return false;
 
     let extracted: PartDetails;
     try {
@@ -55,6 +56,8 @@ export class CompletePartOrder {
       description: pending.description,
       part: { ...pending.part, ...extracted },
     };
+    // A message that restates what the draft already holds is not an answer; leave it to normal routing.
+    if (PART_DETAIL_FIELDS.every(({ key }) => (command.part?.[key] ?? "") === (pending.part?.[key] ?? ""))) return false;
     const missing = missingPartDetails(command);
     const question = missing.length > 0
       ? formatMissingPartsQuestion(missing)
