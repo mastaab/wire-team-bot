@@ -578,6 +578,9 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["reply", "Comment on the ticket that it still drops"],
       ["reply", "Please update DS-6 with the new floor"],
       ["reply", "Update the ticket: it's the 2nd floor too"],
+      ["reply", "Leave a note on DS-6 that it still drops"],
+      ["reply", "Post a comment on DS-6: it still drops"],
+      ["reply", "Can you add a comment on DS-6 that it started on Monday?"],
     ];
     for (const [kind, question] of accepted) {
       it(`accepts a ${kind} offer for "${question}"`, async () => {
@@ -608,6 +611,13 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["reply", "Can I get an update on the ticket?"],
       ["reply", "Is there a new note on DS-6?"],
       ["reply", "Add me to the lunch list"],
+      ["reply", "Did anyone update DS-6?"],
+      ["reply", "When will support update DS-6?"],
+      ["reply", "Who can update the ticket?"],
+      ["reply", "What did the desk note on DS-6?"],
+      ["reply", "Did support add a comment on DS-6?"],
+      ["reply", "Note: DS-6 is still open, right?"],
+      ["reply", "Can you add me to the support channel?"],
     ];
     for (const [kind, question] of rejected) {
       it(`drops a ${kind} offer for "${question}", sends the no-change reply and logs only the kind`, async () => {

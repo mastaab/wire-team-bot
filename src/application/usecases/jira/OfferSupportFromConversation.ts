@@ -2,6 +2,7 @@ import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { isKeyInProject } from "../../../domain/ids/jiraLink";
 import { SUPPORT_SUMMARY_MAX } from "../../../domain/entities/SupportRequest";
+import type { SupportRequest } from "../../../domain/entities/SupportRequest";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import type { MessageCategory } from "../../ports/ClassifierPort";
 import type { OfferCommand, PendingOfferStore } from "../../ports/PendingOfferPort";
@@ -97,15 +98,19 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     const recentSince = this.now().getTime() - RECENTLY_RAISED_MS;
     try {
       const records = await this.requests.listByConversation(conversationId, { openOnly: true, limit: OPEN_REQUESTS_MAX });
-      return records
+      const open = records
         .filter((r) => !r.deleted && r.statusCategory !== "done"
           && sameQualifiedId(r.conversationId, conversationId) && isKeyInProject(r.key, projectKey))
-        .slice(0, OPEN_REQUESTS_MAX)
-        .map((r) => ({
-          key: r.key,
-          summary: r.summary,
-          raisedBySpeakerRecently: sameQualifiedId(r.requesterId, speakerId) && r.createdAt.getTime() >= recentSince,
-        }));
+        .slice(0, OPEN_REQUESTS_MAX);
+      // Only the speaker's newest recent request is marked: "it" continues one request, not several.
+      const newestBySpeaker = open
+        .filter((r) => sameQualifiedId(r.requesterId, speakerId) && r.createdAt.getTime() >= recentSince)
+        .reduce<SupportRequest | null>((newest, r) => (!newest || r.createdAt > newest.createdAt ? r : newest), null);
+      return open.map((r) => ({
+        key: r.key,
+        summary: r.summary,
+        raisedBySpeakerRecently: r.key === newestBySpeaker?.key,
+      }));
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: listing open requests failed", { err: errorName(err) });
       return null;

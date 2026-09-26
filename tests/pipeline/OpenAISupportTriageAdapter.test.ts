@@ -69,6 +69,17 @@ describe("OpenAISupportTriageAdapter", () => {
       expect(draft).toEqual({ summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition: "It jams on floor 2 too." });
     });
 
+    it("keeps an addition to a listed request even without a summary of its own", async () => {
+      const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: "DS-7", addition: "It only happens on the 3rd floor." }));
+      const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest("it only happens on the 3rd floor", OPEN);
+      expect(draft).toEqual({ summary: "", description: "", duplicateOf: "DS-7", addition: "It only happens on the 3rd floor." });
+    });
+
+    it("drops a draft with neither a summary nor an addition", async () => {
+      const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: "DS-7", addition: null }));
+      expect(await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
+    });
+
     it("drops an addition without a listed duplicate key", async () => {
       for (const duplicateOf of [null, "DS-99"]) {
         const { llm } = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf, addition: "It jams on floor 2 too." }));

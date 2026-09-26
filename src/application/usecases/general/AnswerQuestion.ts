@@ -124,12 +124,21 @@ const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?
 /** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
 const REPLY_VERB = /\b(?:repl(?:y|ies|ied|ying)|tell|send|let\b.*\bknow|message|answer)\b/i;
 /**
- * reply, first part (alternative): a verb of adding to the request ("add", "comment", "note",
- * "update"), as in "add to DS-10 that it's the 2nd floor too" or "note on DS-10 that ...". Not
- * after a determiner, so the nouns in "any update on DS-10?" or "a new note" do not count, and
- * "update" not before "me", "us", "on" and the like, so "update me on DS-10" does not count.
+ * reply, first part (alternative): a request to add to the request, phrased as an instruction
+ * at the start of the message, optionally after "please" or "can/could/would/will you": "add to
+ * DS-10 that ...", "please note on DS-10 that ...", "can you leave a comment on DS-10 ...".
+ * Questions about what others did ("did anyone update DS-10?", "who can update the ticket?")
+ * and "add me/us" do not count, nor does an instruction that ends as a question ("note: DS-10
+ * is still open, right?") unless it asks the bot ("can you add a comment on DS-10?").
  */
-const ADD_VERB = /(?<!\b(?:any|no|new|the|a|an|latest|last|recent|further)\s+)\b(?:add|comment|note|update(?!\s+(?:me|us|them|him|her|on|about|from|for|regarding)\b))\b/i;
+const ADD_REQUEST = /^(?:(?:please|pls|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:add(?!\s+(?:me|us)\b)|comment|note|update(?!\s+(?:me|us|them|him|her)\b)|(?:leave|post|put|write)\s+(?:a|an)\s+(?:note|comment))\b/i;
+const ASKS_BOT = /^(?:(?:please|pls|kindly)\s+)?(?:can|could|would|will)\s+you\b/i;
+
+/** True when the question asks the bot to add something to a request (see `ADD_REQUEST`). */
+function asksToAdd(question: string): boolean {
+  const text = question.trim();
+  return ADD_REQUEST.test(text) && (!text.endsWith("?") || ASKS_BOT.test(text));
+}
 /** reply, second part: the service desk as recipient. */
 const REPLY_TARGET = /\b(?:service\s+desk|support|jira|tickets?)\b/i;
 
@@ -436,7 +445,7 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
     case "resolve":
       return RESOLVE_INTENT.test(question);
     case "reply":
-      return (REPLY_VERB.test(question) || ADD_VERB.test(question))
+      return (REPLY_VERB.test(question) || asksToAdd(question))
         && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
   }
 }

@@ -18,7 +18,8 @@ Rules:
 - duplicateOf: the key of a listed open request only when it is clearly about the same problem; otherwise null.
 - A message without its own subject (such as "it only happens on the 3rd floor") may continue the listed request marked "(raised by the speaker recently)". Use that request as duplicateOf only when the message fits it.
 - addition: when duplicateOf is set, only the new information this message adds to that request: a new detail, a change, a recurrence (such as "it happened again") or a spread (such as "now also on the 2nd floor"). Use the speaker's words, from this message only, as one short sentence the service desk can read on its own: resolve "it" to the problem where needed (for example "It only happens on the 3rd floor." or "The Wi-Fi dropped again."). Use null when the message only repeats the problem with nothing new, and null when duplicateOf is null.
-- When the message describes no service-desk problem (chit-chat, a plan, a question about something else, a status question), return null.
+- A message that only adds to a listed request still gets a result: set duplicateOf and addition, and summary and description may be empty strings.
+- When the message describes no service-desk problem and adds nothing to a listed request (chit-chat, a plan, a question about something else, a status question), return null.
 
 Return ONLY valid JSON, no markdown, no explanation. Either:
 {"summary":"<one line>","description":"<what the message states>","duplicateOf":"<listed key>"|null,"addition":"<new information>"|null}
@@ -47,9 +48,10 @@ export class OpenAISupportTriageAdapter implements SupportTriagePort {
     const v = parsed as Record<string, unknown>;
     const summary = typeof v.summary === "string" ? v.summary.replace(/\s+/g, " ").trim() : "";
     const description = typeof v.description === "string" ? v.description.trim() : "";
-    if (!summary || !description) return null;
     const duplicateOf = listedKey(v.duplicateOf, openRequests);
     const addition = duplicateOf && typeof v.addition === "string" ? v.addition.trim() || null : null;
+    // An addition to a listed request needs no summary of its own; a new request does.
+    if (!addition && (!summary || !description)) return null;
     return { summary, description, duplicateOf, addition };
   }
 

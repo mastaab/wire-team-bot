@@ -107,13 +107,26 @@ describe("OfferSupportFromConversation", () => {
       }));
     });
 
-    it("never offers to raise a new request from an update", async () => {
-      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: null, addition: null });
+    it.each([
+      ["update", { duplicateOf: null, addition: null }],
+      ["blocker", { duplicateOf: null, addition: null }],
+      ["update", { duplicateOf: "DS-99", addition: "It happened again." }],
+    ] as const)("never offers to raise a new request from a %s (draft %j)", async (category, overrides) => {
+      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, ...overrides });
 
-      await useCase.execute(input({ categories: ["update"] }));
+      await useCase.execute(input({ categories: [category] }));
 
       expect(sent).toEqual([]);
       expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("falls through from an unmatched status question to an addition when the message is also an update", async () => {
+      const { sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It happened again." }, null);
+
+      await useCase.execute(input({ categories: ["request_status", "update"] }));
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain("Shall I add this to **DS-6**");
     });
 
     it("makes no model call for an update when the conversation has no open request", async () => {
@@ -188,7 +201,7 @@ describe("OfferSupportFromConversation", () => {
       expect(Object.keys(open[0]!)).toEqual(["key", "summary", "raisedBySpeakerRecently"]);
     });
 
-    it("marks the requests the speaker raised within the last hour, keeping newest first", async () => {
+    it("marks only the speaker's newest request of the last hour, keeping newest first", async () => {
       const now = new Date("2026-09-25T12:00:00Z");
       const records = [
         makeRequest({ key: "DS-10", createdAt: new Date(now.getTime() - 5 * 60 * 1000) }),
@@ -203,8 +216,22 @@ describe("OfferSupportFromConversation", () => {
 
       const open = triage.draftRequest.mock.calls[0]![1] as Array<{ key: string; raisedBySpeakerRecently: boolean }>;
       expect(open.map((r) => [r.key, r.raisedBySpeakerRecently])).toEqual([
-        ["DS-10", true], ["DS-9", false], ["DS-8", false], ["DS-7", true], ["DS-6", false],
+        ["DS-10", true], ["DS-9", false], ["DS-8", false], ["DS-7", false], ["DS-6", false],
       ]);
+    });
+
+    it("marks the speaker's request from exactly an hour ago when it is their only recent one", async () => {
+      const now = new Date("2026-09-25T12:00:00Z");
+      const records = [
+        makeRequest({ key: "DS-9", requesterId: bob, createdAt: new Date(now.getTime() - 10 * 60 * 1000) }),
+        makeRequest({ key: "DS-7", createdAt: new Date(now.getTime() - 60 * 60 * 1000) }),
+      ];
+      const { triage, useCase } = setup(records, DRAFT, null, now);
+
+      await useCase.execute(input());
+
+      const open = triage.draftRequest.mock.calls[0]![1] as Array<{ key: string; raisedBySpeakerRecently: boolean }>;
+      expect(open.map((r) => [r.key, r.raisedBySpeakerRecently])).toEqual([["DS-9", false], ["DS-7", true]]);
     });
 
     it("stays silent when the model finds no service-desk problem", async () => {
@@ -273,6 +300,13 @@ describe("OfferSupportFromConversation", () => {
       await busy.useCase.execute(input());
       expect(busy.sent).toEqual([]);
       expect(busy.offers.put).not.toHaveBeenCalled();
+
+      // A live offer before the model call skips the triage entirely.
+      const live = setup(undefined, draft);
+      live.offers.has.mockReturnValue(true);
+      await live.useCase.execute(input());
+      expect(live.triage.draftRequest).not.toHaveBeenCalled();
+      expect(live.sent).toEqual([]);
 
       const controller = new AbortController();
       const cancelled = setup(undefined, draft);
