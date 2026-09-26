@@ -1772,6 +1772,7 @@ The first seven rows record the earlier action-linked build; the rework rows fol
 | Adding to an open request: contract (`868bcd6`), build (subagent), integration (`d1f28cf`) | main session and subagent | done |
 | Adding to an open request: real-model CLI check (2026-09-26, CLI channel, no confirmations) | main session | first run: unmentioned additions got no offer because the classifier labelled them `update` only; fixed (`1f3f1d8`): updates and blockers may add to an open request (never raise a new one), only when the channel has open requests. Rerun: "the laptop battery drain only happens on the new ThinkPads" and "…happens even when the lid is closed" got "Shall I add this to **DS-6** …?" with the detail; "the laptop battery still drains overnight" got an addition offer ("still occurring", by design); "we should order more coffee" got nothing; mentioned "add a comment on DS-6 that it started after the BIOS update" got the reply offer; "any update on DS-6?" and "did anyone update DS-6?" got the live status, not a reply offer |
 | Independent review of adding to an open request | subagent | done: no path to a Jira write without the speaker's yes. Fixed (`7a9d80f`): an addition was discarded when the model left the summary empty (exactly the "it only happens on the 3rd floor" case); add/comment/note/update counted status questions ("did anyone update DS-6?") as reply intent, now only instructions at the start of the message count, including "leave a note" and "post a comment"; every recent request of the speaker was marked instead of the newest; test gaps. Accepted as known: the addition is lightly rephrased ("it" resolved to the problem) and always shown in full; an unmentioned correction to a passive offer goes to the answer model with the recent conversation; with passive help on, updates and blockers wait for the open-request read (and a triage call when requests are open) before extraction. 1076 tests pass |
+| Adding to an open request: live check (2026-09-26, staging bot on `623a771`, passive help on) | operator and main session | passed: unmentioned "it only happens on the 3rd floor" (no subject, DS-10 raised by the speaker within the hour) got "Shall I add this to **DS-10** …? > It only happens on the 3rd floor."; yes sent it; "the wifi dropped again just now" got an addition offer and yes sent it; mentioned "leave a note on DS-10 that the 2nd floor is fine" got the reply offer and no declined it; mentioned "did anyone update DS-10" got the live status listing both replies as "Your team (via Wire)". Jira shows exactly the two public comments ending "Sent from Wire." by the service account; two audit entries; no errors in the bot log |
 
 ### Acceptance
 
@@ -1897,20 +1898,20 @@ Committed by the main session before the parallel build. Builders code against t
 
 ### Handover for the next session (2026-09-26)
 
-**Start here.** Read AGENTS.md, then this section 6. The support-request rework is built, reviewed and checked with the real model; what remains is the live journey and Jira clean-up, both needing the operator's approval.
+**Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`) and adding to an open request. What remains is Jira clean-up (operator approval) and the open items listed below.
 
 **State.**
 - Branch `demo/jira`, working tree clean, not pushed. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
-- 908 tests pass; `npx tsc --noEmit` and `npm run lint` are clean.
-- The local database `wire_team_bot` has the `support_requests` migration applied (2026-09-26). It holds DS-6 for the CLI channel. The old `jira:` links on ACT-0005, ACT-0008, ACT-0010 and ACT-0012 are inert.
-- The staging bot runs from this checkout on macOS (`npm run build && npm start`, loading `.env` with Wire staging, Claude API, all Jira keys and `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on`). Restart it after a rebuild; it is not running from this session.
+- 1076 tests pass; `npx tsc --noEmit` and `npm run lint` are clean.
+- The local database `wire_team_bot` has the `support_requests` migration applied (2026-09-26). Open requests: DS-6 (CLI channel) and DS-10 (staging channel); DS-7, DS-8 and DS-9 are resolved. The old `jira:` links on ACT-0005, ACT-0008, ACT-0010 and ACT-0012 are inert.
+- The staging bot runs from this checkout on macOS (`npm run build && npm start`, loading `.env` with Wire staging, Claude API, all Jira keys and `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on`). Start it with `WIRE_TEAM_BOT_JIRA_PASSIVE=on npm start` for the passive demo (the setting is not in `.env`). Restart it after a rebuild; it stops when the Claude Code session that started it ends.
 - Postgres 17 with pgvector via `brew services`. The staging channel's timezone is `Europe/Berlin` (set by hand); the CLI channel is `UTC`.
-- Jira: DS-1 to DS-5 are test tickets from the action-linked build; DS-6 is the synthetic support request from the CLI check.
+- Jira: DS-1 to DS-5 are test tickets from the action-linked build; DS-6 to DS-10 are synthetic support requests from CLI and staging checks.
 
 **Next steps (each Jira write needs the operator's approval).**
-1. Live journey on Wire staging: raise by command and by confirmed offer, `status of`, `support requests`, reply (command and offer), resolve (command and offer), and one reopened-in-Jira check; verify through Jira, the database, the audit log and the bot log.
-2. Resolve or delete DS-1 to DS-5, and DS-6 when no longer useful.
-3. Record the evidence in "Work breakdown and status" and push to the fork on request.
+1. Resolve or delete DS-1 to DS-6 and DS-10 when no longer needed for demos.
+2. Open, not built: resolving with a closing comment in one step; the per-channel timezone command (see "Open items").
+3. Push to the fork on request; upstream merge is the owner's decision.
 
 **How to validate.**
 - Unit gate: `npx tsc --noEmit; echo $?`, `npm run lint >/dev/null 2>&1; echo $?`, `npm test > log 2>&1; echo $?`. Check exit codes; never pipe the checked command into `tail`.
