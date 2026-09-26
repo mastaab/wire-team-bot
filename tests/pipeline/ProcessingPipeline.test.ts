@@ -518,7 +518,7 @@ describe("passive service-desk help", () => {
   });
 
   it("calls the use case with the job, the channel timezone and the abort signal", async () => {
-    const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
+    const supportHelp = { execute: vi.fn().mockResolvedValue(false) };
     const deps = makeDeps({ supportHelp, channelConfig: activeChannel(), classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
     const controller = new AbortController();
     await new ProcessingPipeline(deps).process({ ...baseJob(), text: "The printer jams" }, controller.signal);
@@ -531,7 +531,7 @@ describe("passive service-desk help", () => {
   });
 
   it("runs before extraction for a high-signal message with a service-desk category", async () => {
-    const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
+    const supportHelp = { execute: vi.fn().mockResolvedValue(false) };
     const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...highSignalResult, categories: ["request_status", "decision"] }) } });
     await new ProcessingPipeline(deps).process(baseJob());
     expect(supportHelp.execute).toHaveBeenCalledWith(expect.objectContaining({ categories: ["request_status", "decision"] }));
@@ -547,7 +547,7 @@ describe("passive service-desk help", () => {
   });
 
   it.each([["update"], ["blocker"], ["action"], ["decision"]])("is called for a %s, which may add to or resolve an open request", async (category) => {
-    const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
+    const supportHelp = { execute: vi.fn().mockResolvedValue(false) };
     const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...lowSignalResult, categories: [category] }) } });
     await new ProcessingPipeline(deps).process(baseJob());
     expect(supportHelp.execute).toHaveBeenCalledWith(expect.objectContaining({ categories: [category] }));
@@ -569,9 +569,47 @@ describe("passive service-desk help", () => {
     expect(deps.logger.error).not.toHaveBeenCalled();
   });
 
+  describe("no double capture", () => {
+    const capture: ExtractResult = { ...fullExtractResult, completions: [{ actionId: "ACT-old", note: "Done" }] };
+    const target = { id: "ACT-old", assigneeId: senderId, description: "Write the customer proposal", rawMessageId: "earlier", status: "open", version: 1 };
+    function setup(execute: ReturnType<typeof vi.fn>) {
+      const deps = makeDeps({
+        supportHelp: { execute },
+        classifier: { classify: vi.fn().mockResolvedValue({ ...highSignalResult, categories: ["service_request", "action"] }) },
+        extraction: { extract: vi.fn().mockResolvedValue(capture) },
+      });
+      vi.mocked(deps.actionRepo.query).mockImplementation(async query => query.rawMessageId ? [] : [target] as never);
+      return deps;
+    }
+
+    it("skips extraction, captures, completions and reactions when passive help replied, and still records the signal", async () => {
+      const deps = setup(vi.fn().mockResolvedValue(true));
+      await new ProcessingPipeline(deps).process(baseJob());
+      expect(deps.extraction.extract).not.toHaveBeenCalled();
+      expect(deps.actionRepo.create).not.toHaveBeenCalled();
+      expect(deps.actionRepo.update).not.toHaveBeenCalled();
+      expect(deps.decisionRepo.create).not.toHaveBeenCalled();
+      expect(deps.wireOutbound.sendReaction).not.toHaveBeenCalled();
+      expect(deps.signalRepo.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ summary: "Conversation activity" }));
+    });
+
+    it.each([
+      ["did not reply", vi.fn().mockResolvedValue(false)],
+      ["failed", vi.fn().mockRejectedValue(new Error("private diagnostic"))],
+    ])("captures as today when passive help %s", async (_label, execute) => {
+      const deps = setup(execute);
+      await new ProcessingPipeline(deps).process(baseJob());
+      expect(deps.extraction.extract).toHaveBeenCalledOnce();
+      expect(deps.actionRepo.create).toHaveBeenCalledOnce();
+      expect(deps.actionRepo.update).toHaveBeenCalledOnce();
+      expect(deps.decisionRepo.create).toHaveBeenCalledOnce();
+      expect(deps.wireOutbound.sendReaction).toHaveBeenCalledExactlyOnceWith(convId, "msg-1", ["📝", "✅"]);
+    });
+  });
+
   it("stops when the job is cancelled while the use case runs", async () => {
     const controller = new AbortController();
-    const supportHelp = { execute: vi.fn(async () => { controller.abort(); }) };
+    const supportHelp = { execute: vi.fn(async () => { controller.abort(); return true; }) };
     const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
     await new ProcessingPipeline(deps).process(baseJob(), controller.signal);
     expect(supportHelp.execute).toHaveBeenCalledOnce();

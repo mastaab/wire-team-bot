@@ -77,18 +77,21 @@ export class ProcessingPipeline {
     catch (err) { this.deps.logger.error("Pipeline processing failed", { channelId: job.channelId, messageId: job.messageId, errorType: err instanceof Error ? err.name : "UnknownError" }); }
   }
 
-  /** Passive service-desk help for a service-desk category; its failures never affect the rest of the pipeline. */
+  /**
+   * Passive service-desk help for a service-desk category; true when it sent something. Its
+   * failures never affect the rest of the pipeline.
+   */
   private async offerSupportHelp(
     job: MessageJob, result: ClassifyResult, timezone: string | undefined, log: Logger, signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const supportHelp = this.deps.supportHelp;
-    if (!supportHelp) return;
+    if (!supportHelp) return false;
     // Updates, blockers, actions and decisions too: they may add information to or resolve an
     // open request (see the use case).
     const relevant: MessageCategory[] = ["service_request", "request_status", "update", "blocker", "action", "decision"];
-    if (!result.categories.some((category) => relevant.includes(category))) return;
+    if (!result.categories.some((category) => relevant.includes(category))) return false;
     try {
-      await supportHelp.execute({
+      return await supportHelp.execute({
         text: job.text,
         messageId: job.messageId,
         conversationId: job.conversationId,
@@ -101,6 +104,7 @@ export class ProcessingPipeline {
       });
     } catch (err) {
       log.warn("Pipeline: passive service-desk help failed", { err: (err instanceof Error ? err.name : "UnknownError") });
+      return false;
     }
   }
 
@@ -146,10 +150,12 @@ export class ProcessingPipeline {
       confidence: classifyResult.confidence,
     });
 
-    await this.offerSupportHelp(job, classifyResult, channelCtx.timezone, log, signal);
+    const helped = await this.offerSupportHelp(job, classifyResult, channelCtx.timezone, log, signal);
     if (signal?.aborted) return;
 
-    if (!classifyResult.is_high_signal) {
+    // A message passive help answered belongs to the service desk: it is recorded like a
+    // low-signal message and never also captured as an action, decision or completion.
+    if (!classifyResult.is_high_signal || helped) {
       // Low-signal: write a lightweight discussion signal and stop
       const signalType = classifyResult.categories.includes("question") ? "question"
         : classifyResult.categories.includes("blocker") ? "blocker"

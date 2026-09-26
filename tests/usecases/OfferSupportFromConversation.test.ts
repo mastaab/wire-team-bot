@@ -44,6 +44,7 @@ function setup(records: SupportRequest[] = [makeRequest()], draft: SupportDraft 
   const triage = {
     draftRequest: vi.fn().mockResolvedValue(draft),
     matchStatusQuestion: vi.fn().mockResolvedValue(statusKey),
+    extractPartDetails: vi.fn(),
   };
   const getIssueStatus = { projectKey: "DS", execute: vi.fn().mockResolvedValue(null) };
   const offers = {
@@ -339,7 +340,7 @@ describe("OfferSupportFromConversation", () => {
       const { wire, offers, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It happened again." });
       wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
 
-      await expect(useCase.execute(input())).resolves.toBeUndefined();
+      await expect(useCase.execute(input())).resolves.toBe(false);
 
       expect(offers.put).not.toHaveBeenCalled();
     });
@@ -559,7 +560,7 @@ describe("OfferSupportFromConversation", () => {
       const { wire, offers, logger, useCase } = setup();
       wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
 
-      await expect(useCase.execute(input())).resolves.toBeUndefined();
+      await expect(useCase.execute(input())).resolves.toBe(false);
 
       expect(offers.put).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { err: "TypeError" });
@@ -569,7 +570,7 @@ describe("OfferSupportFromConversation", () => {
       const { triage, sent, logger, useCase } = setup();
       triage.draftRequest.mockRejectedValue(new RangeError(`bad ${MESSAGE}`));
 
-      await expect(useCase.execute(input())).resolves.toBeUndefined();
+      await expect(useCase.execute(input())).resolves.toBe(false);
 
       expect(sent).toEqual([]);
       expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { err: "RangeError" });
@@ -756,7 +757,7 @@ describe("OfferSupportFromConversation", () => {
       const { wire, offers, useCase } = setup(undefined, RESOLVE);
       wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
 
-      await expect(useCase.execute(input())).resolves.toBeUndefined();
+      await expect(useCase.execute(input())).resolves.toBe(false);
 
       expect(offers.put).not.toHaveBeenCalled();
     });
@@ -832,7 +833,7 @@ describe("OfferSupportFromConversation", () => {
       const { triage, getIssueStatus, logger, useCase } = setup();
       triage.matchStatusQuestion.mockRejectedValue(new SyntaxError("bad"));
 
-      await expect(useCase.execute(input({ categories: ["request_status"] }))).resolves.toBeUndefined();
+      await expect(useCase.execute(input({ categories: ["request_status"] }))).resolves.toBe(false);
 
       expect(getIssueStatus.execute).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { err: "SyntaxError" });
@@ -844,7 +845,7 @@ describe("OfferSupportFromConversation", () => {
       const tracker = makeTracker();
       const { wire, sent } = makeWire();
       const getIssueStatus = new GetIssueStatus(requests, tracker, wire, makeAudit(), makeLogger());
-      const triage = { draftRequest: vi.fn(), matchStatusQuestion: vi.fn().mockResolvedValue("DS-6") };
+      const triage = { draftRequest: vi.fn(), matchStatusQuestion: vi.fn().mockResolvedValue("DS-6"), extractPartDetails: vi.fn() };
       const offers = { put: vi.fn(), take: vi.fn(), has: vi.fn(), clearConversation: vi.fn(), drop: vi.fn(), recentlyDropped: vi.fn() };
       const useCase = new OfferSupportFromConversation(requests, triage, getIssueStatus, offers, wire, makeLogger());
 
@@ -875,6 +876,86 @@ describe("OfferSupportFromConversation", () => {
       expect(getIssueStatus.execute).not.toHaveBeenCalled();
       expect(sent).toHaveLength(1);
       expect(offers.put).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("return value", () => {
+    const ADDITION = { ...DRAFT, duplicateOf: "DS-6", addition: "It happened again." };
+    const RESOLVE = { ...DRAFT, resolves: "DS-6", closingComment: "It works again." };
+    const PART = { ...DRAFT, requestKind: "part" as const, part: { part: "left mirror glass" } };
+
+    it.each<[string, SupportDraft, OfferSupportInput["categories"]]>([
+      ["an offer to raise", DRAFT, ["service_request"]],
+      ["a missing-details question", PART, ["service_request"]],
+      ["an addition offer", ADDITION, ["update"]],
+      ["a resolve offer", RESOLVE, ["action"]],
+    ])("is true after sending %s", async (_label, draft, categories) => {
+      const { sent, useCase } = setup(undefined, draft);
+      await expect(useCase.execute(input({ categories }))).resolves.toBe(true);
+      expect(sent).toHaveLength(1);
+    });
+
+    it("is true after a status answer", async () => {
+      const { getIssueStatus, useCase } = setup(undefined, DRAFT, "DS-6");
+      await expect(useCase.execute(input({ categories: ["request_status"] }))).resolves.toBe(true);
+      expect(getIssueStatus.execute).toHaveBeenCalledOnce();
+    });
+
+    it("is false when the status answer throws", async () => {
+      const { getIssueStatus, useCase } = setup(undefined, DRAFT, "DS-6");
+      getIssueStatus.execute.mockRejectedValue(new TypeError("socket closed"));
+      await expect(useCase.execute(input({ categories: ["request_status"] }))).resolves.toBe(false);
+    });
+
+    it("is true when the question was sent but a pause during the send kept the offer from being stored", async () => {
+      const controller = new AbortController();
+      const { wire, offers, sent, useCase } = setup();
+      wire.sendPlainText.mockImplementation(async (_conv: unknown, text: string) => { sent.push(text); controller.abort(); });
+      await expect(useCase.execute(input({ signal: controller.signal }))).resolves.toBe(true);
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("is false for every path that sends nothing", async () => {
+      const cases: Array<[ReturnType<typeof setup>, OfferSupportInput]> = [];
+      // Below the threshold, and without a relevant category.
+      cases.push([setup(), input({ confidence: PASSIVE_CONFIDENCE_MIN - 0.01 })]);
+      cases.push([setup(), input({ categories: ["discussion"] })]);
+      // The open requests cannot be read.
+      const unreadable = setup();
+      unreadable.requests.listByConversation.mockRejectedValue(new Error("db down"));
+      cases.push([unreadable, input()]);
+      // No draft, a covered problem without an addition, an addition-only category without one,
+      // a close request for a request that is not open here, a draft outside the bounds.
+      cases.push([setup(undefined, null), input()]);
+      cases.push([setup(undefined, { ...DRAFT, duplicateOf: "DS-6" }), input()]);
+      cases.push([setup(undefined, DRAFT), input({ categories: ["update"] })]);
+      cases.push([setup([], DRAFT), input({ categories: ["update"] })]);
+      cases.push([setup(undefined, { ...DRAFT, resolves: "DS-99" }), input()]);
+      cases.push([setup(undefined, { ...DRAFT, summary: "" }), input()]);
+      cases.push([setup(undefined, { ...DRAFT, resolves: "DS-6", closingComment: "x".repeat(REPLY_BODY_MAX + 1) }), input()]);
+      // A live offer, a draft failure, a status question that matches nothing.
+      const busy = setup();
+      busy.offers.has.mockReturnValue(true);
+      cases.push([busy, input()]);
+      const failing = setup();
+      failing.triage.draftRequest.mockRejectedValue(new SyntaxError("bad"));
+      cases.push([failing, input()]);
+      cases.push([setup(undefined, DRAFT, null), input({ categories: ["request_status"] })]);
+      // Cancelled before the send, and a failed send.
+      const controller = new AbortController();
+      controller.abort();
+      cases.push([setup(), input({ signal: controller.signal })]);
+      const statusCancelled = setup(undefined, DRAFT, "DS-6");
+      cases.push([statusCancelled, input({ categories: ["request_status"], signal: controller.signal })]);
+      const sendFails = setup();
+      sendFails.wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
+      cases.push([sendFails, input()]);
+
+      for (const [ctx, message] of cases) {
+        await expect(ctx.useCase.execute(message)).resolves.toBe(false);
+        expect(ctx.getIssueStatus.execute).not.toHaveBeenCalled();
+        expect(ctx.sent).toEqual([]);
+      }
     });
   });
 });

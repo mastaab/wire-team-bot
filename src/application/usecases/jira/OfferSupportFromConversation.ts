@@ -72,8 +72,8 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  async execute(input: OfferSupportInput): Promise<void> {
-    if (!(input.confidence >= PASSIVE_CONFIDENCE_MIN)) return;
+  async execute(input: OfferSupportInput): Promise<boolean> {
+    if (!(input.confidence >= PASSIVE_CONFIDENCE_MIN)) return false;
     const wantsStatus = input.categories.includes("request_status");
     const wantsOffer = input.categories.includes("service_request");
     // The classifier often labels news about a reported problem ("it only happens on the new
@@ -81,20 +81,18 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     // decision only. Such a message may add to or resolve an open request, but it never leads to
     // an offer to raise a new one.
     const mayAdd = !wantsOffer && MAY_ADD_CATEGORIES.some((category) => input.categories.includes(category));
-    if (!wantsStatus && !wantsOffer && !mayAdd) return;
+    if (!wantsStatus && !wantsOffer && !mayAdd) return false;
 
     const open = await this.openRequests(input.conversationId, input.senderId);
-    if (!open) return;
+    if (!open) return false;
 
     if (wantsStatus && open.length > 0) {
       const key = await this.matchStatus(input.text, open);
-      if (key) {
-        await this.answerStatus(input, key);
-        return;
-      }
+      if (key) return this.answerStatus(input, key);
     }
-    if (wantsOffer) await this.offerSupport(input, open, false);
-    else if (mayAdd && open.length > 0) await this.offerSupport(input, open, true);
+    if (wantsOffer) return this.offerSupport(input, open, false);
+    if (mayAdd && open.length > 0) return this.offerSupport(input, open, true);
+    return false;
   }
 
   /**
@@ -139,9 +137,12 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     return open.find((r) => r.key === normalised)?.key ?? null;
   }
 
-  /** Read-only: `GetIssueStatus` re-checks scope, reads the ticket live and replies to the source message. */
-  private async answerStatus(input: OfferSupportInput, key: string): Promise<void> {
-    if (input.signal?.aborted) return;
+  /**
+   * Read-only: `GetIssueStatus` re-checks scope, reads the ticket live and replies to the source
+   * message on every path, so it sent something exactly when it did not throw.
+   */
+  private async answerStatus(input: OfferSupportInput, key: string): Promise<boolean> {
+    if (input.signal?.aborted) return false;
     try {
       await this.getIssueStatus.execute({
         reference: key,
@@ -149,23 +150,26 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
         timezone: input.timezone,
         replyToMessageId: input.messageId,
       });
+      return true;
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: status answer failed", { err: errorName(err) });
+      return false;
     }
   }
 
-  private async offerSupport(input: OfferSupportInput, open: readonly OpenRequestRef[], additionOnly: boolean): Promise<void> {
+  /** True when it sent an offer or a missing-details question. */
+  private async offerSupport(input: OfferSupportInput, open: readonly OpenRequestRef[], additionOnly: boolean): Promise<boolean> {
     // One live offer per speaker: a new one would silently replace what they may be about to confirm.
-    if (this.offers.has(input.conversationId, input.senderId)) return;
+    if (this.offers.has(input.conversationId, input.senderId)) return false;
 
     let draft: SupportDraft | null;
     try {
       draft = await this.triage.draftRequest(input.text, open);
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: draftRequest failed", { err: errorName(err) });
-      return;
+      return false;
     }
-    if (!draft) return;
+    if (!draft) return false;
 
     // Resolving takes precedence over adding and over raising: a message that says an open
     // request is solved is about that request, whatever else it mentions.
@@ -174,20 +178,19 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     // A close request for a request that is not open here never falls through to raising a new one.
     if (resolves && !resolving) {
       this.logger?.debug("OfferSupportFromConversation: close request for a request that is not open here", { key: resolves });
-      return;
+      return false;
     }
     if (resolving) {
       const comment = typeof draft.closingComment === "string" ? draft.closingComment.trim() : "";
       if (comment.length > REPLY_BODY_MAX) {
         this.logger?.debug("OfferSupportFromConversation: closing comment outside the offer bounds", { key: resolving.key });
-        return;
+        return false;
       }
-      await this.offer(
+      return this.offer(
         input,
         formatResolveQuestion(resolving.key, resolving.summary, comment || undefined),
         comment ? { kind: "resolve", issueKey: resolving.key, comment } : { kind: "resolve", issueKey: resolving.key },
       );
-      return;
     }
 
     const duplicateOf = typeof draft.duplicateOf === "string" ? draft.duplicateOf.trim().toUpperCase() : "";
@@ -196,16 +199,15 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       const body = typeof draft.addition === "string" ? draft.addition.trim() : "";
       if (!body || body.length > REPLY_BODY_MAX) {
         this.logger?.debug("OfferSupportFromConversation: covered by an open request", { key: covering.key, addition: body.length > 0 });
-        return;
+        return false;
       }
-      await this.offer(input, formatReplyQuestion(covering.key, covering.summary, body), { kind: "reply", issueKey: covering.key, body });
-      return;
+      return this.offer(input, formatReplyQuestion(covering.key, covering.summary, body), { kind: "reply", issueKey: covering.key, body });
     }
-    if (additionOnly) return;
+    if (additionOnly) return false;
     const command = toSupportCommand(draft);
     if (!command) {
       this.logger?.debug("OfferSupportFromConversation: draft outside the offer bounds");
-      return;
+      return false;
     }
     // A part order without all its essentials asks for what is missing instead. The incomplete
     // order is stored like any offer: the speaker's answer amends it, and it cannot be confirmed
@@ -214,21 +216,25 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     const question = missing.length > 0
       ? formatMissingPartsQuestion(missing)
       : formatSupportQuestion(command.summary, command.description, command.requestKind, command.part);
-    await this.offer(input, question, command);
+    return this.offer(input, question, command);
   }
 
-  /** Sends the code-written question as a native reply to the source message, then stores the offer for the speaker. */
-  private async offer(input: OfferSupportInput, question: string, command: OfferCommand): Promise<void> {
-    if (input.signal?.aborted || this.offers.has(input.conversationId, input.senderId)) return;
+  /**
+   * Sends the code-written question as a native reply to the source message, then stores the
+   * offer for the speaker. True when the question was sent, even if a pause during the send
+   * means the offer is not stored.
+   */
+  private async offer(input: OfferSupportInput, question: string, command: OfferCommand): Promise<boolean> {
+    if (input.signal?.aborted || this.offers.has(input.conversationId, input.senderId)) return false;
     try {
       await this.wireOutbound.sendPlainText(input.conversationId, question, { replyToMessageId: input.messageId });
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: sending the offer failed", { err: errorName(err) });
-      return;
+      return false;
     }
     // A pause or secure during the send has already cleared the conversation's offers; storing
     // this one now would let it survive into the paused channel.
-    if (input.signal?.aborted) return;
+    if (input.signal?.aborted) return true;
     const now = this.now();
     this.offers.put({
       command,
@@ -237,6 +243,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       createdAt: now,
       expiresAt: new Date(now.getTime() + OFFER_TTL_MS),
     });
+    return true;
   }
 }
 
