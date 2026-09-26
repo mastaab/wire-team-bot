@@ -41,7 +41,50 @@ describe("OpenAISupportTriageAdapter", () => {
     it("returns a trimmed draft with a listed duplicate key", async () => {
       const { llm } = makeLLM("```json\n" + JSON.stringify({ summary: "  Printer\n jams ", description: " It jams on every job. ", duplicateOf: "ds-7" }) + "\n```");
       const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
-      expect(draft).toEqual({ summary: "Printer jams", description: "It jams on every job.", duplicateOf: "DS-7" });
+      expect(draft).toEqual({ summary: "Printer jams", description: "It jams on every job.", duplicateOf: "DS-7", addition: null });
+    });
+
+    it("asks for the new information as the addition and marks the speaker's recent request", async () => {
+      const { llm, chatCompletion } = makeLLM("null");
+      const open = [{ key: "DS-8", summary: "Wi-Fi drops", raisedBySpeakerRecently: true }, ...OPEN];
+      await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, open);
+      const [, messages] = chatCompletion.mock.calls[0]!;
+      const system = messages[0].content as string;
+      expect(system).toContain("addition: when duplicateOf is set, only the new information this message adds to that request");
+      expect(system).toContain("\"it happened again\"");
+      expect(system).toContain("\"now also on the 2nd floor\"");
+      expect(system).toContain("from this message only");
+      expect(system).toContain("the service desk can read on its own");
+      expect(system).toContain("null when the message only repeats the problem with nothing new");
+      expect(system).toContain("may continue the listed request marked \"(raised by the speaker recently)\"");
+      expect(system).toContain("\"addition\":\"<new information>\"|null");
+      expect(messages[1].content).toContain(
+        "- DS-8: Wi-Fi drops (raised by the speaker recently)\n- DS-6: VPN drops every ten minutes\n- DS-7: Printer jams\n",
+      );
+    });
+
+    it("returns a trimmed addition with a listed duplicate key", async () => {
+      const { llm } = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition: "  It jams on floor 2 too. " }));
+      const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
+      expect(draft).toEqual({ summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition: "It jams on floor 2 too." });
+    });
+
+    it("drops an addition without a listed duplicate key", async () => {
+      for (const duplicateOf of [null, "DS-99"]) {
+        const { llm } = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf, addition: "It jams on floor 2 too." }));
+        const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
+        expect(draft).toMatchObject({ duplicateOf: null, addition: null });
+      }
+    });
+
+    it.each([
+      ["an empty addition", "   "],
+      ["a non-string addition", 5],
+      ["a null addition", null],
+    ])("returns a null addition for %s", async (_label, addition) => {
+      const { llm } = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf: "DS-7", addition }));
+      const draft = await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN);
+      expect(draft).toMatchObject({ duplicateOf: "DS-7", addition: null });
     });
 
     it("drops a duplicate key that is not among the open requests", async () => {

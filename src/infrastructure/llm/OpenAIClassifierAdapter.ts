@@ -41,7 +41,7 @@ const LOW_SIGNAL_LINE = "Low signal (discussion-only, question, routine): is_hig
 
 const SERVICE_DESK_PROMPT = SYSTEM_PROMPT
   .replace(ROUTINE_LINE, ROUTINE_LINE +
-    "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need\n" +
+    "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n" +
     "- request_status: someone asks about the state of a problem or service request they or others reported\n")
   .replace(LOW_SIGNAL_LINE, LOW_SIGNAL_LINE +
     "service_request and request_status never make a message high signal on their own. They come in addition to every other category that applies: a problem that blocks work is also a blocker, and a commitment to fix it is also an action.\n");

@@ -12,7 +12,7 @@ import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRe
 import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import { GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatSupportQuestion, offerCommandLine, parseOfferMarker } from "../../services/offers";
+import { GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatReplyQuestion, formatSupportQuestion, offerCommandLine, parseOfferMarker } from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
@@ -123,6 +123,13 @@ const SUPPORT_INTENT = /\b(?:raise|open|create|file|log(?!\s+(?:in|into|on)\b)|s
 const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?|working)\s+again|no\s+longer\s+(?:needed|necessary|required))\b/i;
 /** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
 const REPLY_VERB = /\b(?:repl(?:y|ies|ied|ying)|tell|send|let\b.*\bknow|message|answer)\b/i;
+/**
+ * reply, first part (alternative): a verb of adding to the request ("add", "comment", "note",
+ * "update"), as in "add to DS-10 that it's the 2nd floor too" or "note on DS-10 that ...". Not
+ * after a determiner, so the nouns in "any update on DS-10?" or "a new note" do not count, and
+ * "update" not before "me", "us", "on" and the like, so "update me on DS-10" does not count.
+ */
+const ADD_VERB = /(?<!\b(?:any|no|new|the|a|an|latest|last|recent|further)\s+)\b(?:add|comment|note|update(?!\s+(?:me|us|them|him|her|on|about|from|for|regarding)\b))\b/i;
 /** reply, second part: the service desk as recipient. */
 const REPLY_TARGET = /\b(?:service\s+desk|support|jira|tickets?)\b/i;
 
@@ -398,10 +405,7 @@ export class AnswerQuestion {
 
     const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
     if (!request) return null;
-    if (command.kind === "reply") {
-      const quoted = command.body.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
-      return `Here is the reply for **${request.key}**:\n${quoted}\n\nShall I send it (yes or no)?`;
-    }
+    if (command.kind === "reply") return formatReplyQuestion(request.key, request.summary, command.body);
     // A request last known as done is not dropped: the desk may have reopened it, and the use case checks live.
     return `Shall I resolve **${request.key}** "${oneLine(request.summary)}" with the service desk (yes or no)?`;
   }
@@ -432,7 +436,8 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
     case "resolve":
       return RESOLVE_INTENT.test(question);
     case "reply":
-      return REPLY_VERB.test(question) && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
+      return (REPLY_VERB.test(question) || ADD_VERB.test(question))
+        && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
   }
 }
 
