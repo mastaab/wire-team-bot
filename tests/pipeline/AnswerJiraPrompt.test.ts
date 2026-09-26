@@ -103,6 +103,17 @@ describe("OpenAIGeneralAnswerAdapter with support requests and offers", () => {
     expect(user.indexOf("## Support requests")).toBeLessThan(user.indexOf("## Live support request tickets"));
   });
 
+  it("tells the model to revise a pending offer it is given, which appears under Related Context", async () => {
+    const { llm, adapter } = setup("Updated.");
+    const pending = 'Pending offer being amended (not confirmed, nothing was sent; the requester\'s message changes it): {"kind":"support","summary":"VPN drops","description":"My VPN drops."}';
+    await adapter.answer("It started on Monday", [], [result("pending-offer", "summary", pending)], [], undefined, 0.5);
+    const system = llm.chatCompletion.mock.calls[0][1][0].content as string;
+    const user = llm.chatCompletion.mock.calls[0][1][1].content as string;
+    expect(system).toContain('A "Pending offer being amended" line under "## Related Context" is the requester\'s unconfirmed offer');
+    expect(system).toContain("end with a revised marker of the same kind (for reply, the same issueKey)");
+    expect(user).toContain(`## Related Context\n- ${pending}\n\n`);
+  });
+
   it("omits both sections when there are no support request results", async () => {
     const { llm, adapter } = setup("Nothing yet.");
     await adapter.answer("Anything?", [], [result("E1", "entity", "Something")], [], undefined, 0.5);
@@ -124,7 +135,7 @@ describe("OpenAIGeneralAnswerAdapter with support requests and offers", () => {
     const answer = 'Here is the reply.\nOFFER: {"kind":"reply","issueKey":"DS-4","body":"Thanks. Can you send the draft?"}';
     const { adapter } = setup(answer);
     const returned = await adapter.answer("Reply to DS-4", [], [], [], undefined, 0.5);
-    expect(parseOfferMarker(returned)).toEqual({ text: "Here is the reply.", command: { kind: "reply", issueKey: "DS-4", body: "Thanks. Can you send the draft?" } });
+    expect(parseOfferMarker(returned)).toEqual({ text: "Here is the reply.", command: { kind: "reply", issueKey: "DS-4", body: "Thanks. Can you send the draft?" }, hadMarker: true });
   });
 
   it("strips a model-written offer question before the marker without losing the marker", async () => {

@@ -1,5 +1,5 @@
 import type { OfferCommand } from "../ports/PendingOfferPort";
-import { JIRA_KEY_PATTERN } from "../../domain/ids/jiraLink";
+import { JIRA_KEY_PATTERN, isKeyInProject } from "../../domain/ids/jiraLink";
 import { SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
 
 /**
@@ -33,6 +33,8 @@ export interface ParsedAnswer {
   text: string;
   /** The command from a well-formed marker block that ends the answer, if any. */
   command: OfferCommand | null;
+  /** True when the answer contained any marker line, whether or not it produced a command. */
+  hadMarker: boolean;
 }
 
 /**
@@ -46,12 +48,14 @@ export function parseOfferMarker(answer: string): ParsedAnswer {
   const lines = answer.split(/\r?\n/);
   const kept: string[] = [];
   let command: OfferCommand | null = null;
+  let hadMarker = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (!line.startsWith(OFFER_MARKER_PREFIX)) {
       kept.push(lines[i]!);
       continue;
     }
+    hadMarker = true;
     const block = [line.slice(OFFER_MARKER_PREFIX.length)];
     // JSON strings cannot contain raw line breaks, so a continuation line of the marker starts
     // with a structural character or a quote.
@@ -59,7 +63,7 @@ export function parseOfferMarker(answer: string): ParsedAnswer {
     const endsAnswer = lines.slice(i + 1).every((rest) => !rest.trim());
     command = endsAnswer ? toCommand(block.join("\n")) : null;
   }
-  return { text: kept.join("\n").trim(), command };
+  return { text: kept.join("\n").trim(), command, hadMarker };
 }
 
 function toCommand(json: string): OfferCommand | null {
@@ -90,4 +94,26 @@ function toCommand(json: string): OfferCommand | null {
     default:
       return null;
   }
+}
+
+/** Sent instead of the model's text when its offer was dropped, so no unperformed write is claimed. */
+export const NO_CHANGE_REPLY = "I haven't changed anything with the service desk.";
+
+/** Sent for a bare yes when the requester's offer was recently dropped or expired. */
+export const NOTHING_TO_CONFIRM_REPLY = "There's nothing waiting for your yes: I haven't raised or sent anything.";
+
+/** The line for a marker that produced no command, when the intended kind is unknown. */
+export const GENERIC_COMMAND_LINE = "Mention me with the command if you'd like me to act.";
+
+/**
+ * The command the requester can send themselves for an offer of this kind. A key is used only
+ * when it belongs to `projectKey` (always, when no project key is given, since stored offers
+ * were validated); otherwise a `<project>-N` placeholder stands in.
+ */
+export function offerCommandLine(command: OfferCommand, projectKey?: string): string {
+  if (command.kind === "support") return "To raise it, send `@Wire Team Bot support: <problem>`.";
+  const key = !projectKey || isKeyInProject(command.issueKey, projectKey) ? command.issueKey : `${projectKey}-N`;
+  return command.kind === "reply"
+    ? `To send a reply, use \`@Wire Team Bot reply to ${key}: <text>\`.`
+    : `To resolve it, use \`@Wire Team Bot resolve ${key}\`.`;
 }

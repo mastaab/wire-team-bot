@@ -12,7 +12,7 @@ import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRe
 import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import { OFFER_TTL_MS, parseOfferMarker } from "../../services/offers";
+import { GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, offerCommandLine, parseOfferMarker } from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
@@ -198,6 +198,8 @@ export class AnswerQuestion {
 
     if (this.jira) {
       retrievalResults = [...retrievalResults, ...(await this.supportRequestContext(this.jira, input))];
+      const amended = amendableOffer(input.pendingOffer);
+      if (amended) retrievalResults.push(pendingOfferResult(amended, input.channelId, (this.jira.now ?? (() => new Date()))()));
     }
 
     const modelAnswer = await this.generalAnswer.answer(
@@ -219,6 +221,14 @@ export class AnswerQuestion {
     const parsed = parseOfferMarker(modelAnswer);
     const text = parsed.text || FALLBACK_ANSWER;
     const prepared = parsed.command ? await this.prepareOffer(this.jira, input, parsed.command) : null;
+    if (!prepared && parsed.hadMarker) {
+      // The model meant to propose a change that code did not accept. Its text may claim the
+      // change ("Updated with that detail."), so only a code-written reply is sent.
+      const line = parsed.command ? offerCommandLine(parsed.command, this.jira.tracker.projectKey) : GENERIC_COMMAND_LINE;
+      const reply = `${NO_CHANGE_REPLY}\n${line}`;
+      await this.send(input, reply, false);
+      return reply;
+    }
     if (!prepared) {
       await this.send(input, text, true);
       return text;
@@ -326,7 +336,9 @@ export class AnswerQuestion {
    * when the offer is dropped. Nothing is stored here: the caller stores the offer after sending.
    */
   private async prepareOffer(jira: AnswerQuestionJira, input: AnswerQuestionInput, command: OfferCommand): Promise<PreparedOffer | null> {
-    if (!asksForChange(command.kind, input.question, jira.tracker.projectKey)) {
+    // A revision of the offer this message displaced needs no fresh change intent: the
+    // original offer established it. Scope and bounds are still checked below.
+    if (!isRevision(input.pendingOffer, command) && !asksForChange(command.kind, input.question, jira.tracker.projectKey)) {
       this.logger?.warn("AnswerQuestion: offer dropped, the question asks for no change", { kind: command.kind });
       return null;
     }
@@ -404,6 +416,31 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
     case "reply":
       return REPLY_VERB.test(question) && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
   }
+}
+
+/** The displaced offer when the requester may amend it: only `support` and `reply` offers carry text to correct. */
+function amendableOffer(pending: OfferCommand | undefined): OfferCommand | null {
+  return pending && (pending.kind === "support" || pending.kind === "reply") ? pending : null;
+}
+
+/** True when `command` revises the amendable displaced offer: the same kind and, for a reply, the same request. */
+function isRevision(pending: OfferCommand | undefined, command: OfferCommand): boolean {
+  const amended = amendableOffer(pending);
+  if (!amended || amended.kind !== command.kind) return false;
+  return amended.kind !== "reply" || (command.kind === "reply" && amended.issueKey === command.issueKey);
+}
+
+/** The displaced offer for the model, so the requester's correction can produce a revised offer. */
+function pendingOfferResult(command: OfferCommand, channelId: string | undefined, now: Date): RetrievalResult {
+  return {
+    id: "pending-offer",
+    type: "summary",
+    content: `Pending offer being amended (not confirmed, nothing was sent; the requester's message changes it): ${JSON.stringify(command)}`,
+    sourceChannel: channelId ?? "",
+    sourceDate: now,
+    confidence: 1,
+    pathsMatched: ["pending_offer"],
+  };
 }
 
 /** Only not-deleted records of this conversation and project, whatever the repository returned. */
