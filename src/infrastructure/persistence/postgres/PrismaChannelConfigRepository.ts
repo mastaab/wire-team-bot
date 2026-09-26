@@ -120,6 +120,25 @@ export class PrismaChannelConfigRepository implements ChannelConfigRepository {
     });
   }
 
+  async setTimezone(
+    channelId: string,
+    timezone: string,
+    whenMissing: { organisationId: string; locale: string; state: "active" },
+  ): Promise<void> {
+    await this.prisma.channelConfig.upsert({
+      where: { channelId },
+      create: {
+        channelId,
+        organisationId: whenMissing.organisationId,
+        state: whenMissing.state,
+        secureRanges: [],
+        timezone,
+        locale: whenMissing.locale,
+      },
+      update: { timezone },
+    });
+  }
+
   async openSecureRange(channelId: string, start: Date): Promise<void> {
     const row = await this.prisma.channelConfig.findUnique({ where: { channelId } });
     const existing: Array<{ start: string; end: string | null }> = Array.isArray(row?.secureRanges)

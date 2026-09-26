@@ -2,6 +2,7 @@ import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import type { ChannelConfig, ChannelConfigRepository } from "../../../domain/repositories/ChannelConfigRepository";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import { canonicalTimeZone } from "../../../domain/services/timeZone";
+import type { Logger } from "../../ports/Logger";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import { formatTimeInZone } from "../../services/formatTimeInZone";
 
@@ -17,6 +18,7 @@ export interface SetChannelTimezoneInput {
 }
 
 const SAVE_FAILED = "I'm afraid I couldn't save the timezone just now. Please try again.";
+const READ_FAILED = "I'm afraid I couldn't read the timezone just now. Please try again.";
 
 /**
  * Shows or sets the channel's timezone, which decides how deadlines and reminder times are read
@@ -29,11 +31,18 @@ export class SetChannelTimezone {
     private readonly wireOutbound: WireOutboundPort,
     private readonly defaultTimezone: string,
     private readonly now: () => Date = () => new Date(),
+    private readonly logger?: Logger,
   ) {}
 
   async execute(input: SetChannelTimezoneInput): Promise<void> {
     if (input.timezone === undefined) {
-      const config = await this.channelConfig.get(input.channelId);
+      let config: ChannelConfig | null;
+      try {
+        config = await this.channelConfig.get(input.channelId);
+      } catch {
+        await this.reply(input, READ_FAILED);
+        return;
+      }
       const zone = config?.timezone ?? this.defaultTimezone;
       await this.reply(input, `This channel's timezone is **${zone}** (currently ${this.currentTime(zone)}).`);
       return;
@@ -57,31 +66,32 @@ export class SetChannelTimezone {
       await this.reply(input, `This channel's timezone is already **${zone}**.`);
       return;
     }
-    // Same minimal config the router creates for a channel it has no record of.
-    const base: ChannelConfig = existing ?? {
-      channelId: input.channelId,
-      organisationId: input.conversationId.domain,
-      state: "active",
-      secureRanges: [],
-      timezone: from,
-      locale: "en",
-    };
     try {
-      await this.channelConfig.upsert({ ...base, timezone: zone });
+      // Only the timezone column changes; a channel without a record gets the same minimal
+      // config the router creates for one.
+      await this.channelConfig.setTimezone(input.channelId, zone, {
+        organisationId: input.conversationId.domain,
+        locale: "en",
+        state: "active",
+      });
     } catch {
       await this.reply(input, SAVE_FAILED);
       return;
     }
 
-    await this.auditLog.append({
-      timestamp: this.now(),
-      actorId: input.actorId,
-      conversationId: input.conversationId,
-      action: "config_changed",
-      entityType: "ChannelConfig",
-      entityId: input.channelId,
-      details: { timezone: { from, to: zone } },
-    });
+    try {
+      await this.auditLog.append({
+        timestamp: this.now(),
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+        action: "config_changed",
+        entityType: "ChannelConfig",
+        entityId: input.channelId,
+        details: { timezone: { from, to: zone } },
+      });
+    } catch (err) {
+      this.logger?.error("SetChannelTimezone: audit failed after saving the timezone", { err: err instanceof Error ? err.name : "UnknownError" });
+    }
     await this.reply(input, `This channel's timezone is now **${zone}** (currently ${this.currentTime(zone)}).`);
   }
 

@@ -86,7 +86,7 @@ function makeDeps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
       findById: vi.fn(),
       query: vi.fn().mockResolvedValue([]),
     },
-    channelConfig: { get: vi.fn().mockResolvedValue(null), upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]) },
+    channelConfig: { get: vi.fn().mockResolvedValue(null), upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]) },
     slidingWindow: {
       push: vi.fn(), getWindow: vi.fn().mockReturnValue([]), flush: vi.fn(), clear: vi.fn(),
     },
@@ -514,7 +514,7 @@ describe("passive service-desk help", () => {
   const serviceRequest: ClassifyResult = { categories: ["service_request"], confidence: 0.9, entities: [], is_high_signal: false };
   const activeChannel = () => ({
     get: vi.fn().mockResolvedValue({ state: "active", timezone: "Europe/Berlin" }),
-    upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
+    upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
   });
 
   it("calls the use case with the job, the channel timezone and the abort signal", async () => {

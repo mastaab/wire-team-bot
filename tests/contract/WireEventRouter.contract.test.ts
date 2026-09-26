@@ -306,7 +306,7 @@ function makeDeps(overrides: Partial<WireEventRouterDeps> = {}): WireEventRouter
       removeMembers: vi.fn(), clearConversation: vi.fn(),
     },
     conversationConfig: { get: vi.fn().mockResolvedValue(null), upsert: vi.fn() },
-    channelConfig: { get: vi.fn().mockResolvedValue(null), upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]) },
+    channelConfig: { get: vi.fn().mockResolvedValue(null), upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]) },
     slidingWindow: { push: vi.fn(), getWindow: vi.fn().mockReturnValue([]), flush: vi.fn(), clear: vi.fn() },
     scheduler: { schedule: vi.fn(), cancel: vi.fn(), setHandler: vi.fn() },
     secretModeInactivityMs: 600_000,
@@ -646,7 +646,7 @@ describe("WireEventRouter contract: Phase 2 pipeline enqueue", () => {
       pipeline: pipeline as unknown as WireEventRouterDeps["pipeline"],
       channelConfig: {
         get: vi.fn().mockResolvedValue({ state: "paused", secureRanges: [], timezone: "UTC", locale: "en", organisationId: "wire.com", channelId: `${convId.id}@${convId.domain}` }),
-        upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
+        upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
       },
     });
     const router = new WireEventRouter(deps);
@@ -661,7 +661,7 @@ describe("WireEventRouter contract: Phase 2 pipeline enqueue", () => {
       pipeline: pipeline as unknown as WireEventRouterDeps["pipeline"],
       channelConfig: {
         get: vi.fn().mockResolvedValue({ state: "secure", secureRanges: [], timezone: "UTC", locale: "en", organisationId: "wire.com", channelId: `${convId.id}@${convId.domain}` }),
-        upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
+        upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
       },
     });
     const router = new WireEventRouter(deps);

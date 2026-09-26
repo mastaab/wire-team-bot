@@ -307,7 +307,7 @@ export function createContainer(config: Config, logger: Logger): Container {
     snoozeReminder,
     answerQuestion,
     statusCommand,
-    setChannelTimezone: new SetChannelTimezone(channelConfigRepo, auditLogRepo, wireOutbound, config.app.defaultTimezone),
+    setChannelTimezone: new SetChannelTimezone(channelConfigRepo, auditLogRepo, wireOutbound, config.app.defaultTimezone, undefined, logger),
     defaultTimezone: config.app.defaultTimezone,
     catchMeUpCommand,
     raiseSupportRequest,

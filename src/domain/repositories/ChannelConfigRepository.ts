@@ -41,6 +41,15 @@ export interface ChannelConfigRepository {
   upsert(config: ChannelConfig): Promise<ChannelConfig>;
   /** Atomically set state + stateChangedAt + stateChangedBy. */
   setState(channelId: string, state: ChannelState, changedBy: string, now: Date): Promise<void>;
+  /**
+   * Set only the timezone of an existing channel, leaving state, secure ranges and context as
+   * stored. Creates a minimal config from `whenMissing` only when the channel has none.
+   */
+  setTimezone(
+    channelId: string,
+    timezone: string,
+    whenMissing: { organisationId: string; locale: string; state: "active" },
+  ): Promise<void>;
   /** Append a new secure range (open-ended until closeSecureRange is called). */
   openSecureRange(channelId: string, start: Date): Promise<void>;
   /** Close the most recent open secure range. */
