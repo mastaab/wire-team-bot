@@ -141,11 +141,19 @@ describe("OpenAISupportTriageAdapter", () => {
         }
       });
 
-      it("rejects a key that is not among the open requests, with its comment", async () => {
-        for (const resolves of ["DS-99", "OPS-6", 7, ""]) {
+      it("yields no draft at all for a close request naming a key that is not an open request", async () => {
+        for (const resolves of ["DS-99", "OPS-6"]) {
           const { llm } = makeLLM(JSON.stringify({ summary: "", description: "", duplicateOf: null, addition: null, resolves, closingComment: COMMENT }));
           expect(await new OpenAISupportTriageAdapter(llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
 
+          // Even with a summary, a close request for an unlisted request never becomes a new request.
+          const withDraft = makeLLM(JSON.stringify({ summary: "Mirror delivered", description: "The mirror was delivered.", duplicateOf: null, resolves, closingComment: COMMENT }));
+          expect(await new OpenAISupportTriageAdapter(withDraft.llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
+        }
+      });
+
+      it("treats a non-string or empty resolves as no close request", async () => {
+        for (const resolves of [7, ""]) {
           const withDraft = makeLLM(JSON.stringify({ summary: "Printer jams", description: "It jams.", duplicateOf: null, resolves, closingComment: COMMENT }));
           const draft = await new OpenAISupportTriageAdapter(withDraft.llm, makeLogger()).draftRequest(MESSAGE, OPEN);
           expect(draft).toMatchObject({ summary: "Printer jams", resolves: null, closingComment: null });
@@ -161,14 +169,13 @@ describe("OpenAISupportTriageAdapter", () => {
         expect(await new OpenAISupportTriageAdapter(alone.llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
       });
 
-      it("accepts a comment exactly at the reply limit and drops a longer one, keeping the resolve", async () => {
+      it("accepts a comment exactly at the reply limit and yields no draft for a longer one", async () => {
         const at = makeLLM(JSON.stringify({ summary: "", description: "", resolves: "DS-6", closingComment: "c".repeat(REPLY_BODY_MAX) }));
         expect(await new OpenAISupportTriageAdapter(at.llm, makeLogger()).draftRequest(MESSAGE, OPEN))
           .toMatchObject({ resolves: "DS-6", closingComment: "c".repeat(REPLY_BODY_MAX) });
 
         const over = makeLLM(JSON.stringify({ summary: "", description: "", resolves: "DS-6", closingComment: "c".repeat(REPLY_BODY_MAX + 1) }));
-        expect(await new OpenAISupportTriageAdapter(over.llm, makeLogger()).draftRequest(MESSAGE, OPEN))
-          .toMatchObject({ resolves: "DS-6", closingComment: null });
+        expect(await new OpenAISupportTriageAdapter(over.llm, makeLogger()).draftRequest(MESSAGE, OPEN)).toBeNull();
       });
 
       it("returns null for a missing resolves on an old-shape answer without a summary", async () => {

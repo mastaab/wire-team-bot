@@ -99,7 +99,7 @@ describe("OfferSupportFromConversation", () => {
     });
   });
 
-  describe("update or blocker", () => {
+  describe("update, blocker, action or decision", () => {
     it.each([["update"], ["blocker"], ["action"], ["decision"]])("offers to add new information to an open request for a %s", async (category) => {
       const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It only happens on the new ThinkPads." });
 
@@ -684,12 +684,13 @@ describe("OfferSupportFromConversation", () => {
       expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "resolve", issueKey: "DS-6" });
     });
 
-    it("ignores a key that is not an open request of this conversation and falls back to the other paths", async () => {
+    it("makes no offer at all for a close request naming a request that is not open here, never a new request", async () => {
       const records = [makeRequest(), makeRequest({ key: "DS-7", statusCategory: "done" })];
       for (const resolves of ["DS-99", "DS-7"]) {
-        const { offers, useCase } = setup(records, { ...DRAFT, resolves, closingComment: COMMENT });
+        const { offers, sent, useCase } = setup(records, { ...DRAFT, resolves, closingComment: COMMENT });
         await useCase.execute(input());
-        expect(offers.put.mock.calls[0]![0].command).toMatchObject({ kind: "support" });
+        expect(sent).toEqual([]);
+        expect(offers.put).not.toHaveBeenCalled();
       }
 
       const additionOnly = setup(records, { ...RESOLVE, resolves: "DS-99" });

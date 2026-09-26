@@ -81,10 +81,16 @@ export class OpenAISupportTriageAdapter implements SupportTriagePort {
     const description = typeof v.description === "string" ? v.description.trim() : "";
     const duplicateOf = listedKey(v.duplicateOf, openRequests);
     const addition = duplicateOf && typeof v.addition === "string" ? v.addition.trim() || null : null;
+    // A close request for a request that is not listed (done, another channel, invented) must
+    // not turn into an offer to raise a new one, so it yields no draft at all.
+    const askedToResolve = typeof v.resolves === "string" && v.resolves.trim() !== "";
     const resolves = listedKey(v.resolves, openRequests);
-    // A closing comment only with a listed request to resolve, and within the reply bounds.
+    if (askedToResolve && !resolves) return null;
+    // A closing comment only with a listed request to resolve. One beyond the reply bounds yields
+    // no draft: resolving without the remark the speaker asked for would be the wrong offer.
     const comment = resolves && typeof v.closingComment === "string" ? v.closingComment.trim() : "";
-    const closingComment = comment && comment.length <= REPLY_BODY_MAX ? comment : null;
+    if (comment.length > REPLY_BODY_MAX) return null;
+    const closingComment = comment || null;
     // An addition to or a resolve of a listed request needs no summary of its own; a new request does.
     if (!addition && !resolves && (!summary || !description)) return null;
     const requestKind = toKind(v.requestKind);

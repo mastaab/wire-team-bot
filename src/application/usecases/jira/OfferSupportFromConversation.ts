@@ -170,6 +170,11 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     // request is solved is about that request, whatever else it mentions.
     const resolves = typeof draft.resolves === "string" ? draft.resolves.trim().toUpperCase() : "";
     const resolving = resolves ? open.find((r) => r.key === resolves) : undefined;
+    // A close request for a request that is not open here never falls through to raising a new one.
+    if (resolves && !resolving) {
+      this.logger?.debug("OfferSupportFromConversation: close request for a request that is not open here", { key: resolves });
+      return;
+    }
     if (resolving) {
       const comment = typeof draft.closingComment === "string" ? draft.closingComment.trim() : "";
       if (comment.length > REPLY_BODY_MAX) {
