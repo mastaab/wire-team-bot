@@ -24,6 +24,8 @@ import type { StatusCommand } from "../../application/usecases/general/StatusCom
 import type { CatchMeUpCommand } from "../../application/usecases/general/CatchMeUpCommand";
 import type { RaiseSupportRequest } from "../../application/usecases/jira/RaiseSupportRequest";
 import type { SetChannelTimezone } from "../../application/usecases/general/SetChannelTimezone";
+import type { CompletePartOrder } from "../../application/usecases/jira/CompletePartOrder";
+import { missingPartDetails } from "../../application/services/offers";
 import type { ListSupportRequests } from "../../application/usecases/jira/ListSupportRequests";
 import type { ResolveSupportRequest } from "../../application/usecases/jira/ResolveSupportRequest";
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
@@ -96,6 +98,8 @@ export interface WireEventRouterDeps {
   /** Timezone for channels the bot newly joins; UTC when absent. */
   defaultTimezone?: string;
   raiseSupportRequest?: RaiseSupportRequest;
+  /** Fills a pending part order's missing essentials from the requester's next message, in code. */
+  completePartOrder?: CompletePartOrder;
   listSupportRequests?: ListSupportRequests;
   resolveSupportRequest?: ResolveSupportRequest;
   getIssueStatus?: GetIssueStatus;
@@ -364,6 +368,20 @@ export class WireEventRouter extends WireEventsHandler {
       // With no live offer, only a recently dropped one brought us here and the requester has
       // moved on, so a later yes (perhaps to a colleague) is not answered about it.
       if (!droppedOffer) pendingOffers.forgetDropped(convId, sender);
+      // A part order waiting for essentials: the answer ("two, deliver to depot north") is
+      // merged in code, without relying on the answer model to return a revised offer.
+      if (droppedOffer && this.deps.completePartOrder && missingPartDetails(droppedOffer).length > 0) {
+        const completed = await this.deps.completePartOrder.execute({
+          text: commandText, conversationId: convId, requesterId: sender, pending: droppedOffer, replyToMessageId: wireMessage.id,
+        });
+        if (completed) {
+          const now = new Date();
+          this.deps.messageBuffer.push(convId, {
+            messageId: wireMessage.id, senderId: sender, senderName: senderDisplayName ?? "", text, timestamp: now,
+          });
+          return;
+        }
+      }
     }
 
     if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {

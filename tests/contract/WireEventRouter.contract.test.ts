@@ -1244,6 +1244,51 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.processingQueue!.enqueue).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-1" }));
   });
 
+  it("completes a pending part order in code before the answer path", async () => {
+    const pending = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7", part: "left mirror" } };
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue(pending), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      completePartOrder: { execute: vi.fn().mockResolvedValue(true) },
+      processingQueue: { enqueue: vi.fn() },
+      pipeline: {},
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("two, deliver to depot north"));
+    expect(deps.completePartOrder!.execute).toHaveBeenCalledWith({
+      text: "two, deliver to depot north", conversationId: convId, requesterId: sender, pending, replyToMessageId: "msg-1",
+    });
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    expect(deps.processingQueue!.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("continues to the amend path when the part order could not be completed from the message", async () => {
+    const pending = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7" } };
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue(pending), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      completePartOrder: { execute: vi.fn().mockResolvedValue(false) },
+      processingQueue: { enqueue: vi.fn() },
+      pipeline: {},
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("lunch at noon?"));
+    expect(deps.completePartOrder!.execute).toHaveBeenCalled();
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ pendingOffer: pending, amendOnly: true }));
+  });
+
+  it("does not try to complete an offer that is not an incomplete part order", async () => {
+    const completePartOrder = { execute: vi.fn() };
+    const deps = offerDeps(true, false);
+    Object.assign(deps, { completePartOrder });
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("the description should mention the office Wi-Fi"));
+    expect(completePartOrder.execute).not.toHaveBeenCalled();
+  });
+
   it("does not pass an offer to the answer path when none was dropped", async () => {
     const deps = offerDeps(false);
     await new WireEventRouter(deps).onTextMessageReceived(customMention("what did we decide?"));

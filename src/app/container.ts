@@ -31,6 +31,7 @@ import { ListSupportRequests } from "../application/usecases/jira/ListSupportReq
 import { ResolveSupportRequest } from "../application/usecases/jira/ResolveSupportRequest";
 import { PrismaSupportRequestRepository } from "../infrastructure/persistence/postgres/PrismaSupportRequestRepository";
 import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
+import { CompletePartOrder } from "../application/usecases/jira/CompletePartOrder";
 import { OfferSupportFromConversation } from "../application/usecases/jira/OfferSupportFromConversation";
 import { OpenAISupportTriageAdapter } from "../infrastructure/llm/OpenAISupportTriageAdapter";
 import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
@@ -118,8 +119,11 @@ export function createContainer(config: Config, logger: Logger): Container {
   const classifier = new OpenAIClassifierAdapter(llmFactory, logger, { serviceDeskCategories: passiveOn, serviceScope: config.jira?.serviceScope });
   // Shared with the router and ConfirmOffer, so a passive offer can be confirmed.
   const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const supportHelp = passiveOn && supportRequestsRepo && getIssueStatus && pendingOffers
-    ? new OfferSupportFromConversation(supportRequestsRepo, new OpenAISupportTriageAdapter(llmFactory, logger, { serviceScope: config.jira?.serviceScope }), getIssueStatus, pendingOffers, wireOutbound, logger)
+  // Triage for passive help and for completing part orders; any configured tracker can use it.
+  const supportTriage = issueTracker ? new OpenAISupportTriageAdapter(llmFactory, logger, { serviceScope: config.jira?.serviceScope }) : undefined;
+  const completePartOrder = supportTriage && pendingOffers ? new CompletePartOrder(supportTriage, pendingOffers, wireOutbound, logger) : undefined;
+  const supportHelp = passiveOn && supportTriage && supportRequestsRepo && getIssueStatus && pendingOffers
+    ? new OfferSupportFromConversation(supportRequestsRepo, supportTriage, getIssueStatus, pendingOffers, wireOutbound, logger)
     : undefined;
   const extraction = new OpenAIExtractionAdapter(llmFactory, logger);
   const embeddingService = createEmbeddingService(config.llm.bot, logger);
@@ -311,6 +315,7 @@ export function createContainer(config: Config, logger: Logger): Container {
     defaultTimezone: config.app.defaultTimezone,
     catchMeUpCommand,
     raiseSupportRequest,
+    completePartOrder,
     listSupportRequests,
     resolveSupportRequest,
     getIssueStatus,
