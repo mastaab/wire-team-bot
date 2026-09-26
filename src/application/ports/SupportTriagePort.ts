@@ -30,6 +30,13 @@ export interface SupportDraft {
    * it adds nothing.
    */
   addition: string | null;
+  /**
+   * Key of a listed open request this message says is solved or can be closed, or null. Takes
+   * precedence over `addition` and over raising a new request.
+   */
+  resolves: string | null;
+  /** With `resolves`: the closing remark to add to that request, in the speaker's words and from this message only; null when there is none. */
+  closingComment: string | null;
 }
 
 export interface SupportTriagePort {

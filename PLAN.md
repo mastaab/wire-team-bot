@@ -1954,6 +1954,25 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Work split.** Main session: contract (resolve command `comment`, `ResolveSupportRequest` input, `SetChannelTimezone` signature, default-timezone setting), router commands for both, wiring, `status` line and docs. Two subagents in parallel worktrees: (a) resolve with a comment: `ResolveSupportRequest`, offer parser, `AnswerQuestion` resolve offers and intent, `ConfirmOffer`, answer prompt; (b) timezone: `SetChannelTimezone` use case and the zone in displayed times. Then an independent review, real-model CLI checks (no confirmations, no direct write commands) and a live staging check with the operator's approval for Jira writes.
 
+### Passive resolve offers (planned 2026-09-26)
+
+**Why.** In the live check, "the mirror for truck 7 was delivered, please close DS-14 and add a comment that it arrived at depot north", sent without a mention, got only an addition offer: passive help can raise and add but not resolve, so "close" was silently ignored, and unmentioned "close DS-14" got no reply at all.
+
+**Behaviour (only with `WIRE_TEAM_BOT_JIRA_PASSIVE=on`).**
+- An unmentioned message that says an open request of this channel is solved or can be closed ("the brake light is fine now", "please close DS-14", "the mirror was delivered, close it and note that it arrived at depot north") gets a native reply with the resolve offer: `Shall I resolve **DS-14** "<summary>" with the service desk?` or, when the message carries a closing remark, `… and add this comment?\n> <comment>`, then `(yes or no)?`. On the speaker's yes, the existing resolve with its optional comment runs (comment first, then resolve).
+- The closing comment comes from that single message only, in the speaker's words, and is shown in full; a correction revises it; anything else drops the offer, as for every offer.
+- A message that only reports good news without naming or clearly meaning one open request gets no offer.
+- The router's direct commands are unchanged: `@Wire Team Bot resolve DS-N` still resolves at once; unmentioned "close DS-14" now reaches passive help and gets the offer instead of silence.
+
+**Design.**
+- `SupportDraft` gains `resolves: string | null` (a listed open request the message says is solved or can be closed) and `closingComment: string | null` (only with `resolves`; the remark to add, from this message only). `resolves` takes precedence over `addition` and over a new request.
+- The classifier's `service_request` line (with the option on) also covers a message saying a reported problem is solved or asking to close a request. Because the classifier often labels such messages `action`, `decision` or `update`, passive help also runs the triage for `action` and `decision` messages when the channel has open requests; those, like updates, may only lead to an addition or a resolve offer, never to a new request.
+- The offer is a `resolve` command `{ issueKey, comment? }` stored for the speaker after the send; the question uses the existing `formatResolveQuestion`.
+
+**Evidence required.** Unit tests; real-model CLI checks (offers answered no; the script grepped for write lines); a live staging check of one passive resolve with a comment confirmed with yes (a Jira write with the operator's approval) and one good-news message without a clear request that gets no offer.
+
+**Work split.** Main session: contract and docs. One subagent: triage prompt and parser, classifier line, use case and pipeline gate, tests. Then an independent review, CLI checks and the live check.
+
 ### Handover for the next session (2026-09-26)
 
 **Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`), adding to an open request, and truck premium support (request kinds mapped to request types, part essentials, service scope). What remains is Jira clean-up (operator approval) and the open items listed below.
