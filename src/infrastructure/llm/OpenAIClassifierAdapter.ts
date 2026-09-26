@@ -33,6 +33,26 @@ const VALID_CATEGORIES: MessageCategory[] = [
   "update", "discussion", "reference", "routine",
 ];
 
+/** Offered only with passive service-desk help, so classification is unchanged otherwise. */
+const SERVICE_DESK_CATEGORIES: MessageCategory[] = ["service_request", "request_status"];
+
+const ROUTINE_LINE = "- routine: greetings, acknowledgements, chit-chat, bot commands — no team knowledge\n";
+const LOW_SIGNAL_LINE = "Low signal (discussion-only, question, routine): is_high_signal=false.\n";
+
+const SERVICE_DESK_PROMPT = SYSTEM_PROMPT
+  .replace(ROUTINE_LINE, ROUTINE_LINE +
+    "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need\n" +
+    "- request_status: someone asks about the state of a problem or service request they or others reported\n")
+  .replace(LOW_SIGNAL_LINE, LOW_SIGNAL_LINE +
+    "service_request and request_status never make a message high signal on their own.\n");
+
+const HIGH_SIGNAL_CATEGORIES: MessageCategory[] = ["decision", "action", "blocker", "update"];
+
+export interface ClassifierOptions {
+  /** Adds `service_request` and `request_status` to the prompt and the accepted list (passive service-desk help). */
+  serviceDeskCategories?: boolean;
+}
+
 const FALLBACK: ClassifyResult = {
   categories: ["discussion"],
   confidence: 0,
@@ -41,10 +61,19 @@ const FALLBACK: ClassifyResult = {
 };
 
 export class OpenAIClassifierAdapter implements ClassifierPort {
+  private readonly systemPrompt: string;
+  private readonly validCategories: readonly MessageCategory[];
+  private readonly serviceDesk: boolean;
+
   constructor(
     private readonly llm: LLMClientFactory,
     private readonly logger: Logger,
-  ) {}
+    options: ClassifierOptions = {},
+  ) {
+    this.serviceDesk = options.serviceDeskCategories === true;
+    this.systemPrompt = this.serviceDesk ? SERVICE_DESK_PROMPT : SYSTEM_PROMPT;
+    this.validCategories = this.serviceDesk ? [...VALID_CATEGORIES, ...SERVICE_DESK_CATEGORIES] : VALID_CATEGORIES;
+  }
 
   async classify(text: string, context: ChannelContext, window: string[]): Promise<ClassifyResult> {
     const purposeLine = context.purpose ? `Channel purpose: ${context.purpose}\n` : "";
@@ -62,7 +91,7 @@ export class OpenAIClassifierAdapter implements ClassifierPort {
     let result: ChatResult;
     try {
       result = await this.llm.chatCompletion("classify", [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: this.systemPrompt },
         { role: "user", content: userContent },
       ], { max_tokens: 150, temperature: 0 });
     } catch (err) {
@@ -87,7 +116,7 @@ export class OpenAIClassifierAdapter implements ClassifierPort {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return FALLBACK;
     const rawCategories = Array.isArray(parsed.categories) ? parsed.categories : [];
     const categories = rawCategories.filter(
-      (c): c is MessageCategory => typeof c === "string" && VALID_CATEGORIES.includes(c as MessageCategory),
+      (c): c is MessageCategory => typeof c === "string" && this.validCategories.includes(c as MessageCategory),
     );
     if (categories.length === 0) categories.push("discussion");
 
@@ -97,11 +126,16 @@ export class OpenAIClassifierAdapter implements ClassifierPort {
 
     const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.min(1, Math.max(0, parsed.confidence)) : 0;
-    const is_high_signal =
+    const modelHighSignal =
       categories.includes("update") && confidence >= 0.6 ? true :
       typeof parsed.is_high_signal === "boolean"
         ? parsed.is_high_signal
         : categories.some((c) => c === "decision" || c === "action" || c === "blocker");
+    // A service-desk category alone never reaches extraction.
+    const serviceDeskOnly = this.serviceDesk
+      && categories.some((c) => SERVICE_DESK_CATEGORIES.includes(c))
+      && !categories.some((c) => HIGH_SIGNAL_CATEGORIES.includes(c));
+    const is_high_signal = serviceDeskOnly ? false : modelHighSignal;
 
     const classify: ClassifyResult = { categories, confidence, entities, is_high_signal };
 

@@ -733,9 +733,14 @@ export class WireEventRouter extends WireEventsHandler {
       return lastSentence.trimEnd().endsWith("?");
     })();
 
+    // A message that displaced the requester's support or reply offer is about that offer, even
+    // when the offer came from passive help and is not in the conversation buffer, so a
+    // correction ("the description should mention X") reaches the answer path to be revised.
+    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply";
+
     // ── @Wire Team Bot mention or follow-up — answer question ────────────────────────
-    if (botMentionedEarly || isFollowUp) {
-      log.info("Message: dispatched to answerQuestion", { isFollowUp });
+    if (botMentionedEarly || isFollowUp || amendsOffer) {
+      log.info("Message: dispatched to answerQuestion", { isFollowUp, amendsOffer });
       const config = await this.deps.conversationConfig.get(convId);
       const recentContext = this.deps.messageBuffer.getLastN(convId, CONTEXT_WINDOW).slice(0, -1).map((m) =>
         m.senderName ? `${m.senderName}: ${m.text}` : m.text,

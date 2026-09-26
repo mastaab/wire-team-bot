@@ -509,3 +509,73 @@ describe("passive action acknowledgements", () => {
     expect(deps.wireOutbound.sendReaction).toHaveBeenCalledOnce();
   });
 });
+
+describe("passive service-desk help", () => {
+  const serviceRequest: ClassifyResult = { categories: ["service_request"], confidence: 0.9, entities: [], is_high_signal: false };
+  const activeChannel = () => ({
+    get: vi.fn().mockResolvedValue({ state: "active", timezone: "Europe/Berlin" }),
+    upsert: vi.fn(), setState: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
+  });
+
+  it("calls the use case with the job, the channel timezone and the abort signal", async () => {
+    const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
+    const deps = makeDeps({ supportHelp, channelConfig: activeChannel(), classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
+    const controller = new AbortController();
+    await new ProcessingPipeline(deps).process({ ...baseJob(), text: "The printer jams" }, controller.signal);
+    expect(supportHelp.execute).toHaveBeenCalledWith({
+      text: "The printer jams", messageId: "msg-1", conversationId: convId, senderId, senderName: "Alice",
+      categories: ["service_request"], confidence: 0.9, timezone: "Europe/Berlin", signal: controller.signal,
+    });
+    expect(deps.signalRepo.create).toHaveBeenCalledOnce();
+    expect(deps.extraction.extract).not.toHaveBeenCalled();
+  });
+
+  it("runs before extraction for a high-signal message with a service-desk category", async () => {
+    const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...highSignalResult, categories: ["request_status", "decision"] }) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(supportHelp.execute).toHaveBeenCalledWith(expect.objectContaining({ categories: ["request_status", "decision"] }));
+    expect(deps.extraction.extract).toHaveBeenCalledOnce();
+    expect(supportHelp.execute.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.extraction.extract).mock.invocationCallOrder[0]!);
+  });
+
+  it("is not called without a service-desk category", async () => {
+    const supportHelp = { execute: vi.fn() };
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...lowSignalResult, categories: ["question", "blocker"] }) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(supportHelp.execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps the pipeline unchanged when the use case is not wired", async () => {
+    const deps = makeDeps({ classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(deps.signalRepo.create).toHaveBeenCalledOnce();
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalled();
+  });
+
+  it("logs a failure by error name and carries on", async () => {
+    const supportHelp = { execute: vi.fn().mockRejectedValue(new TypeError("PRIVATE_MARKER")) };
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...highSignalResult, categories: ["service_request", "decision"] }) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(deps.logger.warn).toHaveBeenCalledWith("Pipeline: passive service-desk help failed", { err: "TypeError" });
+    expect(deps.extraction.extract).toHaveBeenCalledOnce();
+    expect(deps.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("stops when the job is cancelled while the use case runs", async () => {
+    const controller = new AbortController();
+    const supportHelp = { execute: vi.fn(async () => { controller.abort(); }) };
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
+    await new ProcessingPipeline(deps).process(baseJob(), controller.signal);
+    expect(supportHelp.execute).toHaveBeenCalledOnce();
+    expect(deps.signalRepo.create).not.toHaveBeenCalled();
+  });
+
+  it("is not called for a channel that is no longer active", async () => {
+    const supportHelp = { execute: vi.fn() };
+    const channelConfig = { ...activeChannel(), get: vi.fn().mockResolvedValue({ state: "paused" }) };
+    const deps = makeDeps({ supportHelp, channelConfig, classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(supportHelp.execute).not.toHaveBeenCalled();
+  });
+});

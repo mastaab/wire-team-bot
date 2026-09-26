@@ -12,7 +12,7 @@ import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRe
 import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import { GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, offerCommandLine, parseOfferMarker } from "../../services/offers";
+import { GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatSupportQuestion, offerCommandLine, parseOfferMarker } from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
@@ -376,7 +376,7 @@ export class AnswerQuestion {
    * Every question ends with "?" so the router treats a non-exact answer as a follow-up.
    */
   private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId): Promise<string | null> {
-    if (command.kind === "support") return supportQuestion(command.summary, command.description);
+    if (command.kind === "support") return formatSupportQuestion(command.summary, command.description);
 
     const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
     if (!request) return null;
@@ -457,22 +457,6 @@ function uniqueByKey(requests: readonly SupportRequest[]): SupportRequest[] {
     seen.add(request.key);
     return true;
   });
-}
-
-/**
- * The support confirmation shows exactly what will be sent: the summary in bold and the
- * description quoted line by line, left out when it only repeats the summary. The parser has
- * already bounded both and collapsed the summary to one line.
- */
-function supportQuestion(summary: string, description: string): string {
-  const lines = [`> **${summary}**`];
-  if (oneLine(description).toLowerCase() !== summary.toLowerCase()) lines.push(...quoteLines(description));
-  return `Shall I raise this with the service desk?\n${lines.join("\n")}\n\n(yes or no)?`;
-}
-
-/** Every quoted line is non-empty: an empty "> " line ends the quote in Markdown. */
-function quoteLines(text: string): string[] {
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`);
 }
 
 function oneLine(text: string): string {

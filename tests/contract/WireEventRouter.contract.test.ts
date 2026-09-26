@@ -1125,6 +1125,27 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     }));
   });
 
+  it("sends an unmentioned correction to a passive offer to the answer path, not the pipeline", async () => {
+    const deps = offerDeps(true, false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("the description should mention the office Wi-Fi"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
+      question: "the description should mention the office Wi-Fi",
+      pendingOffer: { kind: "support", summary: "VPN drops", description: "VPN drops" },
+    }));
+  });
+
+  it("leaves an unmentioned message after a dropped resolve offer to normal routing", async () => {
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(),
+        drop: vi.fn().mockReturnValue({ kind: "resolve", issueKey: "DS-8" }), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("lunch at noon?"));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
   it("does not pass an offer to the answer path when none was dropped", async () => {
     const deps = offerDeps(false);
     await new WireEventRouter(deps).onTextMessageReceived(customMention("what did we decide?"));

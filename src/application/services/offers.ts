@@ -117,3 +117,24 @@ export function offerCommandLine(command: OfferCommand, projectKey?: string): st
     ? `To send a reply, use \`@Wire Team Bot reply to ${key}: <text>\`.`
     : `To resolve it, use \`@Wire Team Bot resolve ${key}\`.`;
 }
+
+/**
+ * The support confirmation shows exactly what will be sent: the summary in bold and the
+ * description quoted line by line, left out when it only repeats the summary. Callers have
+ * already bounded both and collapsed the summary to one line. The question ends with "?" so
+ * the router treats a non-exact answer as a follow-up.
+ */
+export function formatSupportQuestion(summary: string, description: string): string {
+  const lines = [`> **${summary}**`];
+  if (collapseLine(description).toLowerCase() !== summary.toLowerCase()) lines.push(...quoteLines(description));
+  return `Shall I raise this with the service desk?\n${lines.join("\n")}\n\n(yes or no)?`;
+}
+
+/** Every quoted line is non-empty: an empty "> " line ends the quote in Markdown. */
+function quoteLines(text: string): string[] {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`);
+}
+
+function collapseLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}

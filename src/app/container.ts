@@ -31,6 +31,8 @@ import { ListSupportRequests } from "../application/usecases/jira/ListSupportReq
 import { ResolveSupportRequest } from "../application/usecases/jira/ResolveSupportRequest";
 import { PrismaSupportRequestRepository } from "../infrastructure/persistence/postgres/PrismaSupportRequestRepository";
 import { GetIssueStatus } from "../application/usecases/jira/GetIssueStatus";
+import { OfferSupportFromConversation } from "../application/usecases/jira/OfferSupportFromConversation";
+import { OpenAISupportTriageAdapter } from "../infrastructure/llm/OpenAISupportTriageAdapter";
 import { JiraServiceManagementAdapter } from "../infrastructure/jira/JiraServiceManagementAdapter";
 import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPendingOfferStore";
 import { ReplyToServiceDesk } from "../application/usecases/jira/ReplyToServiceDesk";
@@ -103,13 +105,21 @@ export function createContainer(config: Config, logger: Logger): Container {
   // Customer demo: Jira Service Management, wired only when fully configured. Ticket content
   // reaches the answer model only when WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL is on.
   const issueTracker = config.jira ? new JiraServiceManagementAdapter(config.jira, logger) : undefined;
-  if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey, shareWithModel: config.jira?.shareWithModel ?? false });
+  if (issueTracker) logger.info("Jira integration enabled", { projectKey: issueTracker.projectKey, shareWithModel: config.jira?.shareWithModel ?? false, passive: config.jira?.passive ?? false });
   const pendingOffers = issueTracker ? new InMemoryPendingOfferStore() : undefined;
   const supportRequestsRepo = issueTracker ? new PrismaSupportRequestRepository() : undefined;
   const generalAnswerAdapter = new OpenAIGeneralAnswerAdapter(llmFactory, logger, {
     jiraProjectKey: config.jira?.projectKey, jiraShareWithModel: config.jira?.shareWithModel ?? false,
   });
-  const classifier = new OpenAIClassifierAdapter(llmFactory, logger);
+  // Passive service-desk help: the classifier offers its two service-desk categories only
+  // when WIRE_TEAM_BOT_JIRA_PASSIVE is on, so classification is otherwise unchanged.
+  const passiveOn = !!issueTracker && (config.jira?.passive ?? false);
+  const classifier = new OpenAIClassifierAdapter(llmFactory, logger, { serviceDeskCategories: passiveOn });
+  // Shared with the router and ConfirmOffer, so a passive offer can be confirmed.
+  const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const supportHelp = passiveOn && supportRequestsRepo && getIssueStatus && pendingOffers
+    ? new OfferSupportFromConversation(supportRequestsRepo, new OpenAISupportTriageAdapter(llmFactory, logger), getIssueStatus, pendingOffers, wireOutbound, logger)
+    : undefined;
   const extraction = new OpenAIExtractionAdapter(llmFactory, logger);
   const embeddingService = createEmbeddingService(config.llm.bot, logger);
   const entityRepo = new PrismaEntityRepository();
@@ -133,6 +143,7 @@ export function createContainer(config: Config, logger: Logger): Container {
     llm: llmFactory,
     logger,
     extractConfidenceMin: config.llm.bot.extractConfidenceMin,
+    supportHelp,
     contradictionThreshold: config.llm.bot.contradictionThreshold,
   });
 
@@ -203,7 +214,6 @@ export function createContainer(config: Config, logger: Logger): Container {
   const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
     ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)
