@@ -37,7 +37,8 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain("`@Wire Team Bot support: <problem>`");
     expect(prompt).toContain("`@Wire Team Bot support requests`");
     expect(prompt).toContain("`@Wire Team Bot my support requests`");
-    expect(prompt).toContain("`status of DS-NN`");
+    expect(prompt).toContain("`@Wire Team Bot status of DS-NN`");
+    expect(prompt).toContain("If the message is about something else or withdraws the offer, add no marker.");
     expect(prompt).toContain("`@Wire Team Bot reply to DS-NN: <text>`");
     expect(prompt).toContain("`@Wire Team Bot resolve DS-NN`");
     expect(prompt).toContain("do not describe internal mechanics");

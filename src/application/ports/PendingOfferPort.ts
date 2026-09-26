@@ -39,4 +39,6 @@ export interface PendingOfferStore {
    * `put` for that requester and `clearConversation` forget it.
    */
   recentlyDropped(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): OfferCommand | null;
+  /** Forgets the requester's recently dropped offer, e.g. once they have moved on or were told. */
+  forgetDropped(conversationId: QualifiedId, requesterId: QualifiedId): void;
 }

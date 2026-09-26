@@ -27,7 +27,7 @@ it("tells the answer model about the Jira integration only when it is configured
   const configured = llm.chatCompletion.mock.calls[0][1][0].content as string;
   expect(configured).toContain("connected to the Jira Service Management project DS");
   expect(configured).toContain("Never say that it has no Jira integration");
-  expect(configured).toContain("`status of DS-NN`");
+  expect(configured).toContain("`@Wire Team Bot status of DS-NN`");
   expect(configured).toContain("`@Wire Team Bot support: <problem>`");
   expect(configured).not.toContain("ACT-NNNN");
   expect(configured).toContain("`@Wire Team Bot reply to DS-NN: <text>`");

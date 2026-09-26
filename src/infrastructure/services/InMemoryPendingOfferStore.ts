@@ -67,6 +67,10 @@ export class InMemoryPendingOfferStore implements PendingOfferStore {
     return null;
   }
 
+  forgetDropped(conversationId: QualifiedId, requesterId: QualifiedId): void {
+    this.forget(conversationId, requesterId);
+  }
+
   /** The requester's unexpired offer; an expired one is removed and remembered as of its expiry. */
   private liveOffer(conversationId: QualifiedId, requesterId: QualifiedId, now: Date): PendingOffer | null {
     const offer = this.offers.get(key(conversationId))?.get(key(requesterId)) ?? null;

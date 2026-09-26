@@ -60,6 +60,12 @@ export interface AnswerQuestionInput {
    * correction such as "the description should mention X" can produce a revised offer.
    */
   pendingOffer?: OfferCommand;
+  /**
+   * The message reached the answer path only because it followed the requester's offer, not
+   * because the bot was addressed. Nothing is sent unless it revises that offer; an empty
+   * string is returned so the router can treat it as ordinary conversation.
+   */
+  amendOnly?: boolean;
 }
 
 /**
@@ -221,6 +227,12 @@ export class AnswerQuestion {
     const parsed = parseOfferMarker(modelAnswer);
     const text = parsed.text || FALLBACK_ANSWER;
     const prepared = parsed.command ? await this.prepareOffer(this.jira, input, parsed.command) : null;
+    if (input.amendOnly && !(prepared && parsed.command && isRevision(input.pendingOffer, parsed.command)
+        && !sameCommand(input.pendingOffer, parsed.command))) {
+      // Unaddressed chat after an offer ("lunch at noon?") is not for the bot, and repeating the
+      // same offer would make it follow every message; only a real revision is sent.
+      return "";
+    }
     if (!prepared && parsed.hadMarker) {
       // The model meant to propose a change that code did not accept. Its text may claim the
       // change ("Updated with that detail."), so only a code-written reply is sent.
@@ -428,6 +440,11 @@ function isRevision(pending: OfferCommand | undefined, command: OfferCommand): b
   const amended = amendableOffer(pending);
   if (!amended || amended.kind !== command.kind) return false;
   return amended.kind !== "reply" || (command.kind === "reply" && amended.issueKey === command.issueKey);
+}
+
+/** True when both commands propose exactly the same change. */
+function sameCommand(a: OfferCommand | undefined, b: OfferCommand): boolean {
+  return !!a && JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** The displaced offer for the model, so the requester's correction can produce a revised offer. */

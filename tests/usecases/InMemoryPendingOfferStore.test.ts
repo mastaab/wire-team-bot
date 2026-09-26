@@ -12,7 +12,7 @@ const bob: QualifiedId = { id: "user-2", domain: "wire.com" };
 const created = new Date("2026-09-25T10:00:00Z");
 const expires = new Date("2026-09-25T10:10:00Z");
 
-function offer(overrides: Partial<PendingOffer> = {}, command: OfferCommand = { kind: "raise", actionId: "ACT-0001" }): PendingOffer {
+function offer(overrides: Partial<PendingOffer> = {}, command: OfferCommand = { kind: "resolve", issueKey: "DS-1" }): PendingOffer {
   return { command, conversationId: convA, requesterId: alice, createdAt: created, expiresAt: expires, ...overrides };
 }
 
@@ -203,6 +203,20 @@ describe("InMemoryPendingOfferStore: dropped offers", () => {
     expect(store.recentlyDropped(convA, alice, t)).toBeNull();
     expect(store.drop(convA, alice, t)).toEqual(REPLY);
     expect(store.recentlyDropped(convA, alice, t)).toEqual(REPLY);
+  });
+
+  it("forgets only that requester's remembered offer on request", () => {
+    const store = new InMemoryPendingOfferStore();
+    const t = base();
+    store.put(live(t));
+    store.put({ ...live(t), requesterId: bob });
+    store.drop(convA, alice, t);
+    store.drop(convA, bob, t);
+
+    store.forgetDropped(convA, alice);
+
+    expect(store.recentlyDropped(convA, alice, t)).toBeNull();
+    expect(store.recentlyDropped(convA, bob, t)).toEqual(SUPPORT);
   });
 
   it("keeps another requester's memory when an offer is put", () => {

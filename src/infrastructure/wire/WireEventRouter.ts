@@ -349,6 +349,9 @@ export class WireEventRouter extends WireEventsHandler {
         return;
       }
       droppedOffer = pendingOffers.drop(convId, sender) ?? undefined;
+      // With no live offer, only a recently dropped one brought us here and the requester has
+      // moved on, so a later yes (perhaps to a colleague) is not answered about it.
+      if (!droppedOffer) pendingOffers.forgetDropped(convId, sender);
     }
 
     if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {
@@ -739,6 +742,7 @@ export class WireEventRouter extends WireEventsHandler {
     const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply";
 
     // ── @Wire Team Bot mention or follow-up — answer question ────────────────────────
+    const amendOnly = amendsOffer && !botMentionedEarly && !isFollowUp;
     if (botMentionedEarly || isFollowUp || amendsOffer) {
       log.info("Message: dispatched to answerQuestion", { isFollowUp, amendsOffer });
       const config = await this.deps.conversationConfig.get(convId);
@@ -759,7 +763,13 @@ export class WireEventRouter extends WireEventsHandler {
         orgId,
         userId: isPersonal ? sender.id : undefined,
         ...(droppedOffer ? { pendingOffer: droppedOffer } : {}),
+        ...(amendOnly ? { amendOnly: true } : {}),
       });
+      // Not a revision: the message was ordinary conversation, so it continues to capture.
+      if (amendOnly && !answer) {
+        this.enqueueForPipeline(wireMessage, text, convId, sender, channelId, senderDisplayName, log);
+        return;
+      }
       // Push Wire Team Bot' response into both buffers so follow-up messages have context.
       const botMsgId = `bot-${Date.now()}`;
       this.deps.messageBuffer.push(convId, {
@@ -775,6 +785,18 @@ export class WireEventRouter extends WireEventsHandler {
     // Skip explicit command messages (decision:, action:) — those are persisted
     // synchronously by the command handlers below.  Re-processing them through
     // the extraction pipeline creates duplicate entities in the database.
+    this.enqueueForPipeline(wireMessage, text, convId, sender, channelId, senderDisplayName, log);
+  }
+
+  private enqueueForPipeline(
+    wireMessage: TextMessage,
+    text: string,
+    convId: QualifiedId,
+    sender: QualifiedId,
+    channelId: string,
+    senderDisplayName: string | undefined,
+    log: Logger,
+  ): void {
     const isExplicitCommand = /^(?:decision|action):\s/i.test(text.trim());
     if (!isExplicitCommand && this.deps.processingQueue && this.deps.pipeline) {
       log.info("Message: enqueued for pipeline processing");
@@ -796,7 +818,6 @@ export class WireEventRouter extends WireEventsHandler {
         enqueuedAt: new Date(),
       });
     }
-
   }
 
   // ─────────────────────────────────────────────────────────────────────────

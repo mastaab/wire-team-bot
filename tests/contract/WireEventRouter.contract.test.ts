@@ -1069,8 +1069,10 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     pendingOffers: {
       has: vi.fn().mockReturnValue(pending), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(),
       drop: vi.fn().mockReturnValue(pending ? { kind: "support", summary: "VPN drops", description: "VPN drops" } : null),
-      recentlyDropped: vi.fn().mockReturnValue(recent),
+      recentlyDropped: vi.fn().mockReturnValue(recent), forgetDropped: vi.fn(),
     },
+    processingQueue: { enqueue: vi.fn() },
+    pipeline: {},
     confirmOffer: { execute: vi.fn().mockResolvedValue(handled) },
     conversationConfig: { get: vi.fn().mockResolvedValue({ timezone: "Europe/Berlin" }), upsert: vi.fn() },
   } as unknown as Partial<WireEventRouterDeps>);
@@ -1127,18 +1129,42 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
 
   it("sends an unmentioned correction to a passive offer to the answer path, not the pipeline", async () => {
     const deps = offerDeps(true, false);
+    (deps.answerQuestion.execute as ReturnType<typeof vi.fn>).mockResolvedValue("Shall I raise this with the service desk?");
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("the description should mention the office Wi-Fi"));
     expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
       question: "the description should mention the office Wi-Fi",
       pendingOffer: { kind: "support", summary: "VPN drops", description: "VPN drops" },
+      amendOnly: true,
     }));
+    expect(deps.processingQueue!.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("passes unmentioned chat that did not revise the offer on to capture", async () => {
+    const deps = offerDeps(true, false);
+    (deps.answerQuestion.execute as ReturnType<typeof vi.fn>).mockResolvedValue("");
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("I'll send the logs by Friday"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ amendOnly: true }));
+    expect(deps.processingQueue!.enqueue).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-1" }));
+  });
+
+  it("does not mark a mentioned correction as amend-only", async () => {
+    const deps = offerDeps(true, false);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("the description should mention the office Wi-Fi"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.not.objectContaining({ amendOnly: true }));
+  });
+
+  it("forgets a recently dropped offer when the requester's next message is not a yes", async () => {
+    const deps = offerDeps(false, false, { kind: "resolve", issueKey: "DS-8" });
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("sounds good, see you at the call"));
+    expect(deps.pendingOffers!.forgetDropped).toHaveBeenCalledWith(convId, sender);
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
   });
 
   it("leaves an unmentioned message after a dropped resolve offer to normal routing", async () => {
     const deps = makeDeps({
       pendingOffers: {
         has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(),
-        drop: vi.fn().mockReturnValue({ kind: "resolve", issueKey: "DS-8" }), recentlyDropped: vi.fn().mockReturnValue(null),
+        drop: vi.fn().mockReturnValue({ kind: "resolve", issueKey: "DS-8" }), recentlyDropped: vi.fn().mockReturnValue(null), forgetDropped: vi.fn(),
       },
       confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
     } as unknown as Partial<WireEventRouterDeps>);

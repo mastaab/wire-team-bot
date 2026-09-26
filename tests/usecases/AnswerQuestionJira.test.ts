@@ -810,6 +810,29 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
     expect(stored.map((o) => o.command)).toEqual([{ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes since Monday." }]);
   });
 
+  it("sends nothing for unaddressed chat after an offer that does not revise it", async () => {
+    const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: "Lunch is at noon." });
+    const answer = await run("Bob, lunch at noon?", { pendingOffer: original, amendOnly: true });
+    expect(answer).toBe("");
+    expect(sent).toEqual([]);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("sends nothing when unaddressed chat only repeats the same offer, so it does not follow every message", async () => {
+    const same = `OFFER: ${JSON.stringify(original)}`;
+    const { stored, sent, run } = setup({ modelAnswer: `Here it is again.\n${same}` });
+    expect(await run("never mind, I'll check later", { pendingOffer: original, amendOnly: true })).toBe("");
+    expect(sent).toEqual([]);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("sends a real revision for an unaddressed correction", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: revisedSupport });
+    await run("it started on Monday", { pendingOffer: original, amendOnly: true });
+    expect(sent).toHaveLength(1);
+    expect(stored).toHaveLength(1);
+  });
+
   it("accepts a revised reply on the same request without change intent", async () => {
     const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: revisedReply });
     await run("Also mention that I rebooted", { pendingOffer: pendingReply });

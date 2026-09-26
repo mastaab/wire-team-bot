@@ -142,12 +142,13 @@ export class ConfirmOffer {
 
   /**
    * A yes with no live offer: when the requester's offer was recently dropped or expired, say
-   * that nothing was done and give its command. The remembered offer is kept, so a repeated
-   * yes gets the same answer. Otherwise the yes is not handled here.
+   * that nothing was done and give its command, once: the memory is then forgotten, so a later
+   * yes meant for someone else is not answered. Otherwise the yes is not handled here.
    */
   private async nothingToConfirm(input: ConfirmOfferInput, now: Date): Promise<boolean> {
     const dropped = this.offers.recentlyDropped(input.conversationId, input.requesterId, now);
     if (!dropped) return false;
+    this.offers.forgetDropped(input.conversationId, input.requesterId);
     await this.wireOutbound.sendPlainText(input.conversationId, `${NOTHING_TO_CONFIRM_REPLY}\n${offerCommandLine(dropped)}`, {
       replyToMessageId: input.replyToMessageId,
     });

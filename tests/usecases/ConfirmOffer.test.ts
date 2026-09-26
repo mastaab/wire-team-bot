@@ -244,19 +244,19 @@ describe("ConfirmOffer", () => {
   });
 
   describe("a yes with nothing to confirm", () => {
-    it.each([SUPPORT, REPLY, RESOLVE])("answers a yes after a %j offer was dropped, and again for a repeated yes", async (command) => {
+    it.each([SUPPORT, REPLY, RESOLVE])("answers a yes after a %j offer was dropped once, then forgets it", async (command) => {
       const { handlers, wire, store, useCase, offer } = setup();
       offer(command);
       expect(store.drop(convId, alice, now)).toEqual(command);
 
       expect(await useCase.execute({ ...input, text: "yes please" })).toBe(true);
-      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+      // A second yes may be meant for a colleague, so it is left to normal routing.
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
 
       expectNothingDispatched(handlers);
-      expect(wire.sendPlainText).toHaveBeenCalledTimes(2);
-      expect(wire.sendPlainText).toHaveBeenNthCalledWith(1, convId, nothingWaiting[command.kind], { replyToMessageId: "msg-9" });
-      expect(wire.sendPlainText).toHaveBeenNthCalledWith(2, convId, nothingWaiting[command.kind], { replyToMessageId: "msg-9" });
-      expect(store.recentlyDropped(convId, alice, now)).toEqual(command);
+      expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+      expect(wire.sendPlainText).toHaveBeenCalledWith(convId, nothingWaiting[command.kind], { replyToMessageId: "msg-9" });
+      expect(store.recentlyDropped(convId, alice, now)).toBeNull();
     });
 
     it.each(["no", "ok thanks", "what about DS-6?"])("does not handle %j with only a recently dropped offer", async (text) => {
