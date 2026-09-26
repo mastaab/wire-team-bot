@@ -501,6 +501,24 @@ describe("AnswerQuestion with Jira: offers", () => {
     expect(sent).toEqual([resolveQuestion]);
   });
 
+  it("writes the resolve question with the closing comment quoted line by line", async () => {
+    const marker = `OFFER: ${JSON.stringify({ kind: "resolve", issueKey: "DS-6", comment: "The VPN works again.\n\n  Thanks for the help. " })}`;
+    const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: `I'll close it.\n${marker}` });
+    await run("The VPN works again, please add a comment and close DS-6");
+    expect(stored[0]!.command).toEqual({ kind: "resolve", issueKey: "DS-6", comment: "The VPN works again.\n\n  Thanks for the help." });
+    const question = 'Shall I resolve **DS-6** "VPN drops every ten minutes" with the service desk and add this comment?\n> The VPN works again.\n> Thanks for the help.\n\n(yes or no)?';
+    expect(sent).toEqual([question]);
+    expect(question.endsWith("?")).toBe(true);
+  });
+
+  it("drops a resolve offer whose comment is out of bounds, without resolving", async () => {
+    const marker = `OFFER: ${JSON.stringify({ kind: "resolve", issueKey: "DS-6", comment: "c".repeat(2001) })}`;
+    const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: `Sure.\n${marker}` });
+    await run("Please add a comment and close DS-6");
+    expect(stored).toHaveLength(0);
+    expect(sent).toEqual(["I haven't changed anything with the service desk.\nMention me with the command if you'd like me to act."]);
+  });
+
   it("ends every offer question with a question mark for the router's follow-up detection", () => {
     for (const question of [supportQuestion, replyQuestion, resolveQuestion]) expect(question.trimEnd().endsWith("?")).toBe(true);
   });
@@ -571,6 +589,7 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["resolve", "The VPN works again"],
       ["resolve", "It's working again, close it"],
       ["resolve", "That request is no longer needed"],
+      ["resolve", "Add a comment and close DS-6"],
       ["reply", "Let the service desk know it still drops"],
       ["reply", "Message DS-6 that it still drops"],
       ["reply", "Answer the ticket"],
@@ -914,6 +933,48 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
     const { stored, run } = setup({ requests: [vpn()], modelAnswer: 'OFFER: {"kind":"resolve","issueKey":"DS-6"}' });
     await run("It started on Monday", { pendingOffer: { kind: "resolve", issueKey: "DS-6" } });
     expect(stored).toHaveLength(0);
+  });
+
+  describe("a resolve offer with a closing comment", () => {
+    const pendingResolve: OfferCommand = { kind: "resolve", issueKey: "DS-6", comment: "The VPN works again." };
+    const revisedResolve = `OFFER: ${JSON.stringify({ kind: "resolve", issueKey: "DS-6", comment: "The VPN works again after the router swap." })}`;
+    const revisedQuestion = 'Shall I resolve **DS-6** "VPN drops" with the service desk and add this comment?\n> The VPN works again after the router swap.\n\n(yes or no)?';
+
+    it("passes the pending offer to the model as a related result", async () => {
+      const { run, passedResults } = setup({ requests: [vpn()], modelAnswer: "Noted." });
+      await run("mention the router swap", { pendingOffer: pendingResolve });
+      expect(pendingResults(passedResults()).map((r) => r.content)).toEqual([
+        `Pending offer being amended (not confirmed, nothing was sent; the requester's message changes it): ${JSON.stringify(pendingResolve)}`,
+      ]);
+    });
+
+    it("accepts a corrected comment on the same request without change intent", async () => {
+      const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: `Updated.\n${revisedResolve}` });
+      await run("mention the router swap", { pendingOffer: pendingResolve });
+      expect(sent).toEqual([revisedQuestion]);
+      expect(stored.map((o) => o.command)).toEqual([{ kind: "resolve", issueKey: "DS-6", comment: "The VPN works again after the router swap." }]);
+    });
+
+    it("sends a corrected comment for an unaddressed correction, but not a repeat of the same offer", async () => {
+      const corrected = setup({ requests: [vpn()], modelAnswer: revisedResolve });
+      await corrected.run("mention the router swap", { pendingOffer: pendingResolve, amendOnly: true });
+      expect(corrected.sent).toEqual([revisedQuestion]);
+      expect(corrected.stored).toHaveLength(1);
+
+      const same = setup({ requests: [vpn()], modelAnswer: `OFFER: ${JSON.stringify(pendingResolve)}` });
+      expect(await same.run("lunch at noon?", { pendingOffer: pendingResolve, amendOnly: true })).toBe("");
+      expect(same.sent).toEqual([]);
+      expect(same.stored).toHaveLength(0);
+    });
+
+    it("applies the change-intent check to a revision for another request", async () => {
+      const other = `OFFER: ${JSON.stringify({ kind: "resolve", issueKey: "DS-7", comment: "The VPN works again." })}`;
+      const { stored, sent, logger, run } = setup({ requests: [vpn(), makeRequest("DS-7")], modelAnswer: other });
+      await run("mention the router swap", { pendingOffer: pendingResolve });
+      expect(stored).toHaveLength(0);
+      expect(sent).toEqual(["I haven't changed anything with the service desk.\nTo resolve it with a comment, use `@Wire Team Bot resolve DS-7: <comment>`."]);
+      expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: offer dropped, the question asks for no change", { kind: "resolve" });
+    });
   });
 
   it("still validates a revision's scope, bounds and requester", async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ResolveSupportRequest } from "../../src/application/usecases/jira/ResolveSupportRequest";
+import { REPLY_BODY_MAX } from "../../src/application/services/offers";
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import { OUT_OF_SCOPE, bob, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
@@ -136,5 +137,136 @@ describe("ResolveSupportRequest", () => {
     expect(sent).toEqual(["Resolved **DS-6** with the service desk.\nTime to done: met in 3m (target 16h)"]);
     expect(logger.warn).toHaveBeenCalledWith("Support request status refresh failed", { key: "DS-6", err: "Error" });
     expect(logger.error).toHaveBeenCalledWith("ResolveSupportRequest: audit append failed", { err: "Error" });
+  });
+
+  describe("with a closing comment", () => {
+    const withComment = { ...base, comment: "  The mirror was fitted, thanks.\nAll good now.  " };
+    const commentBody = "The mirror was fitted, thanks.\nAll good now.\n\nSent from Wire.";
+
+    it("sends the comment with the footer before resolving, audits both and says the comment was added", async () => {
+      const { tracker, sent, audit, logger, useCase } = setup();
+
+      expect(await useCase.execute(withComment)).toEqual(done);
+
+      expect(tracker.addCustomerReply).toHaveBeenCalledWith("DS-6", commentBody);
+      expect(tracker.addCustomerReply.mock.invocationCallOrder[0]!).toBeLessThan(tracker.resolveIssue.mock.invocationCallOrder[0]!);
+      expect(audit.append).toHaveBeenCalledTimes(2);
+      expect(audit.append).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        actorId: bob, conversationId: convId, action: "entity_created", entityType: "JiraComment", entityId: "DS-6",
+        details: { supportRequest: "DS-6" },
+      }));
+      expect(audit.append).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        actorId: bob, action: "entity_updated", entityType: "SupportRequest", details: { statusCategory: "done" },
+      }));
+      expect(sent).toEqual(["Resolved **DS-6** with the service desk.\nAdded your comment before resolving.\nTime to done: met in 3m (target 16h)"]);
+      expect(JSON.stringify([...logger.warn.mock.calls, ...logger.info.mock.calls, ...logger.error.mock.calls])).not.toContain("mirror");
+    });
+
+    it("does not send the comment for a request that is already resolved live", async () => {
+      const { tracker, sent, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+      tracker.getIssue.mockResolvedValue(done);
+
+      expect(await useCase.execute(withComment)).toBeNull();
+
+      expect(tracker.getIssue).toHaveBeenCalledWith("DS-6");
+      expect(tracker.addCustomerReply).not.toHaveBeenCalled();
+      expect(sent).toEqual(["**DS-6** is already resolved."]);
+    });
+
+    it("sends the comment and resolves a request the desk reopened, after the live read", async () => {
+      const { tracker, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+      tracker.getIssue.mockResolvedValue(makeSnapshot({ statusCategory: "in_progress" }));
+
+      await useCase.execute(withComment);
+
+      expect(tracker.getIssue.mock.invocationCallOrder[0]!).toBeLessThan(tracker.addCustomerReply.mock.invocationCallOrder[0]!);
+      expect(tracker.resolveIssue).toHaveBeenCalledWith("DS-6");
+    });
+
+    it.each(OUT_OF_SCOPE)("refuses a key %s before sending the comment", async (_label, records, key) => {
+      const { tracker, useCase } = setup(records);
+
+      expect(await useCase.execute({ ...withComment, issueKey: key })).toBeNull();
+
+      expect(tracker.addCustomerReply).not.toHaveBeenCalled();
+      expect(tracker.resolveIssue).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve when the comment is refused", async () => {
+      const { tracker, sent, audit, logger, useCase } = setup();
+      tracker.addCustomerReply.mockRejectedValue(new IssueTrackerError("bad request", 400));
+
+      expect(await useCase.execute(withComment)).toBeNull();
+
+      expect(tracker.resolveIssue).not.toHaveBeenCalled();
+      expect(audit.append).not.toHaveBeenCalled();
+      expect(sent).toEqual(["I'm afraid I couldn't add the comment to **DS-6**, so I haven't resolved it."]);
+      expect(logger.warn).toHaveBeenCalledWith("ResolveSupportRequest: addCustomerReply failed", { key: "DS-6", err: "IssueTrackerError", status: 400 });
+    });
+
+    it.each([
+      ["a server error", new IssueTrackerError("unavailable", 503)],
+      ["a timeout", new IssueTrackerError("timeout")],
+      ["an unexpected error", new Error("socket hang up")],
+    ])("does not resolve and audits the unconfirmed comment after %s", async (_label, error) => {
+      const { tracker, sent, audit, useCase } = setup();
+      tracker.addCustomerReply.mockRejectedValue(error);
+
+      expect(await useCase.execute(withComment)).toBeNull();
+
+      expect(tracker.resolveIssue).not.toHaveBeenCalled();
+      expect(audit.append).toHaveBeenCalledTimes(1);
+      expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+        actorId: bob, action: "entity_created", entityType: "JiraComment", entityId: "DS-6",
+        details: { supportRequest: "DS-6", outcome: "reply_unconfirmed" },
+      }));
+      expect(sent).toEqual(["I'm afraid I couldn't confirm that the comment reached **DS-6**, so I haven't resolved it. Please check the ticket."]);
+    });
+
+    it.each([
+      ["empty", "   \n ", "I'm afraid the comment is empty, so I haven't resolved **DS-6**."],
+      ["too long", "c".repeat(REPLY_BODY_MAX + 1), `I'm afraid that comment is too long for Jira, so I haven't resolved **DS-6**; please keep it under ${REPLY_BODY_MAX} characters.`],
+    ])("refuses a comment that is %s without calling the tracker", async (_label, comment, expected) => {
+      const { tracker, sent, audit, useCase } = setup([makeRequest({ statusCategory: "done" })]);
+
+      expect(await useCase.execute({ ...base, comment })).toBeNull();
+
+      expect(sent).toEqual([expected]);
+      expect(tracker.getIssue).not.toHaveBeenCalled();
+      expect(tracker.addCustomerReply).not.toHaveBeenCalled();
+      expect(tracker.resolveIssue).not.toHaveBeenCalled();
+      expect(audit.append).not.toHaveBeenCalled();
+    });
+
+    it("accepts a comment at the limit", async () => {
+      const { tracker, useCase } = setup();
+      const comment = "c".repeat(REPLY_BODY_MAX);
+
+      expect(await useCase.execute({ ...base, comment })).toEqual(done);
+
+      expect(tracker.addCustomerReply).toHaveBeenCalledWith("DS-6", `${comment}\n\nSent from Wire.`);
+    });
+
+    it("says the comment is on the ticket when the resolve then fails or stops short of done", async () => {
+      const failed = setup();
+      failed.tracker.resolveIssue.mockRejectedValue(new IssueTrackerError("transition failed", 409));
+      expect(await failed.useCase.execute(withComment)).toBeNull();
+      expect(failed.sent).toEqual(["I'm afraid I couldn't resolve **DS-6** with the service desk; please check the ticket.\nYour comment was added to the ticket."]);
+
+      const partial = setup();
+      partial.tracker.resolveIssue.mockResolvedValue(makeSnapshot({ statusCategory: "in_progress" }));
+      await partial.useCase.execute(withComment);
+      expect(partial.sent).toEqual(["I'm afraid I couldn't resolve **DS-6** with the service desk; it is now In progress.\nYour comment was added to the ticket."]);
+    });
+
+    it("still resolves when auditing the comment fails", async () => {
+      const { tracker, audit, sent, useCase } = setup();
+      audit.append.mockRejectedValueOnce(new Error("audit down"));
+
+      expect(await useCase.execute(withComment)).toEqual(done);
+
+      expect(tracker.resolveIssue).toHaveBeenCalledWith("DS-6");
+      expect(sent[0]).toContain("Added your comment before resolving.");
+    });
   });
 });

@@ -144,6 +144,7 @@ export class ConfirmOffer {
       case "resolve":
         await this.handlers.resolveSupportRequest.execute({
           issueKey: command.issueKey, conversationId, actorId, replyToMessageId,
+          ...(command.comment ? { comment: command.comment } : {}),
         });
         break;
     }
@@ -174,7 +175,9 @@ function askAgain(command: OfferCommand): string {
     case "support":
       return "I need a clear yes or no, so I haven't raised anything with the service desk yet. Shall I raise it (yes or no)?";
     case "resolve":
-      return `I need a clear yes or no, so I haven't resolved **${command.issueKey}** yet. Shall I resolve it with the service desk (yes or no)?`;
+      return command.comment
+        ? `I need a clear yes or no, so I haven't resolved **${command.issueKey}** yet. Shall I add the comment and resolve it (yes or no)?`
+        : `I need a clear yes or no, so I haven't resolved **${command.issueKey}** yet. Shall I resolve it with the service desk (yes or no)?`;
     case "reply":
       return `I need a clear yes or no, so I haven't added this to **${command.issueKey}** yet. Shall I add it (yes or no)?`;
   }

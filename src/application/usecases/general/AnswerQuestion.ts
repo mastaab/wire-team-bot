@@ -13,8 +13,8 @@ import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import {
-  GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatMissingPartsQuestion, formatReplyQuestion, formatSupportQuestion,
-  missingPartDetails, offerCommandLine, parseOfferMarker,
+  GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatMissingPartsQuestion, formatReplyQuestion, formatResolveQuestion,
+  formatSupportQuestion, missingPartDetails, offerCommandLine, parseOfferMarker,
 } from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
@@ -428,7 +428,7 @@ export class AnswerQuestion {
     if (!request) return null;
     if (command.kind === "reply") return formatReplyQuestion(request.key, request.summary, command.body);
     // A request last known as done is not dropped: the desk may have reopened it, and the use case checks live.
-    return `Shall I resolve **${request.key}** "${oneLine(request.summary)}" with the service desk (yes or no)?`;
+    return formatResolveQuestion(request.key, request.summary, command.comment);
   }
 }
 
@@ -462,12 +462,19 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
   }
 }
 
-/** The displaced offer when the requester may amend it: only `support` and `reply` offers carry text to correct. */
+/**
+ * The displaced offer when the requester may amend it: only offers that carry text to correct,
+ * that is `support`, `reply` and a `resolve` with a closing comment.
+ */
 function amendableOffer(pending: OfferCommand | undefined): OfferCommand | null {
-  return pending && (pending.kind === "support" || pending.kind === "reply") ? pending : null;
+  if (!pending) return null;
+  return pending.kind === "support" || pending.kind === "reply" || (pending.kind === "resolve" && pending.comment) ? pending : null;
 }
 
-/** True when `command` revises the amendable displaced offer: the same kind and, for a reply, the same request. */
+/**
+ * True when `command` revises the amendable displaced offer: the same kind and, for a reply or
+ * a resolve, the same request.
+ */
 function isRevision(pending: OfferCommand | undefined, command: OfferCommand): boolean {
   const amended = amendableOffer(pending);
   if (!amended || amended.kind !== command.kind) return false;
@@ -475,7 +482,8 @@ function isRevision(pending: OfferCommand | undefined, command: OfferCommand): b
     // The same kind of request: turning a part order into a fault would skip its essentials.
     return command.kind === "support" && amended.requestKind === command.requestKind;
   }
-  return command.kind === "reply" && amended.issueKey === command.issueKey;
+  if (amended.kind === "reply") return command.kind === "reply" && amended.issueKey === command.issueKey;
+  return command.kind === "resolve" && amended.issueKey === command.issueKey;
 }
 
 /**
