@@ -968,12 +968,19 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     expect(deps.resolveSupportRequest!.execute).not.toHaveBeenCalled();
   });
 
-  it.each([["support requests", false], ["open support requests?", false], ["my support requests", true], ["My support request", true]])("'%s' → listSupportRequests (own only: %s)", async (text, own) => {
+  it.each([["support requests", false], ["open support requests?", false], ["my support requests", true], ["My support request", true]])("'%s' → listSupportRequests when the bot is mentioned (own only: %s)", async (text, own) => {
     const deps = jiraDeps();
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.listSupportRequests!.execute).toHaveBeenCalledWith({
       conversationId: convId, ...(own ? { requesterId: sender } : {}), replyToMessageId: "msg-1",
     });
+  });
+
+  it.each(["support requests", "my support requests", "status of DS-42"])("needs a mention for the service-desk read '%s'", async (text) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.listSupportRequests!.execute).not.toHaveBeenCalled();
+    expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
   });
 
   it.each(["ACT-0004 to jira", "raise ACT-0004 in jira", "jira status of ACT-0004"])("no longer sends actions to Jira: '%s'", async (text) => {
@@ -985,15 +992,15 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     expect(deps.listSupportRequests!.execute).not.toHaveBeenCalled();
   });
 
-  it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"]])("'%s' → getIssueStatus(%s)", async (text, reference) => {
+  it.each([["status of DS-42", "DS-42"], ["status of ds-42?", "DS-42"], ["jira status of DS-42", "DS-42"]])("'%s' → getIssueStatus(%s) when the bot is mentioned", async (text, reference) => {
     const deps = jiraDeps();
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.getIssueStatus!.execute).toHaveBeenCalledWith({ reference, conversationId: convId, timezone: "Europe/Berlin", replyToMessageId: "msg-1" });
   });
 
   it.each(["status of ACT-0004", "status of DEC-0001", "status of REM-0001", "status of KB-3", "status of WPB-1234"])("leaves '%s' to the existing handling", async (text) => {
     const deps = jiraDeps();
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.getIssueStatus!.execute).not.toHaveBeenCalled();
   });
 
@@ -1056,10 +1063,14 @@ describe("WireEventRouter contract: Jira demo commands", () => {
 });
 
 describe("WireEventRouter contract: Jira offers and service-desk replies", () => {
-  const offerDeps = (pending: boolean, handled = true) => makeDeps({
+  const offerDeps = (pending: boolean, handled = true, recent: unknown = null) => makeDeps({
     getIssueStatus: { execute: vi.fn().mockResolvedValue(null), projectKey: "DS" },
     replyToServiceDesk: { execute: vi.fn().mockResolvedValue(undefined) },
-    pendingOffers: { has: vi.fn().mockReturnValue(pending), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn() },
+    pendingOffers: {
+      has: vi.fn().mockReturnValue(pending), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(),
+      drop: vi.fn().mockReturnValue(pending ? { kind: "support", summary: "VPN drops", description: "VPN drops" } : null),
+      recentlyDropped: vi.fn().mockReturnValue(recent),
+    },
     confirmOffer: { execute: vi.fn().mockResolvedValue(handled) },
     conversationConfig: { get: vi.fn().mockResolvedValue({ timezone: "Europe/Berlin" }), upsert: vi.fn() },
   } as unknown as Partial<WireEventRouterDeps>);
@@ -1090,13 +1101,34 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
   it("drops the pending offer when the requester's next message is not a yes or no", async () => {
     const deps = offerDeps(true, false);
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("what is due today?"));
-    expect(deps.pendingOffers!.take).toHaveBeenCalledWith(convId, sender);
+    expect(deps.pendingOffers!.drop).toHaveBeenCalledWith(convId, sender);
   });
 
   it("keeps the offer when it was handled by the confirmation", async () => {
     const deps = offerDeps(true, true);
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
-    expect(deps.pendingOffers!.take).not.toHaveBeenCalled();
+    expect(deps.pendingOffers!.drop).not.toHaveBeenCalled();
+  });
+
+  it("hands a yes to ConfirmOffer when the sender's offer was dropped recently", async () => {
+    const deps = offerDeps(false, true, { kind: "resolve", issueKey: "DS-8" });
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
+    expect(deps.confirmOffer!.execute).toHaveBeenCalled();
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  it("passes the dropped offer to the answer path so a correction can revise it", async () => {
+    const deps = offerDeps(true, false);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("the description should mention the office Wi-Fi"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
+      pendingOffer: { kind: "support", summary: "VPN drops", description: "VPN drops" },
+    }));
+  });
+
+  it("does not pass an offer to the answer path when none was dropped", async () => {
+    const deps = offerDeps(false);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("what did we decide?"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.not.objectContaining({ pendingOffer: expect.anything() }));
   });
 
   it.each([
@@ -1120,7 +1152,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
   it("drops a pending offer when the requester's next message is rejected as several commands", async () => {
     const deps = offerDeps(true, false);
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("ACT-0001 done\nACT-0002 done"));
-    expect(deps.pendingOffers!.take).toHaveBeenCalledWith(convId, sender);
+    expect(deps.pendingOffers!.drop).toHaveBeenCalledWith(convId, sender);
     expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
       "Please send one command per message. I have not run any commands from this message.", expect.anything());
   });

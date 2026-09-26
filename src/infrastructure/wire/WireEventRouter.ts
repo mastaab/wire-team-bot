@@ -28,7 +28,7 @@ import type { ResolveSupportRequest } from "../../application/usecases/jira/Reso
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
 import type { ConfirmOffer } from "../../application/usecases/jira/ConfirmOffer";
 import type { ReplyToServiceDesk } from "../../application/usecases/jira/ReplyToServiceDesk";
-import type { PendingOfferStore } from "../../application/ports/PendingOfferPort";
+import type { OfferCommand, PendingOfferStore } from "../../application/ports/PendingOfferPort";
 import type { ConversationMessageBuffer } from "../../application/services/ConversationMessageBuffer";
 import type { DateTimeService } from "../../domain/services/DateTimeService";
 import type { ConversationMemberCache, CachedMember } from "../../domain/services/ConversationMemberCache";
@@ -330,8 +330,13 @@ export class WireEventRouter extends WireEventsHandler {
     // before the multi-command guard and the follow-up handling further down, which would otherwise
     // send the "yes" to the read-only Q&A path. Only the member who received the offer can confirm it, and only with
     // their next message: anything else drops the offer, so a later "yes" meant for a different
-    // question can never confirm it.
-    if (this.deps.confirmOffer && this.deps.pendingOffers?.has(convId, sender)) {
+    // question can never confirm it. A bare "yes" shortly after a dropped or expired offer is
+    // also handed over, so it gets an answer instead of silence. A dropped offer travels with
+    // this message to the answer path, so a correction can produce a revised offer.
+    let droppedOffer: OfferCommand | undefined;
+    const pendingOffers = this.deps.pendingOffers;
+    if (this.deps.confirmOffer && pendingOffers
+        && (pendingOffers.has(convId, sender) || pendingOffers.recentlyDropped(convId, sender))) {
       const handled = await this.deps.confirmOffer.execute({
         text: commandText, conversationId: convId, requesterId: sender,
         requesterName: senderDisplayName, replyToMessageId: wireMessage.id,
@@ -343,7 +348,7 @@ export class WireEventRouter extends WireEventsHandler {
         });
         return;
       }
-      this.deps.pendingOffers.take(convId, sender);
+      droppedOffer = pendingOffers.drop(convId, sender) ?? undefined;
     }
 
     if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {
@@ -477,7 +482,7 @@ export class WireEventRouter extends WireEventsHandler {
       return;
     }
 
-    const supportListMatch = this.deps.listSupportRequests
+    const supportListMatch = this.deps.listSupportRequests && isBotAddressed
       ? commandLowered.match(/^(my\s+)?(?:open\s+)?support\s+requests?[?.]?\s*$/)
       : null;
     if (supportListMatch && this.deps.listSupportRequests) {
@@ -489,7 +494,7 @@ export class WireEventRouter extends WireEventsHandler {
 
     // Jira status lookups (customer demo): the exact command, or natural phrasing when the bot
     // is addressed. Only keys of the configured project match; see matchIssueStatusRequest.
-    const issueReference = jiraProjectKey ? matchIssueStatusRequest(commandText, jiraProjectKey, isBotAddressed) : null;
+    const issueReference = jiraProjectKey && isBotAddressed ? matchIssueStatusRequest(commandText, jiraProjectKey) : null;
     if (issueReference && this.deps.getIssueStatus) {
       const config = await this.deps.conversationConfig.get(convId);
       await this.deps.getIssueStatus.execute({
@@ -748,6 +753,7 @@ export class WireEventRouter extends WireEventsHandler {
         channelId,
         orgId,
         userId: isPersonal ? sender.id : undefined,
+        ...(droppedOffer ? { pendingOffer: droppedOffer } : {}),
       });
       // Push Wire Team Bot' response into both buffers so follow-up messages have context.
       const botMsgId = `bot-${Date.now()}`;

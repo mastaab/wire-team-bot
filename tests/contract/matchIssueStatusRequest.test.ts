@@ -6,9 +6,8 @@ describe("matchIssueStatusRequest", () => {
     ["status of DS-4", "DS-4"],
     ["status of ds-4?", "DS-4"],
     ["jira status of DS-4", "DS-4"],
-  ])("matches the exact command whether or not the bot is addressed: %s", (text, reference) => {
-    expect(matchIssueStatusRequest(text, "DS", false)).toBe(reference);
-    expect(matchIssueStatusRequest(text, "DS", true)).toBe(reference);
+  ])("matches the exact command: %s", (text, reference) => {
+    expect(matchIssueStatusRequest(text, "DS")).toBe(reference);
   });
 
   it.each([
@@ -21,15 +20,8 @@ describe("matchIssueStatusRequest", () => {
     ["has the service desk replied on ds-4?", "DS-4"],
     ["is DS-4 done yet?", "DS-4"],
     ["DS-4?", "DS-4"],
-  ])("matches natural phrasing when addressed: %s", (text, reference) => {
-    expect(matchIssueStatusRequest(text, "DS", true)).toBe(reference);
-  });
-
-  it.each([
-    "whats the status of DS-4",
-    "any update on DS-4?",
-  ])("leaves natural phrasing between teammates alone when the bot is not addressed: %s", (text) => {
-    expect(matchIssueStatusRequest(text, "DS", false)).toBeNull();
+  ])("matches natural phrasing: %s", (text, reference) => {
+    expect(matchIssueStatusRequest(text, "DS")).toBe(reference);
   });
 
   it.each([
@@ -46,6 +38,6 @@ describe("matchIssueStatusRequest", () => {
     ["the bot's own record IDs", "what's the status of DEC-0001?"],
     ["a statement without a status word", "DS-4 needs the legal review first"],
   ])("does not match %s", (_label, text) => {
-    expect(matchIssueStatusRequest(text, "DS", true)).toBeNull();
+    expect(matchIssueStatusRequest(text, "DS")).toBeNull();
   });
 });

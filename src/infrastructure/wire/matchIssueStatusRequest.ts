@@ -1,12 +1,10 @@
 /**
- * Recognises a request for a Jira ticket's status (customer demo).
+ * Recognises a request for a Jira ticket's status (customer demo). The router calls it only
+ * when the bot is addressed: every support-request command needs a mention.
  *
- * - The exact command (`status of DS-4`) matches whether or not the bot is addressed, like
- *   the other explicit commands.
- * - Natural phrasing ("what's the status of DS-4 in jira?", "any update on DS-4?") matches
- *   only when the bot is addressed, so teammates discussing a ticket among themselves are
- *   not interrupted. It needs exactly one key of the configured project, plus a status word
- *   or a question mark.
+ * - The exact command (`status of DS-4`) matches.
+ * - Natural phrasing ("what's the status of DS-4 in jira?", "any update on DS-4?") needs
+ *   exactly one key of the configured project, plus a status word or a question mark.
  * - Anything phrased as a change is left alone: this lookup is read-only, and the answer
  *   path explains the supported commands.
  *
@@ -16,10 +14,9 @@
 const STATUS_WORDS = /\b(?:status|update|updates|progress|going|happening|latest|news|state|stand|where|replies|reply|answered|heard|open|done|resolved|closed|sla|slas)\b/i;
 const CHANGE_WORDS = /\b(?:close|resolve|reopen|cancel|assign|reassign|comment|tell|raise|create|push|send|move|transition|delete|mark|set|escalate|reply\s+to|respond\s+to)\b/i;
 
-export function matchIssueStatusRequest(text: string, projectKey: string, addressed: boolean): string | null {
+export function matchIssueStatusRequest(text: string, projectKey: string): string | null {
   const strict = text.match(new RegExp(`^(?:jira\\s+)?status\\s+of\\s+(${projectKey}-\\d+)[?.]?\\s*$`, "i"));
   if (strict) return strict[1]!.toUpperCase();
-  if (!addressed) return null;
 
   const trimmed = text.trim();
   if (CHANGE_WORDS.test(trimmed)) return null;
