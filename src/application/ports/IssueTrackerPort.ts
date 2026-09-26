@@ -34,7 +34,7 @@ export interface CreateIssueRequest {
   /** Calendar date (YYYY-MM-DD) already resolved in the conversation's timezone. */
   dueDate?: string;
   labels?: string[];
-  /** Tracker request type for this request; the adapter's configured default when absent. */
+  /** Tracker request type for this request; the configured general (fault) type when absent. */
   requestTypeId?: string;
 }
 

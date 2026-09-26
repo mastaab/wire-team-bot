@@ -98,7 +98,6 @@ export interface JiraConfig {
   email?: string;
   projectKey: string;
   serviceDeskId: string;
-  requestTypeId: string;
   timeoutMs: number;
   /**
    * Whether live ticket status, SLAs and customer replies may be passed to the answer model.
@@ -110,8 +109,8 @@ export interface JiraConfig {
    * open requests, offering to raise (confirmed with yes) or answering the status. Off by default.
    */
   passive: boolean;
-  /** Request type per kind; a kind without an entry uses `requestTypeId`. */
-  requestTypes: Partial<Record<SupportRequestKind, string>>;
+  /** Request type per kind. `fault` is the general type, used for any kind without its own entry. */
+  requestTypes: RequestTypes;
   /** What the service desk handles, in plain words, for the model prompts; generic wording when absent. */
   serviceScope?: string;
 }
@@ -122,8 +121,11 @@ const JIRA_REQUIRED_KEYS = [
   "WIRE_TEAM_BOT_JIRA_API_TOKEN",
   "WIRE_TEAM_BOT_JIRA_PROJECT_KEY",
   "WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID",
-  "WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID",
+  "WIRE_TEAM_BOT_JIRA_REQUEST_TYPES",
 ] as const;
+
+/** Tracker request type IDs per request kind; `fault` is required and is the fallback. */
+export type RequestTypes = { fault: string } & Partial<Record<SupportRequestKind, string>>;
 
 /**
  * Pure resolver for the Jira settings, kept separate from process.env for testing.
@@ -158,7 +160,7 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
   if (share !== "on" && share !== "off") throw new Error("WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL must be on or off");
   const passive = (value("WIRE_TEAM_BOT_JIRA_PASSIVE") ?? "off").toLowerCase();
   if (passive !== "on" && passive !== "off") throw new Error("WIRE_TEAM_BOT_JIRA_PASSIVE must be on or off");
-  const requestTypes = parseRequestTypes(value("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES"));
+  const requestTypes = parseRequestTypes(value("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES")!);
   const serviceScope = value("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE");
   if (serviceScope && serviceScope.length > 500) throw new Error("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE must be at most 500 characters");
 
@@ -169,7 +171,6 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
     email: value("WIRE_TEAM_BOT_JIRA_EMAIL"),
     projectKey,
     serviceDeskId: numericId("WIRE_TEAM_BOT_JIRA_SERVICE_DESK_ID"),
-    requestTypeId: numericId("WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID"),
     timeoutMs: Number.isFinite(timeout) ? Math.max(1000, timeout) : 15_000,
     shareWithModel: share === "on",
     passive: passive === "on",
@@ -178,10 +179,12 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
   };
 }
 
-/** `question=11809,part=11810,fault=11808`; unknown kinds or non-numeric IDs fail at startup. */
-function parseRequestTypes(raw: string | undefined): Partial<Record<SupportRequestKind, string>> {
+/**
+ * `question=11809,part=11810,fault=11808`. `fault` is required; unknown or repeated kinds,
+ * non-numeric IDs and malformed entries fail at startup.
+ */
+function parseRequestTypes(raw: string): RequestTypes {
   const types: Partial<Record<SupportRequestKind, string>> = {};
-  if (!raw) return types;
   for (const entry of raw.split(",").map((e) => e.trim()).filter(Boolean)) {
     const [kind, id, extra] = entry.split("=").map((part) => part?.trim() ?? "");
     if (extra !== undefined || !(SUPPORT_REQUEST_KINDS as readonly string[]).includes(kind ?? "") || !/^\d+$/.test(id ?? "")
@@ -190,7 +193,10 @@ function parseRequestTypes(raw: string | undefined): Partial<Record<SupportReque
     }
     types[kind as SupportRequestKind] = id;
   }
-  return types;
+  if (!types.fault) {
+    throw new Error("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES must include fault=<id>, the general request type");
+  }
+  return { ...types, fault: types.fault };
 }
 
 function getEnv(name: string): string {

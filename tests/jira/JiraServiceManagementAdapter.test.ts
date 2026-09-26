@@ -5,7 +5,7 @@ import type { JiraConfig } from "../../src/app/config";
 const BASE = "https://api.test/ex/jira/cloud";
 const config: JiraConfig = {
   baseUrl: BASE, siteUrl: "https://site.test", apiToken: "synthetic-token",
-  projectKey: "DS", serviceDeskId: "184", requestTypeId: "11808", timeoutMs: 1000,
+  projectKey: "DS", serviceDeskId: "184", requestTypes: { fault: "11808" }, timeoutMs: 1000,
 };
 const MARKER = "PRIVATE_BODY_MARKER";
 

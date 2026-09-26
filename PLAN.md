@@ -1653,7 +1653,7 @@ The message for security-minded customers: the conversation stays in Wire; only 
 - **Use cases:** `RaiseSupportRequest`, `ListSupportRequests`, `GetIssueStatus`, `ReplyToServiceDesk`, `ResolveSupportRequest` and `ConfirmOffer`, each resolving keys through `findSupportRequestInConversation`, so a key is accepted only for a support request raised in the same qualified conversation. Actions are never sent to Jira.
 - **Concurrency:** an in-process guard per conversation and requester stops a double submit from creating two tickets (one bot process serves all conversations).
 - **Commands:** `@Wire Team Bot support: <problem>`, `support requests`, `my support requests`, `status of DS-NN`, `@Wire Team Bot reply to DS-NN: <text>` and `@Wire Team Bot resolve DS-NN` (also `close DS-NN`). Writes need the bot to be addressed. Only keys of the configured project match, so other projects' keys and the bot's own record IDs keep their existing handling; the Jira forms, including the multi-command guard, apply only when the integration is configured.
-- **Configuration:** `WIRE_TEAM_BOT_JIRA_BASE_URL`, `_SITE_URL`, `_API_TOKEN`, `_PROJECT_KEY`, `_SERVICE_DESK_ID`, `_REQUEST_TYPE_ID`, optional `_EMAIL` (Basic auth with a classic token, for rehearsal only) and `_TIMEOUT_MS`. Partial configuration fails at startup.
+- **Configuration:** `WIRE_TEAM_BOT_JIRA_BASE_URL`, `_SITE_URL`, `_API_TOKEN`, `_PROJECT_KEY`, `_SERVICE_DESK_ID`, `_REQUEST_TYPES` (request type per kind; `fault` required and used for unmapped kinds), optional `_EMAIL` (Basic auth with a classic token, for rehearsal only) and `_TIMEOUT_MS`. Partial configuration fails at startup.
 
 ### Guardrails
 
@@ -1920,7 +1920,7 @@ Committed by the main session before the parallel build. Builders code against t
 - **Listing and status:** `support requests` shows the kind ("Part order DS-12 …").
 
 **Design.**
-- Configuration: `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES` as `question=11809,part=11810,fault=11808`; kinds without an entry use `WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID`, so existing deployments are unchanged. `IssueTrackerPort.createIssue` takes an optional request type ID.
+- Configuration: `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES` as `question=11809,part=11810,fault=11808` replaces the single request type ID. `fault` is required and is the general type, used by the `support:` command and for any kind without its own entry. `IssueTrackerPort.createIssue` takes an optional request type ID.
 - `SupportRequest` gains `kind` (migration adding a column with default `fault`).
 - The `support` offer command gains `requestKind` and, for parts, `part: { vehicle?, part?, quantity?, deliverTo? }`. A part draft with missing essentials is stored as a pending offer that cannot be confirmed, only amended.
 - `SupportTriagePort.draftRequest` returns the kind and, for parts, the essentials found in the message (never invented).
