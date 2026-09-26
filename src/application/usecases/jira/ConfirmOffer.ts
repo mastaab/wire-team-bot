@@ -1,4 +1,5 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { NOTHING_TO_CONFIRM_REPLY, offerCommandLine } from "../../services/offers";
 import type { OfferCommand, PendingOfferStore } from "../../services/offers";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { RaiseSupportRequest } from "./RaiseSupportRequest";
@@ -77,6 +78,9 @@ function stripCourtesy(text: string): string {
 /**
  * Runs a pending offer when its requester confirms it. The offer is consumed once, and the
  * dispatched use case re-validates scope and state at that moment.
+ *
+ * The router calls this when the requester has a live offer (`has`) or a recently dropped or
+ * expired one (`recentlyDropped`), so a bare yes after a drop is answered instead of ignored.
  */
 export class ConfirmOffer {
   constructor(
@@ -86,7 +90,10 @@ export class ConfirmOffer {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  /** True when the message confirmed or declined this requester's pending offer. */
+  /**
+   * True when the message confirmed or declined this requester's pending offer, or was a yes
+   * answered with "nothing waiting" because the offer was recently dropped or expired.
+   */
   async execute(input: ConfirmOfferInput): Promise<boolean> {
     const answer = classifyConfirmation(input.text);
     const now = this.now();
@@ -100,9 +107,10 @@ export class ConfirmOffer {
       return true;
     }
 
-    if (!this.offers.has(input.conversationId, input.requesterId, now)) return false;
-    const offer = this.offers.take(input.conversationId, input.requesterId, now);
-    if (!offer) return false;
+    const offer = this.offers.has(input.conversationId, input.requesterId, now)
+      ? this.offers.take(input.conversationId, input.requesterId, now)
+      : null;
+    if (!offer) return answer === "yes" ? this.nothingToConfirm(input, now) : false;
 
     const { conversationId, requesterId: actorId, replyToMessageId } = input;
     if (answer === "no") {
@@ -129,6 +137,20 @@ export class ConfirmOffer {
         });
         break;
     }
+    return true;
+  }
+
+  /**
+   * A yes with no live offer: when the requester's offer was recently dropped or expired, say
+   * that nothing was done and give its command. The remembered offer is kept, so a repeated
+   * yes gets the same answer. Otherwise the yes is not handled here.
+   */
+  private async nothingToConfirm(input: ConfirmOfferInput, now: Date): Promise<boolean> {
+    const dropped = this.offers.recentlyDropped(input.conversationId, input.requesterId, now);
+    if (!dropped) return false;
+    await this.wireOutbound.sendPlainText(input.conversationId, `${NOTHING_TO_CONFIRM_REPLY}\n${offerCommandLine(dropped)}`, {
+      replyToMessageId: input.replyToMessageId,
+    });
     return true;
   }
 }

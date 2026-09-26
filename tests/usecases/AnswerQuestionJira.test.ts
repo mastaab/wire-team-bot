@@ -5,7 +5,7 @@ import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort"
 import type { IssueReply, IssueSnapshot, IssueStatusCategory, IssueTrackerPort } from "../../src/application/ports/IssueTrackerPort";
 import type { RetrievalResult } from "../../src/application/ports/RetrievalPort";
 import { OFFER_TTL_MS } from "../../src/application/services/offers";
-import type { PendingOffer, PendingOfferStore } from "../../src/application/services/offers";
+import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../src/application/services/offers";
 import type { SupportRequestListOptions, SupportRequestRepository } from "../../src/domain/repositories/SupportRequestRepository";
 import type { AuditLogEntry, AuditLogRepository } from "../../src/domain/repositories/AuditLogRepository";
 import type { SupportRequest, SupportRequestStatusCategory } from "../../src/domain/entities/SupportRequest";
@@ -99,6 +99,8 @@ function setup(options: SetupOptions = {}) {
     take: vi.fn(() => null),
     has: vi.fn(() => false),
     clearConversation: vi.fn(),
+    drop: vi.fn(() => null),
+    recentlyDropped: vi.fn(() => null),
   };
   const general = { answer: vi.fn().mockResolvedValue(options.modelAnswer ?? "Here is the answer.") };
   const sent: string[] = [];
@@ -435,6 +437,15 @@ describe("AnswerQuestion with Jira: status refresh", () => {
   });
 });
 
+const NO_CHANGE = "I haven't changed anything with the service desk.";
+const commandLines = {
+  support: "To raise it, send `@Wire Team Bot support: <problem>`.",
+  reply: "To send a reply, use `@Wire Team Bot reply to DS-6: <text>`.",
+  resolve: "To resolve it, use `@Wire Team Bot resolve DS-6`.",
+  generic: "Mention me with the command if you'd like me to act.",
+} as const;
+const noChange = (line: keyof typeof commandLines): string => `${NO_CHANGE}\n${commandLines[line]}`;
+
 describe("AnswerQuestion with Jira: offers", () => {
   const support = 'OFFER: {"kind":"support","summary":"VPN  drops\\nevery ten minutes","description":"My VPN drops every ten minutes since Monday."}';
   const reply = 'OFFER: {"kind":"reply","issueKey":"DS-6","body":"Alice here: it still drops.\\nThanks"}';
@@ -586,11 +597,11 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["reply", "What is the service desk working on?"],
     ];
     for (const [kind, question] of rejected) {
-      it(`drops a ${kind} offer for "${question}" and logs only the kind`, async () => {
+      it(`drops a ${kind} offer for "${question}", sends the no-change reply and logs only the kind`, async () => {
         const { stored, sent, logger, repo, run } = setup({ requests: [vpn()], modelAnswer: `Here you are.\n${markers[kind]}` });
         await run(question);
         expect(stored).toHaveLength(0);
-        expect(sent).toEqual(["Here you are."]);
+        expect(sent).toEqual([noChange(kind)]);
         expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: offer dropped, the question asks for no change", { kind });
         // Only the context lookup of a key named in the question; the offer is not validated.
         expect(repo.findByKey).toHaveBeenCalledTimes(/DS-6/.test(question) ? 1 : 0);
@@ -602,7 +613,7 @@ describe("AnswerQuestion with Jira: offers", () => {
       const { stored, sent, tracker, run } = setup({ requests: [vpn()], modelAnswer: injected, shareWithModel: true });
       await run("what did we decide about lunch?");
       expect(stored).toHaveLength(0);
-      expect(sent).toEqual(["Lunch is on Friday."]);
+      expect(sent).toEqual([noChange("reply")]);
       expect(tracker.getIssue).not.toHaveBeenCalled();
       expect(tracker.addCustomerReply).not.toHaveBeenCalled();
     });
@@ -610,25 +621,27 @@ describe("AnswerQuestion with Jira: offers", () => {
 
   const replyAsk = "Please reply to the service desk";
   const resolveAsk = "Please resolve it";
-  const invalid: Array<[string, SupportRequest[], string, string]> = [
-    ["reply: unknown key", [], reply, replyAsk],
-    ["reply: request from another conversation", [makeRequest("DS-6", { conversationId: otherConv })], reply, replyAsk],
-    ["reply: request from another domain", [makeRequest("DS-6", { conversationId: otherDomain })], reply, replyAsk],
-    ["reply: deleted request", [makeRequest("DS-6", { deleted: true })], reply, replyAsk],
-    ["reply: out-of-project key", [makeRequest("WPB-6")], 'OFFER: {"kind":"reply","issueKey":"WPB-6","body":"Hello"}', replyAsk],
-    ["resolve: unknown key", [], resolve, resolveAsk],
-    ["resolve: request from another conversation", [makeRequest("DS-6", { conversationId: otherConv })], resolve, resolveAsk],
-    ["resolve: request from another domain", [makeRequest("DS-6", { conversationId: otherDomain })], resolve, resolveAsk],
-    ["resolve: deleted request", [makeRequest("DS-6", { deleted: true })], resolve, resolveAsk],
-    ["resolve: out-of-project key", [makeRequest("WPB-6")], 'OFFER: {"kind":"resolve","issueKey":"WPB-6"}', resolveAsk],
+  const replyPlaceholder = `${NO_CHANGE}\nTo send a reply, use \`@Wire Team Bot reply to DS-N: <text>\`.`;
+  const resolvePlaceholder = `${NO_CHANGE}\nTo resolve it, use \`@Wire Team Bot resolve DS-N\`.`;
+  const invalid: Array<[string, SupportRequest[], string, string, string]> = [
+    ["reply: unknown key", [], reply, replyAsk, noChange("reply")],
+    ["reply: request from another conversation", [makeRequest("DS-6", { conversationId: otherConv })], reply, replyAsk, noChange("reply")],
+    ["reply: request from another domain", [makeRequest("DS-6", { conversationId: otherDomain })], reply, replyAsk, noChange("reply")],
+    ["reply: deleted request", [makeRequest("DS-6", { deleted: true })], reply, replyAsk, noChange("reply")],
+    ["reply: out-of-project key", [makeRequest("WPB-6")], 'OFFER: {"kind":"reply","issueKey":"WPB-6","body":"Hello"}', replyAsk, replyPlaceholder],
+    ["resolve: unknown key", [], resolve, resolveAsk, noChange("resolve")],
+    ["resolve: request from another conversation", [makeRequest("DS-6", { conversationId: otherConv })], resolve, resolveAsk, noChange("resolve")],
+    ["resolve: request from another domain", [makeRequest("DS-6", { conversationId: otherDomain })], resolve, resolveAsk, noChange("resolve")],
+    ["resolve: deleted request", [makeRequest("DS-6", { deleted: true })], resolve, resolveAsk, noChange("resolve")],
+    ["resolve: out-of-project key", [makeRequest("WPB-6")], 'OFFER: {"kind":"resolve","issueKey":"WPB-6"}', resolveAsk, resolvePlaceholder],
   ];
 
-  for (const [name, requests, marker, question] of invalid) {
-    it(`drops an invalid offer (${name}) and never sends the marker`, async () => {
+  for (const [name, requests, marker, question, expected] of invalid) {
+    it(`drops an invalid offer (${name}), never sends the marker or the model's text`, async () => {
       const { stored, sent, logger, run } = setup({ requests, modelAnswer: `Here you are.\n${marker}` });
       await run(question);
       expect(stored).toHaveLength(0);
-      expect(sent).toEqual(["Here you are."]);
+      expect(sent).toEqual([expected]);
       expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: offer dropped", { kind: expect.any(String) });
       expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(/DS-6|WPB-6|Alice here|Hello/);
     });
@@ -647,12 +660,12 @@ describe("AnswerQuestion with Jira: offers", () => {
     expect(stored).toHaveLength(1);
   });
 
-  it("drops an offer that fails bounds in the parser, and hides the marker", async () => {
+  it("drops an offer that fails bounds in the parser, and sends the generic no-change reply", async () => {
     const long = `OFFER: ${JSON.stringify({ kind: "support", summary: "s".repeat(121), description: "It breaks." })}`;
     const { stored, sent, run } = setup({ modelAnswer: `Here you are.\n${long}` });
     await run("Raise this with the service desk");
     expect(stored).toHaveLength(0);
-    expect(sent).toEqual(["Here you are."]);
+    expect(sent).toEqual([noChange("generic")]);
   });
 
   it("rejects the old raise and close kinds", async () => {
@@ -660,7 +673,7 @@ describe("AnswerQuestion with Jira: offers", () => {
       const { stored, sent, run } = setup({ modelAnswer: `Here you are.\n${marker}` });
       await run("Raise it in Jira and close it");
       expect(stored).toHaveLength(0);
-      expect(sent).toEqual(["Here you are."]);
+      expect(sent).toEqual([noChange("generic")]);
     }
   });
 
@@ -673,7 +686,7 @@ describe("AnswerQuestion with Jira: offers", () => {
       const { stored, sent, repo, run } = setup({ requests: [vpn()], modelAnswer: `Here you are.\n${marker}` });
       await run(question, { requester: undefined });
       expect(stored).toHaveLength(0);
-      expect(sent).toEqual(["Here you are."]);
+      expect(sent).toEqual([noChange(kind)]);
       expect(repo.findByKey.mock.calls.map((call) => call[0])).not.toContain("DS-6");
     });
 
@@ -681,7 +694,7 @@ describe("AnswerQuestion with Jira: offers", () => {
       const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: `Here you are.\n${marker}` });
       await run(question, { requester: { id: "user-1", name: "Alice" } });
       expect(stored).toHaveLength(0);
-      expect(sent).toEqual(["Here you are."]);
+      expect(sent).toEqual([noChange(kind)]);
     });
   }
 
@@ -689,19 +702,38 @@ describe("AnswerQuestion with Jira: offers", () => {
     const { stored, sent, logger, run } = setup({ modelAnswer: `Here you are.\n${resolve}`, repo: { findByKey: vi.fn(async () => { throw new Error("db down"); }) } });
     await run(resolveAsk);
     expect(stored).toHaveLength(0);
-    expect(sent).toEqual(["Here you are."]);
+    expect(sent).toEqual([noChange("resolve")]);
     expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: offer validation failed", { kind: "resolve", err: "Error" });
   });
 
-  it("strips a malformed marker and marker lines that are not last", async () => {
+  it("sends the generic no-change reply for a malformed marker and marker lines that are not last", async () => {
     const { stored, sent, run } = setup({ modelAnswer: `${support}\nThe answer.\nOFFER: {not json` });
     await run("Raise it with the service desk");
     expect(stored).toHaveLength(0);
-    expect(sent).toEqual(["The answer."]);
+    expect(sent).toEqual([noChange("generic")]);
   });
 
-  it("sends the fallback when the model wrote nothing but an invalid marker", async () => {
+  it("sends the generic no-change reply for an unknown kind, never the model's claim", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: 'Updated with that detail.\nOFFER: {"kind":"amend","issueKey":"DS-6"}' });
+    await run("Raise it with the service desk");
+    expect(stored).toHaveLength(0);
+    expect(sent).toEqual([noChange("generic")]);
+  });
+
+  it("sends the no-change reply when the model wrote nothing but a dropped marker", async () => {
     const { sent, run } = setup({ modelAnswer: 'OFFER: {"kind":"resolve","issueKey":"DS-6"}' });
+    await run("Resolve DS-6");
+    expect(sent).toEqual([noChange("resolve")]);
+  });
+
+  it("sends the no-change reply without mentions", async () => {
+    const { wire, run } = setup({ modelAnswer: "@Alice I've sent it.\nOFFER: stray" });
+    await run("Who owns the proposal?");
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, noChange("generic"), { replyToMessageId: "q", mentions: undefined });
+  });
+
+  it("sends the fallback when the model wrote nothing", async () => {
+    const { sent, run } = setup({ modelAnswer: "   " });
     await run("Resolve DS-6");
     expect(sent).toEqual(["I wasn't able to generate a response."]);
   });
@@ -722,8 +754,7 @@ describe("AnswerQuestion with Jira: offers", () => {
   });
 
   it("extracts mentions from the final text", async () => {
-    // No valid offer here, so the model's text is sent, minus the stray marker line.
-    const { wire, run } = setup({ modelAnswer: `OFFER: stray\n@Alice owns it.` });
+    const { wire, run } = setup({ modelAnswer: "@Alice owns it." });
     const final = await run("Who owns the proposal?");
     expect(final).toBe("@Alice owns it.");
     expect(wire.sendPlainText).toHaveBeenCalledWith(convId, final, {
@@ -738,5 +769,98 @@ describe("AnswerQuestion with Jira: offers", () => {
     await run("Raise it");
     expect(stored).toHaveLength(0);
     expect(sent).toEqual([answer]);
+  });
+});
+
+describe("AnswerQuestion with Jira: amending a pending offer", () => {
+  const original: OfferCommand = { kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." };
+  const pendingReply: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops." };
+  const revisedSupport = `OFFER: ${JSON.stringify({ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes since Monday." })}`;
+  const revisedReply = `OFFER: ${JSON.stringify({ kind: "reply", issueKey: "DS-6", body: "It still drops after a reboot." })}`;
+  const vpn = (): SupportRequest => makeRequest("DS-6", { summary: "VPN drops" });
+  const pendingResults = (passed: RetrievalResult[]): RetrievalResult[] => passed.filter((r) => r.pathsMatched.includes("pending_offer"));
+
+  it.each([original, pendingReply])("passes a pending %j offer to the model as a related result", async (pendingOffer) => {
+    const { run, passedResults } = setup({ requests: [vpn()], modelAnswer: "Noted." });
+    await run("It started on Monday", { pendingOffer });
+    expect(pendingResults(passedResults())).toEqual([{
+      id: "pending-offer",
+      type: "summary",
+      content: `Pending offer being amended (not confirmed, nothing was sent; the requester's message changes it): ${JSON.stringify(pendingOffer)}`,
+      sourceChannel: "conv-1@wire.com",
+      sourceDate: NOW,
+      confidence: 1,
+      pathsMatched: ["pending_offer"],
+    }]);
+  });
+
+  it("does not pass a pending resolve offer or an absent one", async () => {
+    for (const pendingOffer of [{ kind: "resolve", issueKey: "DS-6" } as const, undefined]) {
+      const { run, passedResults } = setup({ requests: [vpn()], modelAnswer: "Noted." });
+      await run("It started on Monday", { pendingOffer });
+      expect(pendingResults(passedResults())).toEqual([]);
+    }
+  });
+
+  it("accepts a revised support offer without change intent, shows it in full and stores it", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: `Updated.\n${revisedSupport}` });
+    await run("The description should mention it started on Monday", { pendingOffer: original });
+    const question = "Shall I raise this with the service desk?\n> **VPN drops**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
+    expect(sent).toEqual([question]);
+    expect(stored.map((o) => o.command)).toEqual([{ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes since Monday." }]);
+  });
+
+  it("accepts a revised reply on the same request without change intent", async () => {
+    const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: revisedReply });
+    await run("Also mention that I rebooted", { pendingOffer: pendingReply });
+    expect(sent).toEqual(["Here is the reply for **DS-6**:\n> It still drops after a reboot.\n\nShall I send it (yes or no)?"]);
+    expect(stored).toHaveLength(1);
+  });
+
+  it("applies the change-intent check to a reply revision for another request", async () => {
+    const other = `OFFER: ${JSON.stringify({ kind: "reply", issueKey: "DS-7", body: "It still drops." })}`;
+    const { stored, sent, logger, run } = setup({ requests: [vpn(), makeRequest("DS-7")], modelAnswer: `Done.\n${other}` });
+    await run("Also mention that I rebooted", { pendingOffer: pendingReply });
+    expect(stored).toHaveLength(0);
+    expect(sent).toEqual(["I haven't changed anything with the service desk.\nTo send a reply, use `@Wire Team Bot reply to DS-7: <text>`."]);
+    expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: offer dropped, the question asks for no change", { kind: "reply" });
+  });
+
+  it("applies the change-intent check to an offer of a different kind", async () => {
+    const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: `Resolved.\nOFFER: {"kind":"resolve","issueKey":"DS-6"}` });
+    await run("It started on Monday", { pendingOffer: original });
+    expect(stored).toHaveLength(0);
+    expect(sent).toEqual(["I haven't changed anything with the service desk.\nTo resolve it, use `@Wire Team Bot resolve DS-6`."]);
+  });
+
+  it("does not exempt a revision of a pending resolve offer", async () => {
+    const { stored, run } = setup({ requests: [vpn()], modelAnswer: 'OFFER: {"kind":"resolve","issueKey":"DS-6"}' });
+    await run("It started on Monday", { pendingOffer: { kind: "resolve", issueKey: "DS-6" } });
+    expect(stored).toHaveLength(0);
+  });
+
+  it("still validates a revision's scope, bounds and requester", async () => {
+    const outOfScope = setup({ requests: [makeRequest("DS-6", { conversationId: otherConv })], modelAnswer: revisedReply });
+    await outOfScope.run("Also mention that I rebooted", { pendingOffer: pendingReply });
+    expect(outOfScope.stored).toHaveLength(0);
+    expect(outOfScope.sent).toEqual(["I haven't changed anything with the service desk.\nTo send a reply, use `@Wire Team Bot reply to DS-6: <text>`."]);
+
+    const tooLong = `OFFER: ${JSON.stringify({ kind: "support", summary: "s".repeat(121), description: "It breaks." })}`;
+    const bounds = setup({ modelAnswer: tooLong });
+    await bounds.run("Make the summary longer", { pendingOffer: original });
+    expect(bounds.stored).toHaveLength(0);
+    expect(bounds.sent).toEqual(["I haven't changed anything with the service desk.\nMention me with the command if you'd like me to act."]);
+
+    const noDomain = setup({ modelAnswer: revisedSupport });
+    await noDomain.run("It started on Monday", { pendingOffer: original, requester: { id: "user-1", name: "Alice" } });
+    expect(noDomain.stored).toHaveLength(0);
+    expect(noDomain.sent).toEqual(["I haven't changed anything with the service desk.\nTo raise it, send `@Wire Team Bot support: <problem>`."]);
+  });
+
+  it("sends the answer as today when the model returns no offer", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: "Which detail should I add?" });
+    await run("Change it", { pendingOffer: original });
+    expect(stored).toHaveLength(0);
+    expect(sent).toEqual(["Which detail should I add?"]);
   });
 });

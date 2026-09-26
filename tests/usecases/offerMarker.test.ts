@@ -9,6 +9,7 @@ describe("parseOfferMarker", () => {
     expect(parseOfferMarker(`I can raise that.\n${marker({ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." })}`)).toEqual({
       text: "I can raise that.",
       command: { kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." },
+      hadMarker: true,
     });
   });
 
@@ -36,7 +37,7 @@ describe("parseOfferMarker", () => {
   });
 
   it("returns the answer unchanged when there is no marker", () => {
-    expect(parseOfferMarker("Nothing to offer.")).toEqual({ text: "Nothing to offer.", command: null });
+    expect(parseOfferMarker("Nothing to offer.")).toEqual({ text: "Nothing to offer.", command: null, hadMarker: false });
   });
 
   it.each([
@@ -57,13 +58,14 @@ describe("parseOfferMarker", () => {
     ["a resolve without a key", marker({ kind: "resolve" })],
     ["a resolve with an action ID", marker({ kind: "resolve", issueKey: "ACT0010" })],
   ])("honours no command for %s, and still hides the marker", (_label, line) => {
-    expect(parseOfferMarker(`Answer.\n${line}`)).toEqual({ text: "Answer.", command: null });
+    expect(parseOfferMarker(`Answer.\n${line}`)).toEqual({ text: "Answer.", command: null, hadMarker: true });
   });
 
   it("only honours a marker on the last line, but never shows one anywhere", () => {
     expect(parseOfferMarker(`${marker({ kind: "resolve", issueKey: "DS-1" })}\nMore text after it.`)).toEqual({
       text: "More text after it.",
       command: null,
+      hadMarker: true,
     });
   });
 
@@ -72,18 +74,19 @@ describe("parseOfferMarker", () => {
     expect(parseOfferMarker(answer)).toEqual({
       text: "DS-4 is open.",
       command: { kind: "reply", issueKey: "DS-4", body: "The draft is attached." },
+      hadMarker: true,
     });
   });
 
   it("hides an invalid multi-line marker completely, including its drafted text", () => {
     const answer = 'Answer.\nOFFER: {\n  "kind": "support",\n  "description": "SECRET DRAFT"';
     const parsed = parseOfferMarker(answer);
-    expect(parsed).toEqual({ text: "Answer.", command: null });
+    expect(parsed).toEqual({ text: "Answer.", command: null, hadMarker: true });
     expect(parsed.text).not.toContain("SECRET DRAFT");
   });
 
   it("hides a multi-line marker in the middle of the answer without honouring it", () => {
     const answer = 'Before.\nOFFER: {\n  "kind": "resolve",\n  "issueKey": "DS-1"\n}\nAfter the marker.';
-    expect(parseOfferMarker(answer)).toEqual({ text: "Before.\nAfter the marker.", command: null });
+    expect(parseOfferMarker(answer)).toEqual({ text: "Before.\nAfter the marker.", command: null, hadMarker: true });
   });
 });

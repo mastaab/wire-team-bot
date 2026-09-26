@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ConfirmOffer, classifyConfirmation, isAcknowledgement } from "../../src/application/usecases/jira/ConfirmOffer";
 import type { ConfirmOfferHandlers } from "../../src/application/usecases/jira/ConfirmOffer";
 import { InMemoryPendingOfferStore } from "../../src/infrastructure/services/InMemoryPendingOfferStore";
+import { RECENT_DROP_MS } from "../../src/application/services/offers";
 import type { OfferCommand, PendingOfferStore } from "../../src/application/services/offers";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
 
@@ -44,6 +45,13 @@ describe("classifyConfirmation", () => {
 const SUPPORT: OfferCommand = { kind: "support", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes." };
 const REPLY: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops after the reset." };
 const RESOLVE: OfferCommand = { kind: "resolve", issueKey: "DS-6" };
+
+const NOTHING = "There's nothing waiting for your yes: I haven't raised or sent anything.";
+const nothingWaiting = {
+  support: `${NOTHING}\nTo raise it, send \`@Wire Team Bot support: <problem>\`.`,
+  reply: `${NOTHING}\nTo send a reply, use \`@Wire Team Bot reply to DS-6: <text>\`.`,
+  resolve: `${NOTHING}\nTo resolve it, use \`@Wire Team Bot resolve DS-6\`.`,
+} as const;
 
 function setup(options: { store?: PendingOfferStore; clock?: () => Date } = {}) {
   const store = options.store ?? new InMemoryPendingOfferStore();
@@ -220,19 +228,90 @@ describe("ConfirmOffer", () => {
     expectNothingDispatched(handlers);
   });
 
-  it("does nothing for an expired offer", async () => {
+  it("runs nothing for an expired offer: a yes is told nothing is waiting, a no or ok is not handled", async () => {
     const expiresAt = new Date(now.getTime() + 60_000);
     let clock = now;
-    const { handlers, wire, useCase, offer } = setup({ clock: () => clock });
+    const { handlers, sent, useCase, offer } = setup({ clock: () => clock });
     offer(SUPPORT, alice, expiresAt);
 
     clock = expiresAt;
-    expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
     expect(await useCase.execute({ ...input, text: "no" })).toBe(false);
     expect(await useCase.execute({ ...input, text: "ok" })).toBe(false);
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
 
     expectNothingDispatched(handlers);
-    expect(wire.sendPlainText).not.toHaveBeenCalled();
+    expect(sent).toEqual([nothingWaiting.support]);
+  });
+
+  describe("a yes with nothing to confirm", () => {
+    it.each([SUPPORT, REPLY, RESOLVE])("answers a yes after a %j offer was dropped, and again for a repeated yes", async (command) => {
+      const { handlers, wire, store, useCase, offer } = setup();
+      offer(command);
+      expect(store.drop(convId, alice, now)).toEqual(command);
+
+      expect(await useCase.execute({ ...input, text: "yes please" })).toBe(true);
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expectNothingDispatched(handlers);
+      expect(wire.sendPlainText).toHaveBeenCalledTimes(2);
+      expect(wire.sendPlainText).toHaveBeenNthCalledWith(1, convId, nothingWaiting[command.kind], { replyToMessageId: "msg-9" });
+      expect(wire.sendPlainText).toHaveBeenNthCalledWith(2, convId, nothingWaiting[command.kind], { replyToMessageId: "msg-9" });
+      expect(store.recentlyDropped(convId, alice, now)).toEqual(command);
+    });
+
+    it.each(["no", "ok thanks", "what about DS-6?"])("does not handle %j with only a recently dropped offer", async (text) => {
+      const { handlers, wire, store, useCase, offer } = setup();
+      offer(SUPPORT);
+      store.drop(convId, alice, now);
+
+      expect(await useCase.execute({ ...input, text })).toBe(false);
+
+      expectNothingDispatched(handlers);
+      expect(wire.sendPlainText).not.toHaveBeenCalled();
+    });
+
+    it("does not handle a yes once the drop is older than ten minutes", async () => {
+      let clock = now;
+      const { wire, store, useCase, offer } = setup({ clock: () => clock });
+      offer(SUPPORT);
+      store.drop(convId, alice, now);
+
+      clock = new Date(now.getTime() + RECENT_DROP_MS);
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
+      expect(wire.sendPlainText).not.toHaveBeenCalled();
+    });
+
+    it("does not answer another member's yes about the requester's dropped offer", async () => {
+      const { wire, store, useCase, offer } = setup();
+      offer(SUPPORT);
+      store.drop(convId, alice, now);
+
+      expect(await useCase.execute({ ...input, requesterId: bob, text: "yes" })).toBe(false);
+      expect(wire.sendPlainText).not.toHaveBeenCalled();
+    });
+
+    it("confirms a new live offer instead of answering about the dropped one", async () => {
+      const { handlers, sent, store, useCase, offer } = setup();
+      offer(SUPPORT);
+      store.drop(convId, alice, now);
+      offer(RESOLVE);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expect(handlers.resolveSupportRequest.execute).toHaveBeenCalledTimes(1);
+      expect(sent).toEqual([]);
+    });
+
+    it("does not treat a consumed or declined offer as dropped", async () => {
+      const { sent, useCase, offer } = setup();
+      offer(SUPPORT);
+      expect(await useCase.execute({ ...input, text: "no" })).toBe(true);
+      offer(REPLY);
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
+      expect(sent).toEqual(["Understood, I won't."]);
+    });
   });
 
   it("does nothing after the conversation's offers are cleared", async () => {
