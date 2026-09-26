@@ -128,6 +128,7 @@ describe("OpenAIClassifierAdapter service-desk categories", () => {
     expect(result.categories).toEqual(["service_request", "request_status", "question"]);
     const system = sentMessages(llm)[1][0].content as string;
     expect(system).toContain("- service_request: ");
+    expect(system).toContain("or adds information to a problem already reported");
     expect(system).toContain("- request_status: ");
     expect(system).toContain("service_request and request_status never make a message high signal on their own.");
     expect(system).toContain("They come in addition to every other category that applies");

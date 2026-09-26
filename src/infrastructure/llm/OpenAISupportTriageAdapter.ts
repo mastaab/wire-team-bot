@@ -16,10 +16,12 @@ Rules:
 - summary: one short line in the speaker's own words, saying what the problem is.
 - description: only what this message states about the problem. Do not invent details, causes, steps or urgency. Do not mention other people or other messages.
 - duplicateOf: the key of a listed open request only when it is clearly about the same problem; otherwise null.
+- A message without its own subject (such as "it only happens on the 3rd floor") may continue the listed request marked "(raised by the speaker recently)". Use that request as duplicateOf only when the message fits it.
+- addition: when duplicateOf is set, only the new information this message adds to that request: a new detail, a change, a recurrence (such as "it happened again") or a spread (such as "now also on the 2nd floor"). Use the speaker's words, from this message only, as one short sentence the service desk can read on its own: resolve "it" to the problem where needed (for example "It only happens on the 3rd floor." or "The Wi-Fi dropped again."). Use null when the message only repeats the problem with nothing new, and null when duplicateOf is null.
 - When the message describes no service-desk problem (chit-chat, a plan, a question about something else, a status question), return null.
 
 Return ONLY valid JSON, no markdown, no explanation. Either:
-{"summary":"<one line>","description":"<what the message states>","duplicateOf":"<listed key>"|null}
+{"summary":"<one line>","description":"<what the message states>","duplicateOf":"<listed key>"|null,"addition":"<new information>"|null}
 or:
 null`;
 
@@ -46,7 +48,9 @@ export class OpenAISupportTriageAdapter implements SupportTriagePort {
     const summary = typeof v.summary === "string" ? v.summary.replace(/\s+/g, " ").trim() : "";
     const description = typeof v.description === "string" ? v.description.trim() : "";
     if (!summary || !description) return null;
-    return { summary, description, duplicateOf: listedKey(v.duplicateOf, openRequests) };
+    const duplicateOf = listedKey(v.duplicateOf, openRequests);
+    const addition = duplicateOf && typeof v.addition === "string" ? v.addition.trim() || null : null;
+    return { summary, description, duplicateOf, addition };
   }
 
   async matchStatusQuestion(message: string, openRequests: readonly OpenRequestRef[]): Promise<string | null> {
@@ -65,7 +69,7 @@ export class OpenAISupportTriageAdapter implements SupportTriagePort {
     maxTokens: number,
   ): Promise<unknown> {
     const listed = openRequests.length > 0
-      ? openRequests.map((r) => `- ${r.key}: ${r.summary.replace(/\s+/g, " ").trim()}`).join("\n")
+      ? openRequests.map((r) => `- ${r.key}: ${r.summary.replace(/\s+/g, " ").trim()}${r.raisedBySpeakerRecently ? " (raised by the speaker recently)" : ""}`).join("\n")
       : "(none)";
     const userContent = [
       "Open requests of this conversation:",

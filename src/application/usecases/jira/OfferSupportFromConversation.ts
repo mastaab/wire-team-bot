@@ -8,7 +8,7 @@ import type { OfferCommand, PendingOfferStore } from "../../ports/PendingOfferPo
 import type { OpenRequestRef, SupportDraft, SupportTriagePort } from "../../ports/SupportTriagePort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
-import { OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, formatSupportQuestion } from "../../services/offers";
+import { OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatReplyQuestion, formatSupportQuestion } from "../../services/offers";
 import type { GetIssueStatus } from "./GetIssueStatus";
 
 /** Classifier confidence required before passive help acts on a message. */
@@ -41,12 +41,16 @@ export interface OfferSupportFromConversationPort {
 /** Most open requests shown to the model. */
 const OPEN_REQUESTS_MAX = 20;
 
+/** How recently the speaker must have raised a request for a message without its own subject to continue it. */
+const RECENTLY_RAISED_MS = 60 * 60 * 1000;
+
 /**
- * Offers to raise a problem noticed in an unaddressed message, or answers a status question
- * about an open request of this conversation. The model only drafts or matches; code checks
- * the result against this conversation's records and the offer bounds, writes the question,
- * and stores the offer, so nothing reaches the tracker without the speaker's yes. Failures
- * are logged by error name and stay silent in the channel.
+ * Offers to raise a problem noticed in an unaddressed message, offers to add what a message
+ * adds to an open request of this conversation as a reply to it, or answers a status question
+ * about an open request. The model only drafts or matches; code checks the result against
+ * this conversation's records and the offer bounds, writes the question, and stores the
+ * offer, so nothing reaches the tracker without the speaker's yes. Failures are logged by
+ * error name and stay silent in the channel.
  */
 export class OfferSupportFromConversation implements OfferSupportFromConversationPort {
   constructor(
@@ -56,6 +60,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     private readonly offers: PendingOfferStore,
     private readonly wireOutbound: WireOutboundPort,
     private readonly logger?: Logger,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   async execute(input: OfferSupportInput): Promise<void> {
@@ -64,7 +69,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     const wantsOffer = input.categories.includes("service_request");
     if (!wantsStatus && !wantsOffer) return;
 
-    const open = await this.openRequests(input.conversationId);
+    const open = await this.openRequests(input.conversationId, input.senderId);
     if (!open) return;
 
     if (wantsStatus && open.length > 0) {
@@ -77,16 +82,25 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     if (wantsOffer) await this.offerSupport(input, open);
   }
 
-  /** This conversation's requests not done by last known category, in the tracker's project; null when the read failed. */
-  private async openRequests(conversationId: QualifiedId): Promise<OpenRequestRef[] | null> {
+  /**
+   * This conversation's requests not done by last known category, in the tracker's project,
+   * newest first, each marked when the speaker raised it within the last hour; null when the
+   * read failed.
+   */
+  private async openRequests(conversationId: QualifiedId, speakerId: QualifiedId): Promise<OpenRequestRef[] | null> {
     const projectKey = this.getIssueStatus.projectKey;
+    const recentSince = this.now().getTime() - RECENTLY_RAISED_MS;
     try {
       const records = await this.requests.listByConversation(conversationId, { openOnly: true, limit: OPEN_REQUESTS_MAX });
       return records
         .filter((r) => !r.deleted && r.statusCategory !== "done"
           && sameQualifiedId(r.conversationId, conversationId) && isKeyInProject(r.key, projectKey))
         .slice(0, OPEN_REQUESTS_MAX)
-        .map((r) => ({ key: r.key, summary: r.summary }));
+        .map((r) => ({
+          key: r.key,
+          summary: r.summary,
+          raisedBySpeakerRecently: sameQualifiedId(r.requesterId, speakerId) && r.createdAt.getTime() >= recentSince,
+        }));
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: listing open requests failed", { err: errorName(err) });
       return null;
@@ -135,8 +149,14 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     if (!draft) return;
 
     const duplicateOf = typeof draft.duplicateOf === "string" ? draft.duplicateOf.trim().toUpperCase() : "";
-    if (duplicateOf && open.some((r) => r.key === duplicateOf)) {
-      this.logger?.debug("OfferSupportFromConversation: covered by an open request", { key: duplicateOf });
+    const covering = duplicateOf ? open.find((r) => r.key === duplicateOf) : undefined;
+    if (covering) {
+      const body = typeof draft.addition === "string" ? draft.addition.trim() : "";
+      if (!body || body.length > REPLY_BODY_MAX) {
+        this.logger?.debug("OfferSupportFromConversation: covered by an open request", { key: covering.key, addition: body.length > 0 });
+        return;
+      }
+      await this.offer(input, formatReplyQuestion(covering.key, covering.summary, body), { kind: "reply", issueKey: covering.key, body });
       return;
     }
     const command = toSupportCommand(draft);
@@ -144,14 +164,14 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       this.logger?.debug("OfferSupportFromConversation: draft outside the offer bounds");
       return;
     }
+    await this.offer(input, formatSupportQuestion(command.summary, command.description), command);
+  }
 
+  /** Sends the code-written question as a native reply to the source message, then stores the offer for the speaker. */
+  private async offer(input: OfferSupportInput, question: string, command: OfferCommand): Promise<void> {
     if (input.signal?.aborted || this.offers.has(input.conversationId, input.senderId)) return;
     try {
-      await this.wireOutbound.sendPlainText(
-        input.conversationId,
-        formatSupportQuestion(command.summary, command.description),
-        { replyToMessageId: input.messageId },
-      );
+      await this.wireOutbound.sendPlainText(input.conversationId, question, { replyToMessageId: input.messageId });
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: sending the offer failed", { err: errorName(err) });
       return;
@@ -159,7 +179,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     // A pause or secure during the send has already cleared the conversation's offers; storing
     // this one now would let it survive into the paused channel.
     if (input.signal?.aborted) return;
-    const now = new Date();
+    const now = this.now();
     this.offers.put({
       command,
       conversationId: input.conversationId,

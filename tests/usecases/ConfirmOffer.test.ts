@@ -155,7 +155,7 @@ describe("ConfirmOffer", () => {
 
   it.each([
     [SUPPORT, "I need a clear yes or no, so I haven't raised anything with the service desk yet. Shall I raise it (yes or no)?"],
-    [REPLY, "I need a clear yes or no, so I haven't sent the reply to **DS-6** yet. Shall I send it (yes or no)?"],
+    [REPLY, "I need a clear yes or no, so I haven't added this to **DS-6** yet. Shall I add it (yes or no)?"],
     [RESOLVE, "I need a clear yes or no, so I haven't resolved **DS-6** yet. Shall I resolve it with the service desk (yes or no)?"],
   ])("asks again after an acknowledgement for a %j offer, keeps it, and a following yes still confirms it", async (command, question) => {
     const { handlers, wire, store, useCase, offer } = setup();

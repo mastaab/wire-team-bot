@@ -3,17 +3,18 @@ import { OfferSupportFromConversation, PASSIVE_CONFIDENCE_MIN } from "../../src/
 import type { OfferSupportInput } from "../../src/application/usecases/jira/OfferSupportFromConversation";
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
 import { formatIssueStatus } from "../../src/application/usecases/jira/formatIssue";
-import { OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, formatSupportQuestion } from "../../src/application/services/offers";
+import { OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatReplyQuestion, formatSupportQuestion } from "../../src/application/services/offers";
 import { SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import type { SupportDraft } from "../../src/application/ports/SupportTriagePort";
-import { alice, convId, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
+import { alice, bob, convId, created, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
 
 const MESSAGE = "PRIVATE_MESSAGE_MARKER the printer on floor 3 jams on every job";
 const DRAFT: SupportDraft = {
   summary: "Printer on floor 3 jams on every job",
   description: "The printer on floor 3 jams on every job.",
   duplicateOf: null,
+  addition: null,
 };
 
 function input(overrides: Partial<OfferSupportInput> = {}): OfferSupportInput {
@@ -30,7 +31,10 @@ function input(overrides: Partial<OfferSupportInput> = {}): OfferSupportInput {
   };
 }
 
-function setup(records: SupportRequest[] = [makeRequest()], draft: SupportDraft | null = DRAFT, statusKey: string | null = null) {
+/** An hour and a bit after `created`, so the default record is not recent for the speaker. */
+const LATER = new Date(created.getTime() + 61 * 60 * 1000);
+
+function setup(records: SupportRequest[] = [makeRequest()], draft: SupportDraft | null = DRAFT, statusKey: string | null = null, now: Date = LATER) {
   const requests = makeRequests(records);
   const triage = {
     draftRequest: vi.fn().mockResolvedValue(draft),
@@ -43,7 +47,7 @@ function setup(records: SupportRequest[] = [makeRequest()], draft: SupportDraft 
   };
   const { wire, sent } = makeWire();
   const logger = makeLogger();
-  const useCase = new OfferSupportFromConversation(requests, triage, getIssueStatus as unknown as GetIssueStatus, offers, wire, logger);
+  const useCase = new OfferSupportFromConversation(requests, triage, getIssueStatus as unknown as GetIssueStatus, offers, wire, logger, () => now);
   return { requests, triage, getIssueStatus, offers, wire, sent, logger, useCase };
 }
 
@@ -93,11 +97,10 @@ describe("OfferSupportFromConversation", () => {
   describe("service_request", () => {
     it("sends the code-written question as a native reply, then stores the offer for the speaker", async () => {
       const { triage, offers, wire, sent, useCase } = setup();
-      const before = Date.now();
 
       await useCase.execute(input());
 
-      expect(triage.draftRequest).toHaveBeenCalledWith(MESSAGE, [{ key: "DS-6", summary: "VPN drops every ten minutes" }]);
+      expect(triage.draftRequest).toHaveBeenCalledWith(MESSAGE, [{ key: "DS-6", summary: "VPN drops every ten minutes", raisedBySpeakerRecently: false }]);
       expect(sent).toEqual([formatSupportQuestion(DRAFT.summary, DRAFT.description)]);
       expect(sent[0]).toBe("Shall I raise this with the service desk?\n> **Printer on floor 3 jams on every job**\n> The printer on floor 3 jams on every job.\n\n(yes or no)?");
       expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
@@ -108,13 +111,13 @@ describe("OfferSupportFromConversation", () => {
         conversationId: convId,
         requesterId: alice,
       });
-      expect(offer.createdAt.getTime()).toBeGreaterThanOrEqual(before);
+      expect(offer.createdAt).toEqual(LATER);
       expect(offer.expiresAt.getTime() - offer.createdAt.getTime()).toBe(OFFER_TTL_MS);
       expect(wire.sendPlainText.mock.invocationCallOrder[0]).toBeLessThan(offers.put.mock.invocationCallOrder[0]!);
     });
 
     it("collapses whitespace in the summary and trims the description", async () => {
-      const { offers, sent, useCase } = setup(undefined, { summary: "  Printer\n jams  ", description: "\n Printer jams on every job. \n", duplicateOf: null });
+      const { offers, sent, useCase } = setup(undefined, { summary: "  Printer\n jams  ", description: "\n Printer jams on every job. \n", duplicateOf: null, addition: null });
 
       await useCase.execute(input());
 
@@ -123,7 +126,7 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("shows only the summary when the description repeats it", async () => {
-      const { sent, useCase } = setup(undefined, { summary: "Printer jams", description: "printer jams", duplicateOf: null });
+      const { sent, useCase } = setup(undefined, { summary: "Printer jams", description: "printer jams", duplicateOf: null, addition: null });
 
       await useCase.execute(input());
 
@@ -148,9 +151,28 @@ describe("OfferSupportFromConversation", () => {
       expect(requests.listByConversation).toHaveBeenCalledWith(convId, { openOnly: true, limit: 20 });
       const open = triage.draftRequest.mock.calls[0]![1] as Array<{ key: string; summary: string }>;
       expect(open).toHaveLength(20);
-      expect(open[0]).toEqual({ key: "DS-6", summary: "VPN drops every ten minutes" });
+      expect(open[0]).toEqual({ key: "DS-6", summary: "VPN drops every ten minutes", raisedBySpeakerRecently: false });
       for (const excluded of ["DS-1", "DS-2", "DS-3", "DS-4", "OPS-5"]) expect(open.map((r) => r.key)).not.toContain(excluded);
-      expect(Object.keys(open[0]!)).toEqual(["key", "summary"]);
+      expect(Object.keys(open[0]!)).toEqual(["key", "summary", "raisedBySpeakerRecently"]);
+    });
+
+    it("marks the requests the speaker raised within the last hour, keeping newest first", async () => {
+      const now = new Date("2026-09-25T12:00:00Z");
+      const records = [
+        makeRequest({ key: "DS-10", createdAt: new Date(now.getTime() - 5 * 60 * 1000) }),
+        makeRequest({ key: "DS-9", requesterId: bob, createdAt: new Date(now.getTime() - 10 * 60 * 1000) }),
+        makeRequest({ key: "DS-8", requesterId: { id: "user-1", domain: "other.example" }, createdAt: new Date(now.getTime() - 20 * 60 * 1000) }),
+        makeRequest({ key: "DS-7", createdAt: new Date(now.getTime() - 60 * 60 * 1000) }),
+        makeRequest({ key: "DS-6", createdAt: new Date(now.getTime() - 60 * 60 * 1000 - 1) }),
+      ];
+      const { triage, useCase } = setup(records, DRAFT, null, now);
+
+      await useCase.execute(input());
+
+      const open = triage.draftRequest.mock.calls[0]![1] as Array<{ key: string; raisedBySpeakerRecently: boolean }>;
+      expect(open.map((r) => [r.key, r.raisedBySpeakerRecently])).toEqual([
+        ["DS-10", true], ["DS-9", false], ["DS-8", false], ["DS-7", true], ["DS-6", false],
+      ]);
     });
 
     it("stays silent when the model finds no service-desk problem", async () => {
@@ -162,21 +184,99 @@ describe("OfferSupportFromConversation", () => {
       expect(offers.put).not.toHaveBeenCalled();
     });
 
-    it("stays silent when an open request of this conversation already covers the problem", async () => {
-      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "ds-6" });
+    it("stays silent when an open request of this conversation already covers the problem and nothing is added", async () => {
+      for (const addition of [null, "   "]) {
+        const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "ds-6", addition });
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([]);
+        expect(offers.put).not.toHaveBeenCalled();
+      }
+    });
+
+    it("offers to add new information to the open request as a native reply, then stores a reply offer", async () => {
+      const { offers, wire, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "ds-6", addition: "  It only happens on the 3rd floor. " });
 
       await useCase.execute(input());
 
-      expect(sent).toEqual([]);
+      expect(sent).toEqual([formatReplyQuestion("DS-6", "VPN drops every ten minutes", "It only happens on the 3rd floor.")]);
+      expect(sent[0]).toBe("Shall I add this to **DS-6** \"VPN drops every ten minutes\"?\n> It only happens on the 3rd floor.\n\n(yes or no)?");
+      expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+      expect(offers.put).toHaveBeenCalledTimes(1);
+      const offer = offers.put.mock.calls[0]![0];
+      expect(offer).toMatchObject({
+        command: { kind: "reply", issueKey: "DS-6", body: "It only happens on the 3rd floor." },
+        conversationId: convId,
+        requesterId: alice,
+      });
+      expect(offer.expiresAt.getTime() - offer.createdAt.getTime()).toBe(OFFER_TTL_MS);
+      expect(wire.sendPlainText.mock.invocationCallOrder[0]).toBeLessThan(offers.put.mock.invocationCallOrder[0]!);
+    });
+
+    it("lets any member add to a request someone else raised", async () => {
+      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "Now also on the 2nd floor." });
+
+      await useCase.execute(input({ senderId: bob, senderName: "Bob" }));
+
+      expect(sent).toHaveLength(1);
+      expect(offers.put.mock.calls[0]![0]).toMatchObject({ command: { kind: "reply", issueKey: "DS-6" }, requesterId: bob });
+    });
+
+    it("accepts an addition exactly at the reply limit and drops a longer one", async () => {
+      const atLimit = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "a".repeat(REPLY_BODY_MAX) });
+      await atLimit.useCase.execute(input());
+      expect(atLimit.offers.put).toHaveBeenCalledTimes(1);
+
+      const over = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "a".repeat(REPLY_BODY_MAX + 1) });
+      await over.useCase.execute(input());
+      expect(over.sent).toEqual([]);
+      expect(over.offers.put).not.toHaveBeenCalled();
+    });
+
+    it("does not offer an addition while the speaker has a live offer or after a cancel", async () => {
+      const draft = { ...DRAFT, duplicateOf: "DS-6", addition: "It happened again." };
+      const busy = setup(undefined, draft);
+      busy.offers.has.mockReturnValueOnce(false).mockReturnValue(true);
+      await busy.useCase.execute(input());
+      expect(busy.sent).toEqual([]);
+      expect(busy.offers.put).not.toHaveBeenCalled();
+
+      const controller = new AbortController();
+      const cancelled = setup(undefined, draft);
+      cancelled.triage.draftRequest.mockImplementation(async () => { controller.abort(); return draft; });
+      await cancelled.useCase.execute(input({ signal: controller.signal }));
+      expect(cancelled.sent).toEqual([]);
+      expect(cancelled.offers.put).not.toHaveBeenCalled();
+    });
+
+    it("does not store the addition offer when the channel is paused while the question is being sent", async () => {
+      const controller = new AbortController();
+      const { wire, offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It happened again." });
+      wire.sendPlainText.mockImplementation(async (_conv: unknown, text: string) => { sent.push(text); controller.abort(); });
+
+      await useCase.execute(input({ signal: controller.signal }));
+
+      expect(sent).toHaveLength(1);
       expect(offers.put).not.toHaveBeenCalled();
     });
 
-    it("still offers when the named duplicate is not an open request of this conversation", async () => {
-      const { sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-99" });
+    it("does not store the addition offer when sending the question failed", async () => {
+      const { wire, offers, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It happened again." });
+      wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
+
+      await expect(useCase.execute(input())).resolves.toBeUndefined();
+
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("still offers to raise it when the named duplicate is not an open request of this conversation", async () => {
+      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-99", addition: "It happened again." });
 
       await useCase.execute(input());
 
-      expect(sent).toHaveLength(1);
+      expect(sent).toEqual([formatSupportQuestion(DRAFT.summary, DRAFT.description)]);
+      expect(offers.put.mock.calls[0]![0].command.kind).toBe("support");
     });
 
     it.each<[string, SupportDraft]>([
@@ -194,7 +294,7 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("accepts a draft exactly at the bounds", async () => {
-      const draft = { summary: "x".repeat(SUPPORT_SUMMARY_MAX), description: "y".repeat(OFFER_DESCRIPTION_MAX), duplicateOf: null };
+      const draft = { summary: "x".repeat(SUPPORT_SUMMARY_MAX), description: "y".repeat(OFFER_DESCRIPTION_MAX), duplicateOf: null, addition: null };
       const { offers, useCase } = setup(undefined, draft);
 
       await useCase.execute(input());
@@ -278,14 +378,21 @@ describe("OfferSupportFromConversation", () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { err: "Error" });
     });
 
-    it("never logs the message, the draft or the summaries", async () => {
+    it("never logs the message, the draft, the addition or the summaries", async () => {
       const records = [makeRequest({ summary: "PRIVATE_SUMMARY_MARKER" })];
-      const draft = { summary: "PRIVATE_DRAFT_MARKER", description: "PRIVATE_DESCRIPTION_MARKER", duplicateOf: null };
-      for (const d of [draft, { ...draft, duplicateOf: "DS-6" }, { ...draft, summary: "z".repeat(500) }]) {
+      const draft = { summary: "PRIVATE_DRAFT_MARKER", description: "PRIVATE_DESCRIPTION_MARKER", duplicateOf: null, addition: null };
+      const addition = "PRIVATE_ADDITION_MARKER";
+      for (const d of [
+        draft,
+        { ...draft, duplicateOf: "DS-6" },
+        { ...draft, duplicateOf: "DS-6", addition },
+        { ...draft, duplicateOf: "DS-6", addition: addition.repeat(200) },
+        { ...draft, summary: "z".repeat(500) },
+      ]) {
         const { logger, useCase } = setup(records, d);
         await useCase.execute(input());
         const logged = loggedText(logger);
-        for (const marker of ["PRIVATE_MESSAGE_MARKER", "PRIVATE_SUMMARY_MARKER", "PRIVATE_DRAFT_MARKER", "PRIVATE_DESCRIPTION_MARKER"]) {
+        for (const marker of ["PRIVATE_MESSAGE_MARKER", "PRIVATE_SUMMARY_MARKER", "PRIVATE_DRAFT_MARKER", "PRIVATE_DESCRIPTION_MARKER", "PRIVATE_ADDITION_MARKER"]) {
           expect(logged).not.toContain(marker);
         }
       }
@@ -298,7 +405,7 @@ describe("OfferSupportFromConversation", () => {
 
       await useCase.execute(input({ categories: ["request_status"] }));
 
-      expect(triage.matchStatusQuestion).toHaveBeenCalledWith(MESSAGE, [{ key: "DS-6", summary: "VPN drops every ten minutes" }]);
+      expect(triage.matchStatusQuestion).toHaveBeenCalledWith(MESSAGE, [{ key: "DS-6", summary: "VPN drops every ten minutes", raisedBySpeakerRecently: false }]);
       expect(getIssueStatus.execute).toHaveBeenCalledWith({
         reference: "DS-6", conversationId: convId, timezone: "Europe/Berlin", replyToMessageId: "msg-9",
       });

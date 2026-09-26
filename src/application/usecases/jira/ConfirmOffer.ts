@@ -164,6 +164,6 @@ function askAgain(command: OfferCommand): string {
     case "resolve":
       return `I need a clear yes or no, so I haven't resolved **${command.issueKey}** yet. Shall I resolve it with the service desk (yes or no)?`;
     case "reply":
-      return `I need a clear yes or no, so I haven't sent the reply to **${command.issueKey}** yet. Shall I send it (yes or no)?`;
+      return `I need a clear yes or no, so I haven't added this to **${command.issueKey}** yet. Shall I add it (yes or no)?`;
   }
 }

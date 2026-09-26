@@ -4,7 +4,7 @@ import type { AnswerQuestionInput } from "../../src/application/usecases/general
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueStatusCategory, IssueTrackerPort } from "../../src/application/ports/IssueTrackerPort";
 import type { RetrievalResult } from "../../src/application/ports/RetrievalPort";
-import { OFFER_TTL_MS } from "../../src/application/services/offers";
+import { OFFER_TTL_MS, formatReplyQuestion } from "../../src/application/services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../src/application/services/offers";
 import type { SupportRequestListOptions, SupportRequestRepository } from "../../src/domain/repositories/SupportRequestRepository";
 import type { AuditLogEntry, AuditLogRepository } from "../../src/domain/repositories/AuditLogRepository";
@@ -452,7 +452,7 @@ describe("AnswerQuestion with Jira: offers", () => {
   const reply = 'OFFER: {"kind":"reply","issueKey":"DS-6","body":"Alice here: it still drops.\\nThanks"}';
   const resolve = 'OFFER: {"kind":"resolve","issueKey":"DS-6"}';
   const supportQuestion = "Shall I raise this with the service desk?\n> **VPN drops every ten minutes**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
-  const replyQuestion = "Here is the reply for **DS-6**:\n> Alice here: it still drops.\n> Thanks\n\nShall I send it (yes or no)?";
+  const replyQuestion = 'Shall I add this to **DS-6** "VPN drops every ten minutes"?\n> Alice here: it still drops.\n> Thanks\n\n(yes or no)?';
   const resolveQuestion = 'Shall I resolve **DS-6** "VPN drops every ten minutes" with the service desk (yes or no)?';
   const vpn = (): SupportRequest => makeRequest("DS-6", { summary: "VPN drops  every\nten minutes", statusCategory: "in_progress" });
 
@@ -485,11 +485,12 @@ describe("AnswerQuestion with Jira: offers", () => {
     expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer jammed**\n\n(yes or no)?"]);
   });
 
-  it("writes the reply question with the body quoted line by line, and keeps the requester's name (decision 1)", async () => {
+  it("writes the reply question with the stored summary and the body quoted line by line, and keeps the requester's name (decision 1)", async () => {
     const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: `Here is the reply.\n${reply}` });
     await run("Tell the service desk on DS-6 that it still drops");
     expect(stored[0]!.command).toEqual({ kind: "reply", issueKey: "DS-6", body: "Alice here: it still drops.\nThanks" });
     expect(sent).toEqual([replyQuestion]);
+    expect(sent[0]).toBe(formatReplyQuestion("DS-6", "VPN drops  every\nten minutes", "Alice here: it still drops.\nThanks"));
   });
 
   it("writes the resolve question with the stored summary on one line", async () => {
@@ -529,7 +530,7 @@ describe("AnswerQuestion with Jira: offers", () => {
     const { wire, stored, run } = setup({ requests: [vpn()], modelAnswer: withMention });
     await run("Reply to DS-6 that Bob will test it", { members: [requester, bob] });
     expect(stored).toHaveLength(1);
-    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, "Here is the reply for **DS-6**:\n> @Bob will test it.\n\nShall I send it (yes or no)?", {
+    expect(wire.sendPlainText).toHaveBeenCalledWith(convId, 'Shall I add this to **DS-6** "VPN drops every ten minutes"?\n> @Bob will test it.\n\n(yes or no)?', {
       replyToMessageId: "q",
       mentions: undefined,
     });
@@ -571,6 +572,12 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["reply", "Answer the ticket"],
       ["reply", "Send a reply in Jira"],
       ["reply", "Tell support it still drops"],
+      ["reply", "Add to DS-6 that it's the 2nd floor too"],
+      ["reply", "Add a comment on DS-6"],
+      ["reply", "Note on DS-6 that it still drops"],
+      ["reply", "Comment on the ticket that it still drops"],
+      ["reply", "Please update DS-6 with the new floor"],
+      ["reply", "Update the ticket: it's the 2nd floor too"],
     ];
     for (const [kind, question] of accepted) {
       it(`accepts a ${kind} offer for "${question}"`, async () => {
@@ -596,6 +603,11 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["reply", "What did we decide about lunch?"],
       ["reply", "Send me the summary of the VPN issue"],
       ["reply", "What is the service desk working on?"],
+      ["reply", "Update me on DS-6"],
+      ["reply", "Any update on DS-6?"],
+      ["reply", "Can I get an update on the ticket?"],
+      ["reply", "Is there a new note on DS-6?"],
+      ["reply", "Add me to the lunch list"],
     ];
     for (const [kind, question] of rejected) {
       it(`drops a ${kind} offer for "${question}", sends the no-change reply and logs only the kind`, async () => {
@@ -861,7 +873,7 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
   it("accepts a revised reply on the same request without change intent", async () => {
     const { stored, sent, run } = setup({ requests: [vpn()], modelAnswer: revisedReply });
     await run("Also mention that I rebooted", { pendingOffer: pendingReply });
-    expect(sent).toEqual(["Here is the reply for **DS-6**:\n> It still drops after a reboot.\n\nShall I send it (yes or no)?"]);
+    expect(sent).toEqual(['Shall I add this to **DS-6** "VPN drops"?\n> It still drops after a reboot.\n\n(yes or no)?']);
     expect(stored).toHaveLength(1);
   });
 
