@@ -167,13 +167,14 @@ describe("OpenAIClassifierAdapter service-desk categories", () => {
       for (const serviceScope of [undefined, "", "   "]) {
         const prompt = await promptFor({ serviceDeskCategories: true, serviceScope });
         expect(prompt).toContain("- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need, or adds information");
+        expect(prompt).toContain("it now affects more places), or says a reported problem is solved or asks to close a request\n");
       }
     });
 
     it("describes service_request with the scope when the option is on", async () => {
       const prompt = await promptFor({ serviceDeskCategories: true, serviceScope: ` ${SCOPE.replace(", damage", ",\n damage")}. ` });
       expect(prompt).toContain(
-        `- service_request: someone brings the service desk something it handles (${SCOPE}): a question to the desk, a fault or need, a replacement part order or a scheduled service all count; or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places)\n`,
+        `- service_request: someone brings the service desk something it handles (${SCOPE}): a question to the desk, a fault or need, a replacement part order or a scheduled service all count; or adds information to a problem already reported (a new detail, a change, it happened again, it now affects more places); or says a reported problem is solved or asks to close a request\n`,
       );
       expect(prompt).not.toContain("access they need");
       expect(prompt).toContain("- request_status: ");

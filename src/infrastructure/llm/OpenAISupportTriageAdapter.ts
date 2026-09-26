@@ -1,12 +1,14 @@
 /**
  * Support triage for passive service-desk help: uses the `classify` model slot.
- * Reads one unaddressed message and either drafts a support request from it or maps a
- * status question to an open request. The model only proposes: every key it returns must
- * be one of the open requests it was shown, the kind must be a known one, part essentials
- * are only those the model found in the message, and the use case checks the offer bounds.
+ * Reads one unaddressed message and either drafts a support request from it (or an addition
+ * to, or a resolve of, an open request) or maps a status question to an open request. The
+ * model only proposes: every key it returns must be one of the open requests it was shown,
+ * the kind must be a known one, part essentials are only those the model found in the
+ * message, a closing comment is bounded, and the use case checks the offer bounds.
  */
 
 import type { OpenRequestRef, SupportDraft, SupportTriagePort } from "../../application/ports/SupportTriagePort";
+import { REPLY_BODY_MAX } from "../../application/services/offers";
 import { PART_DETAIL_MAX, SUPPORT_REQUEST_KINDS } from "../../domain/entities/SupportRequest";
 import type { PartDetails, SupportRequestKind } from "../../domain/entities/SupportRequest";
 import type { LLMClientFactory } from "./LLMClientFactory";
@@ -29,10 +31,13 @@ const DRAFT_RULES = `Rules:
 - A message without its own subject (such as "it only happens on the 3rd floor") may continue the listed request marked "(raised by the speaker recently)". Use that request as duplicateOf only when the message fits it.
 - addition: when duplicateOf is set, only the new information this message adds to that request: a new detail, a change, a recurrence (such as "it happened again") or a spread (such as "now also on the 2nd floor"). Use the speaker's words, from this message only, as one short sentence the service desk can read on its own: resolve "it" to the problem where needed (for example "It only happens on the 3rd floor." or "The Wi-Fi dropped again."). Use null when the message only repeats the problem with nothing new, and null when duplicateOf is null.
 - A message that only adds to a listed request still gets a result: set duplicateOf and addition, and summary and description may be empty strings.
-- When the message describes no service-desk problem and adds nothing to a listed request (chit-chat, a plan, a question about something else, a status question), return null.
+- resolves: the key of a listed open request only when this message says that request is solved, fixed or no longer needed, or asks to close or resolve it (such as "the brake light is fine now", "please close DS-14" or "the mirror was delivered, close it"), and only when the message clearly names or means that one listed request. Otherwise null. Good news that does not clearly name or mean one listed request gets null.
+- closingComment: only when resolves is set, the remark to add to that request as it is closed, in the speaker's words and from this message only, as one short sentence the service desk can read on its own (for example "The mirror arrived at depot north."). Never invent one. Use null when the message only asks to close the request or says it is solved without a remark of its own, and null when resolves is null.
+- A message that resolves a listed request still gets a result: set resolves and closingComment, and summary and description may be empty strings.
+- When the message describes no service-desk problem, adds nothing to a listed request and resolves none (chit-chat, a plan, a question about something else, a status question), return null.
 
 Return ONLY valid JSON, no markdown, no explanation. Either:
-{"requestKind":"question"|"part"|"fault","summary":"<one line>","description":"<what the message states>","part":{"vehicle":"<as stated>","part":"<as stated>","quantity":"<as stated>","deliverTo":"<as stated>"},"duplicateOf":"<listed key>"|null,"addition":"<new information>"|null}
+{"requestKind":"question"|"part"|"fault","summary":"<one line>","description":"<what the message states>","part":{"vehicle":"<as stated>","part":"<as stated>","quantity":"<as stated>","deliverTo":"<as stated>"},"duplicateOf":"<listed key>"|null,"addition":"<new information>"|null,"resolves":"<listed key>"|null,"closingComment":"<closing remark>"|null}
 or:
 null`;
 
@@ -76,11 +81,15 @@ export class OpenAISupportTriageAdapter implements SupportTriagePort {
     const description = typeof v.description === "string" ? v.description.trim() : "";
     const duplicateOf = listedKey(v.duplicateOf, openRequests);
     const addition = duplicateOf && typeof v.addition === "string" ? v.addition.trim() || null : null;
-    // An addition to a listed request needs no summary of its own; a new request does.
-    if (!addition && (!summary || !description)) return null;
+    const resolves = listedKey(v.resolves, openRequests);
+    // A closing comment only with a listed request to resolve, and within the reply bounds.
+    const comment = resolves && typeof v.closingComment === "string" ? v.closingComment.trim() : "";
+    const closingComment = comment && comment.length <= REPLY_BODY_MAX ? comment : null;
+    // An addition to or a resolve of a listed request needs no summary of its own; a new request does.
+    if (!addition && !resolves && (!summary || !description)) return null;
     const requestKind = toKind(v.requestKind);
     const part = requestKind === "part" ? toPartDetails(v.part) : undefined;
-    return { requestKind, ...(part ? { part } : {}), summary, description, duplicateOf, addition };
+    return { requestKind, ...(part ? { part } : {}), summary, description, duplicateOf, addition, resolves, closingComment };
   }
 
   async matchStatusQuestion(message: string, openRequests: readonly OpenRequestRef[]): Promise<string | null> {

@@ -11,7 +11,7 @@ import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import {
   OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, PART_DETAIL_FIELDS, REPLY_BODY_MAX,
-  formatMissingPartsQuestion, formatReplyQuestion, formatSupportQuestion, missingPartDetails,
+  formatMissingPartsQuestion, formatReplyQuestion, formatResolveQuestion, formatSupportQuestion, missingPartDetails,
 } from "../../services/offers";
 import type { GetIssueStatus } from "./GetIssueStatus";
 
@@ -48,10 +48,14 @@ const OPEN_REQUESTS_MAX = 20;
 /** How recently the speaker must have raised a request for a message without its own subject to continue it. */
 const RECENTLY_RAISED_MS = 60 * 60 * 1000;
 
+/** Categories that may add to or resolve an open request, but never raise a new one. */
+const MAY_ADD_CATEGORIES: readonly MessageCategory[] = ["update", "blocker", "action", "decision"];
+
 /**
  * Offers to raise a problem noticed in an unaddressed message, offers to add what a message
- * adds to an open request of this conversation as a reply to it, or answers a status question
- * about an open request. The model only drafts or matches; code checks the result against
+ * adds to an open request of this conversation as a reply to it, offers to resolve an open
+ * request the message says is solved or can be closed, or answers a status question about an
+ * open request. The model only drafts or matches; code checks the result against
  * this conversation's records and the offer bounds, writes the question, and stores the
  * offer, so nothing reaches the tracker without the speaker's yes. Failures are logged by
  * error name and stay silent in the channel.
@@ -72,9 +76,10 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     const wantsStatus = input.categories.includes("request_status");
     const wantsOffer = input.categories.includes("service_request");
     // The classifier often labels news about a reported problem ("it only happens on the new
-    // laptops") as an update or blocker only. Such a message may add to an open request, but it
-    // never leads to an offer to raise a new one.
-    const mayAdd = !wantsOffer && (input.categories.includes("update") || input.categories.includes("blocker"));
+    // laptops", "the mirror was delivered, please close DS-14") as an update, blocker, action or
+    // decision only. Such a message may add to or resolve an open request, but it never leads to
+    // an offer to raise a new one.
+    const mayAdd = !wantsOffer && MAY_ADD_CATEGORIES.some((category) => input.categories.includes(category));
     if (!wantsStatus && !wantsOffer && !mayAdd) return;
 
     const open = await this.openRequests(input.conversationId, input.senderId);
@@ -160,6 +165,24 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       return;
     }
     if (!draft) return;
+
+    // Resolving takes precedence over adding and over raising: a message that says an open
+    // request is solved is about that request, whatever else it mentions.
+    const resolves = typeof draft.resolves === "string" ? draft.resolves.trim().toUpperCase() : "";
+    const resolving = resolves ? open.find((r) => r.key === resolves) : undefined;
+    if (resolving) {
+      const comment = typeof draft.closingComment === "string" ? draft.closingComment.trim() : "";
+      if (comment.length > REPLY_BODY_MAX) {
+        this.logger?.debug("OfferSupportFromConversation: closing comment outside the offer bounds", { key: resolving.key });
+        return;
+      }
+      await this.offer(
+        input,
+        formatResolveQuestion(resolving.key, resolving.summary, comment || undefined),
+        comment ? { kind: "resolve", issueKey: resolving.key, comment } : { kind: "resolve", issueKey: resolving.key },
+      );
+      return;
+    }
 
     const duplicateOf = typeof draft.duplicateOf === "string" ? draft.duplicateOf.trim().toUpperCase() : "";
     const covering = duplicateOf ? open.find((r) => r.key === duplicateOf) : undefined;

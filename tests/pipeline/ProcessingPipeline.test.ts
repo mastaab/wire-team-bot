@@ -546,7 +546,7 @@ describe("passive service-desk help", () => {
     expect(supportHelp.execute).not.toHaveBeenCalled();
   });
 
-  it.each([["update"], ["blocker"]])("is called for a %s, which may add to an open request", async (category) => {
+  it.each([["update"], ["blocker"], ["action"], ["decision"]])("is called for a %s, which may add to or resolve an open request", async (category) => {
     const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
     const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...lowSignalResult, categories: [category] }) } });
     await new ProcessingPipeline(deps).process(baseJob());
