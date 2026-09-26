@@ -1729,7 +1729,7 @@ Built by three parallel subagents (answer side, action side, adapter) on the mai
 
 ### Open items
 
-- **TODO: per-channel timezone setting (before a real customer team uses the bot).** Every channel gets `UTC` when the bot joins (hard-coded in `WireEventRouter`), and there is no command to change it. The channel timezone decides how deadlines ("by Friday") and reminder times are read and the times shown in replies, including the times of service-desk replies, so a German team in `UTC` is two hours off and can be a day off for late-evening deadlines. Stored deadlines are exact instants and do not move when the timezone changes; only their reading and display do. Planned fix:
+- **Per-channel timezone setting (before a real customer team uses the bot): planned, see "Resolve with a closing comment, and the channel timezone".** Every channel gets `UTC` when the bot joins (hard-coded in `WireEventRouter`), and there is no command to change it. The channel timezone decides how deadlines ("by Friday") and reminder times are read and the times shown in replies, including the times of service-desk replies, so a German team in `UTC` is two hours off and can be a day off for late-evening deadlines. Stored deadlines are exact instants and do not move when the timezone changes; only their reading and display do. Planned fix:
   - an addressed command such as `@Wire Team Bot timezone Europe/Berlin` that validates the IANA name, saves it to `channel_config.timezone` with a `config_changed` audit entry, and confirms;
   - `WIRE_TEAM_BOT_DEFAULT_TIMEZONE` for channels the bot newly joins, defaulting to `UTC`;
   - the zone shown with displayed times (for example "20:45 CEST");
@@ -1933,6 +1933,26 @@ Committed by the main session before the parallel build. Builders code against t
 **Evidence required.** Unit tests; real-model CLI checks with truck messages (questions, faults, scheduled service, part orders with and without essentials), offers answered no; a live staging journey with one question, one fault and one part order confirmed with yes (Jira writes, with approval).
 
 **Work split.** Main session: contract (configuration, kinds, port and entity changes, migration, offer shape) and the demo story rewrite. Two subagents in parallel worktrees: (a) passive side: classifier and triage prompts, part essentials, use case; (b) answer and action side: answer prompt and offer validation, `ConfirmOffer` for incomplete drafts, `RaiseSupportRequest` request-type selection and part lines, listing. Then an independent review, CLI checks and the live check.
+
+### Resolve with a closing comment, and the channel timezone (planned 2026-09-26)
+
+**Why.** In the first live journey the operator wanted to close DS-8 with a note and needed two steps; the bot even claimed a comment it had not sent. The channel timezone has been an open item since 2026-09-25: every channel gets `UTC` and only a hand-edited database row changed the staging channel to `Europe/Berlin`.
+
+**Resolve with a closing comment.**
+- Command: `@Wire Team Bot resolve DS-6: The mirror was fitted, thanks.` (also `close DS-6: …`). Without the colon part it works as today.
+- Plain language when mentioned or as a confirmed offer: "the keyboard works again, please add a comment and close DS-8" produces `Shall I resolve **DS-8** "<summary>" with the service desk and add this comment?\n> <comment>\n\n(yes or no)?`. The resolve offer gains an optional `comment`; a correction revises it like any other offer.
+- Order (decided by the main session): the comment is sent first as a customer-facing reply (footer `Sent from Wire.`, audited), then the request is resolved. If the comment is refused (4xx) or its delivery cannot be confirmed, the request is not resolved and the reply says so, so the desk never sees a closed request without the explanation.
+- Bounds and wording as for replies (`REPLY_BODY_MAX`); the requester sees the full comment before the yes.
+
+**Channel timezone.**
+- `@Wire Team Bot timezone Europe/Berlin` sets the channel's timezone after validating the IANA name (`Intl.DateTimeFormat`), saves it to `channel_config.timezone`, audits `config_changed` with the old and new zone, and confirms `This channel's timezone is now **Europe/Berlin** (currently 18:40 CEST).`. `@Wire Team Bot timezone` shows the current one. An unknown name gets `I'm afraid I don't know the timezone "…". Please use a name such as Europe/Berlin or America/New_York.`
+- Any channel member may change it (decided by the main session, matching who may resolve); the audit records who.
+- `WIRE_TEAM_BOT_DEFAULT_TIMEZONE` (default `UTC`, validated at startup) replaces the hard-coded `UTC` for channels the bot newly joins. Existing channels keep their stored zone.
+- Displayed times carry the zone abbreviation where the bot shows a time of day: reminder confirmations and lists, action deadlines, and service-desk reply times (for example `2 Oct, 15:00 CEST`).
+- `status` shows the channel's timezone.
+- Stored deadlines and reminder times are instants and do not move when the zone changes; only reading and display do.
+
+**Work split.** Main session: contract (resolve command `comment`, `ResolveSupportRequest` input, `SetChannelTimezone` signature, default-timezone setting), router commands for both, wiring, `status` line and docs. Two subagents in parallel worktrees: (a) resolve with a comment: `ResolveSupportRequest`, offer parser, `AnswerQuestion` resolve offers and intent, `ConfirmOffer`, answer prompt; (b) timezone: `SetChannelTimezone` use case and the zone in displayed times. Then an independent review, real-model CLI checks (no confirmations, no direct write commands) and a live staging check with the operator's approval for Jira writes.
 
 ### Handover for the next session (2026-09-26)
 
