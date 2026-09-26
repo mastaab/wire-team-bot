@@ -6,6 +6,7 @@
 
 import { SUPPORT_REQUEST_KINDS } from "../domain/entities/SupportRequest";
 import type { SupportRequestKind } from "../domain/entities/SupportRequest";
+import { canonicalTimeZone } from "../domain/services/timeZone";
 
 /**
  * Per-slot model config for the seven-slot LLM architecture.
@@ -80,6 +81,8 @@ export interface Config {
     messageBufferSize: number;
     /** Inactivity period in ms before the bot prompts to exit secret mode. Default 1800000 (30 min). */
     secretModeInactivityMs: number;
+    /** Timezone for channels the bot newly joins (WIRE_TEAM_BOT_DEFAULT_TIMEZONE), canonical IANA name. Default UTC. */
+    defaultTimezone: string;
   };
   llm: {
     bot: LLMConfig;
@@ -197,6 +200,15 @@ function parseRequestTypes(raw: string): RequestTypes {
     throw new Error("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES must include fault=<id>, the general request type");
   }
   return { ...types, fault: types.fault };
+}
+
+/** WIRE_TEAM_BOT_DEFAULT_TIMEZONE as a canonical IANA name; UTC when unset; an unknown name fails at startup. */
+export function resolveDefaultTimezone(env: Record<string, string | undefined>): string {
+  const raw = env.WIRE_TEAM_BOT_DEFAULT_TIMEZONE?.trim();
+  if (!raw) return "UTC";
+  const zone = canonicalTimeZone(raw);
+  if (!zone) throw new Error("WIRE_TEAM_BOT_DEFAULT_TIMEZONE must be an IANA timezone name such as Europe/Berlin");
+  return zone;
 }
 
 function getEnv(name: string): string {
@@ -328,13 +340,14 @@ export function loadConfig(): Config {
   );
   const secretModeInactivityMs = Math.max(60_000, parseInt(process.env.SECRET_MODE_INACTIVITY_MS ?? "1800000", 10));
 
+  const defaultTimezone = resolveDefaultTimezone(process.env);
   const bot = loadLLMConfig();
   const jira = resolveJiraConfig(process.env);
 
   return {
     wire,
     database,
-    app: { logLevel, messageBufferSize, secretModeInactivityMs },
+    app: { logLevel, messageBufferSize, secretModeInactivityMs, defaultTimezone },
     llm: { bot },
     ...(jira ? { jira } : {}),
   };

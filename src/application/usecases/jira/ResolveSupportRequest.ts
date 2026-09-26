@@ -14,6 +14,11 @@ export interface ResolveSupportRequestInput {
   conversationId: QualifiedId;
   /** Any member of the channel may resolve; the audit entry records who did. */
   actorId: QualifiedId;
+  /**
+   * A closing comment, sent first as a customer-facing reply (footer "Sent from Wire.",
+   * audited). If it is refused or its delivery cannot be confirmed, the request is not resolved.
+   */
+  comment?: string;
   replyToMessageId?: string;
 }
 

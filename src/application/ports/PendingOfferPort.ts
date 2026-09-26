@@ -14,7 +14,8 @@ export type OfferCommand =
    */
   | { kind: "support"; requestKind: SupportRequestKind; summary: string; description: string; part?: PartDetails }
   | { kind: "reply"; issueKey: string; body: string }
-  | { kind: "resolve"; issueKey: string };
+  /** Resolve a request; a `comment` is sent to it as a customer-facing reply first. */
+  | { kind: "resolve"; issueKey: string; comment?: string };
 
 export interface PendingOffer {
   command: OfferCommand;
