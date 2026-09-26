@@ -156,6 +156,9 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       this.logger?.warn("OfferSupportFromConversation: sending the offer failed", { err: errorName(err) });
       return;
     }
+    // A pause or secure during the send has already cleared the conversation's offers; storing
+    // this one now would let it survive into the paused channel.
+    if (input.signal?.aborted) return;
     const now = new Date();
     this.offers.put({
       command,

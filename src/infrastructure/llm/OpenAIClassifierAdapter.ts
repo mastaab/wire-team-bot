@@ -44,7 +44,7 @@ const SERVICE_DESK_PROMPT = SYSTEM_PROMPT
     "- service_request: someone describes a problem, fault or need that a service desk could handle, such as something broken, an error, or access they need\n" +
     "- request_status: someone asks about the state of a problem or service request they or others reported\n")
   .replace(LOW_SIGNAL_LINE, LOW_SIGNAL_LINE +
-    "service_request and request_status never make a message high signal on their own.\n");
+    "service_request and request_status never make a message high signal on their own. They come in addition to every other category that applies: a problem that blocks work is also a blocker, and a commitment to fix it is also an action.\n");
 
 const HIGH_SIGNAL_CATEGORIES: MessageCategory[] = ["decision", "action", "blocker", "update"];
 

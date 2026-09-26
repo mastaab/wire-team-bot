@@ -130,6 +130,7 @@ describe("OpenAIClassifierAdapter service-desk categories", () => {
     expect(system).toContain("- service_request: ");
     expect(system).toContain("- request_status: ");
     expect(system).toContain("service_request and request_status never make a message high signal on their own.");
+    expect(system).toContain("They come in addition to every other category that applies");
   });
 
   it("keeps the rest of the prompt when the option is on", async () => {

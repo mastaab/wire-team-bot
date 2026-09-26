@@ -235,6 +235,17 @@ describe("OfferSupportFromConversation", () => {
       expect(offers.put).not.toHaveBeenCalled();
     });
 
+    it("does not store the offer when the channel is paused while the question is being sent", async () => {
+      const controller = new AbortController();
+      const { wire, offers, sent, useCase } = setup();
+      wire.sendPlainText.mockImplementation(async (_conv: unknown, text: string) => { sent.push(text); controller.abort(); });
+
+      await useCase.execute(input({ signal: controller.signal }));
+
+      expect(sent).toHaveLength(1);
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
     it("does not store the offer when sending the question failed", async () => {
       const { wire, offers, logger, useCase } = setup();
       wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
