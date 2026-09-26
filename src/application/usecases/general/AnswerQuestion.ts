@@ -88,12 +88,6 @@ export interface AnswerQuestionJira {
    * statements, so a support offer needs no raising wording in the question.
    */
   passive?: boolean;
-  /**
-   * What the service desk handles (`WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE`). The answer model reads
-   * it from its prompt, so the composition root passes the same text to the answer adapter
-   * (`jiraServiceScope`); it is kept here so the Jira settings of the answer path stay together.
-   */
-  serviceScope?: string;
   now?: () => Date;
 }
 

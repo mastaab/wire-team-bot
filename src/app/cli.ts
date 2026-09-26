@@ -267,7 +267,7 @@ async function main() {
   // Use cases
   const shareWithModel = config.jira?.shareWithModel ?? false;
   const answerQuestion = new AnswerQuestion(
-    generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey, shareWithModel), wireOutbound, queryAnalysis, retrievalEngine, logger,
+    generalAnswerAdapter(llmFactory, logger, config.jira?.projectKey, shareWithModel, config.jira?.serviceScope), wireOutbound, queryAnalysis, retrievalEngine, logger,
     issueTracker && pendingOffers && supportRequestsRepo
       ? { tracker: issueTracker, requests: supportRequestsRepo, offers: pendingOffers, auditLog: auditLogRepo, shareWithModel, passive: passiveOn }
       : undefined,
@@ -276,7 +276,7 @@ async function main() {
   const catchMeUp      = new CatchMeUpCommand(summaryRepo, generateSummary, wireOutbound);
 
   // Customer demo: support requests, built once so ConfirmOffer shares the router's instances.
-  const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger, config.jira?.requestTypes) : undefined;
   const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
@@ -382,8 +382,8 @@ async function main() {
 }
 
 // Tiny helper — avoids duplicating the adapter construction
-function generalAnswerAdapter(llmFactory: LLMClientFactory, logger: ReturnType<typeof getLogger>, jiraProjectKey?: string, jiraShareWithModel = false) {
-  return new OpenAIGeneralAnswerAdapter(llmFactory, logger, { jiraProjectKey, jiraShareWithModel });
+function generalAnswerAdapter(llmFactory: LLMClientFactory, logger: ReturnType<typeof getLogger>, jiraProjectKey?: string, jiraShareWithModel = false, jiraServiceScope?: string) {
+  return new OpenAIGeneralAnswerAdapter(llmFactory, logger, { jiraProjectKey, jiraShareWithModel, jiraServiceScope });
 }
 
 main().catch(() => {

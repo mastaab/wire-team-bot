@@ -109,7 +109,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   const pendingOffers = issueTracker ? new InMemoryPendingOfferStore() : undefined;
   const supportRequestsRepo = issueTracker ? new PrismaSupportRequestRepository() : undefined;
   const generalAnswerAdapter = new OpenAIGeneralAnswerAdapter(llmFactory, logger, {
-    jiraProjectKey: config.jira?.projectKey, jiraShareWithModel: config.jira?.shareWithModel ?? false,
+    jiraProjectKey: config.jira?.projectKey, jiraShareWithModel: config.jira?.shareWithModel ?? false, jiraServiceScope: config.jira?.serviceScope,
   });
   // Passive service-desk help: the classifier offers its two service-desk categories only
   // when WIRE_TEAM_BOT_JIRA_PASSIVE is on, so classification is otherwise unchanged.
@@ -211,7 +211,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   );
   const updateActionStatus = new UpdateActionStatus(actionsRepo, wireOutbound, auditLogRepo);
   // Customer demo: support requests, built once so ConfirmOffer shares the router's instances.
-  const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger, config.jira?.requestTypes) : undefined;
   const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
