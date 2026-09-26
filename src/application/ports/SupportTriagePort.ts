@@ -8,6 +8,8 @@
 export interface OpenRequestRef {
   key: string;
   summary: string;
+  /** Raised by this message's speaker within the last hour, so a message without its own subject ("it only happens on the 3rd floor") may continue it. */
+  raisedBySpeakerRecently?: boolean;
 }
 
 export interface SupportDraft {
@@ -17,6 +19,12 @@ export interface SupportDraft {
   description: string;
   /** Key of an open request that already covers this problem, or null. */
   duplicateOf: string | null;
+  /**
+   * With `duplicateOf`: the new information this message adds to that request (a detail, a
+   * change, "it happened again"), in the speaker's words and from this message only; null when
+   * it adds nothing.
+   */
+  addition: string | null;
 }
 
 export interface SupportTriagePort {

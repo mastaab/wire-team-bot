@@ -130,6 +130,15 @@ export function formatSupportQuestion(summary: string, description: string): str
   return `Shall I raise this with the service desk?\n${lines.join("\n")}\n\n(yes or no)?`;
 }
 
+/**
+ * The confirmation for sending text to an existing request, used by every path that offers a
+ * reply. It names the request and quotes exactly what will be sent; the caller has bounded the
+ * body. Ends with "?" like every offer question.
+ */
+export function formatReplyQuestion(key: string, summary: string, body: string): string {
+  return `Shall I add this to **${key}** "${collapseLine(summary)}"?\n${quoteLines(body).join("\n")}\n\n(yes or no)?`;
+}
+
 /** Every quoted line is non-empty: an empty "> " line ends the quote in Markdown. */
 function quoteLines(text: string): string[] {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => `> ${line}`);
