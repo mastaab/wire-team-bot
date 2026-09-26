@@ -1781,6 +1781,7 @@ The first seven rows record the earlier action-linked build; the rework rows fol
 | Passive resolve offers: plan and contract (`0c71b5f`), build (subagent), merge (`adc256c`) | main session and subagent | done |
 | Passive resolve offers: real-model CLI check (2026-09-26, CLI channel, no confirmations, script grepped for write lines) | main session | "the new mirror for truck 7 was fitted today, you can close that one and note it went in at depot north" (no key named) got "Shall I resolve **DS-12** … and add this comment? > The new mirror was fitted today at depot north."; "the laptop battery problem is fixed now, please close DS-6" got the resolve offer without a comment; "good news, everything works again" got nothing; an `action:` command still created its action. Nothing written |
 | Independent review of passive resolve offers | subagent | done: no high findings. Fixed: a close request for a request that is not open here (done, another channel, invented) could fall through to an offer to raise a new request, now no offer at all (adapter and use case); an over-long closing comment was dropped silently and a plain resolve offered, now no offer; stale test titles. Accepted as known: whether good news means one request is decided by the prompt (the yes is still required); action and decision messages cost a triage call in channels with open requests; "please close DS-14" may also be captured as an action item. 1313 tests pass |
+| Passive resolve offers: live check (2026-09-26, staging bot on `e9d7b95`) | operator and main session | passed: unmentioned "the brake light on truck 12 is fine now, the workshop replaced a sensor, please close it" got "Shall I resolve **DS-13** … and add this comment? > The workshop replaced a sensor."; yes added the comment (20:03:21) and resolved DS-13; "good news, everything works again" (classified routine) got nothing; "close DS-14" (already resolved) got nothing and no new-request offer; "the AdBlue question is solved, I found it in the manual" got a resolve offer for DS-15 with the comment, which the operator confirmed. Jira shows both requests Done with their comments; audit complete; no errors in the bot log |
 
 ### Acceptance
 
@@ -1978,18 +1979,18 @@ Committed by the main session before the parallel build. Builders code against t
 
 ### Handover for the next session (2026-09-26)
 
-**Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`), adding to an open request, and truck premium support (request kinds mapped to request types, part essentials, service scope). What remains is Jira clean-up (operator approval) and the open items listed below.
+**Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`), adding to an open request, truck premium support (request kinds mapped to request types, part essentials, service scope), resolving with a closing comment, the channel timezone command, and passive resolve offers. What remains is Jira clean-up (operator approval) and the open items listed below.
 
 **State.**
 - Branch `demo/jira`, working tree clean, not pushed. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
 - 1313 tests pass; `npx tsc --noEmit` and `npm run lint` are clean.
-- The local database `wire_team_bot` has the `support_requests` migration applied (2026-09-26). It also has the `kind` column (2026-09-26). Open requests: DS-6 and DS-12 (CLI channel), DS-10, DS-11, DS-13, DS-14 and DS-15 (staging channel); DS-7, DS-8 and DS-9 are resolved. The old `jira:` links on ACT-0005, ACT-0008, ACT-0010 and ACT-0012 are inert.
+- The local database `wire_team_bot` has the `support_requests` migration applied (2026-09-26). It also has the `kind` column (2026-09-26). Open requests: DS-6 and DS-12 (CLI channel) and DS-10 (staging channel); DS-7, DS-8, DS-9, DS-11, DS-13, DS-14 and DS-15 are resolved. The old `jira:` links on ACT-0005, ACT-0008, ACT-0010 and ACT-0012 are inert.
 - The staging bot runs from this checkout on macOS (`npm run build && npm start`, loading `.env` with Wire staging, Claude API, all Jira keys and `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on`). `.env` carries the truck demo settings (`WIRE_TEAM_BOT_JIRA_PASSIVE=on`, `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES=question=11809,part=11810,fault=11808`, the truck `WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE`), so `npm start` is enough. For e2e runs and the simulation, put `WIRE_TEAM_BOT_JIRA_PASSIVE=off` in front of the command, since passive offers would otherwise count as unsolicited replies. Restart it after a rebuild; it stops when the Claude Code session that started it ends.
 - Postgres 17 with pgvector via `brew services`. The staging channel's timezone is `Europe/Berlin` (set by hand); the CLI channel is `UTC`.
 - Jira: DS-1 to DS-5 are test tickets from the action-linked build; DS-6 to DS-15 are synthetic support requests from CLI and staging checks. Request types: Ask a question `11809`, Submit a request or incident `11808`, Replacement part `11810` (created by the operator 2026-09-26).
 
 **Next steps (each Jira write needs the operator's approval).**
-1. Resolve or delete DS-1 to DS-6 and DS-10 to DS-15 when no longer needed for demos.
+1. Resolve or delete the remaining test tickets (DS-1 to DS-6, DS-10, DS-12) when no longer needed for demos.
 2. Open, not built: German (driver-language) bot texts; for defence customers, a local model endpoint and a customer-hosted tracker (see the security note under "Truck premium support").
 3. Push to the fork on request; upstream merge is the owner's decision.
 
