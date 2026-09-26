@@ -59,7 +59,6 @@ describe("parseOfferMarker", () => {
     ["a reply that is too long", marker({ kind: "reply", issueKey: "DS-4", body: "x".repeat(REPLY_BODY_MAX + 1) })],
     ["a resolve without a key", marker({ kind: "resolve" })],
     ["a resolve with an action ID", marker({ kind: "resolve", issueKey: "ACT0010" })],
-    ["a resolve with an empty comment", marker({ kind: "resolve", issueKey: "DS-6", comment: "  \n " })],
     ["a resolve with a non-string comment", marker({ kind: "resolve", issueKey: "DS-6", comment: 42 })],
     ["a resolve with a comment that is too long", marker({ kind: "resolve", issueKey: "DS-6", comment: "c".repeat(REPLY_BODY_MAX + 1) })],
   ])("honours no command for %s, and still hides the marker", (_label, line) => {
@@ -107,6 +106,11 @@ describe("parseOfferMarker: resolve with a closing comment", () => {
   it("leaves the comment out when the marker has none", () => {
     expect(parseOfferMarker(marker({ kind: "resolve", issueKey: "DS-8" })).command).toEqual({ kind: "resolve", issueKey: "DS-8" });
     expect(parseOfferMarker(marker({ kind: "resolve", issueKey: "DS-8", comment: null })).command).toEqual({ kind: "resolve", issueKey: "DS-8" });
+  });
+
+  it("treats an empty or whitespace-only comment as absent", () => {
+    expect(parseOfferMarker(marker({ kind: "resolve", issueKey: "DS-8", comment: "" })).command).toEqual({ kind: "resolve", issueKey: "DS-8" });
+    expect(parseOfferMarker(marker({ kind: "resolve", issueKey: "DS-8", comment: "  \n " })).command).toEqual({ kind: "resolve", issueKey: "DS-8" });
   });
 });
 
