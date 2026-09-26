@@ -45,12 +45,20 @@ describe("integrationsPrompt", () => {
     expect(prompt).not.toContain("## Live support request tickets");
     expect(prompt).toContain('OFFER: {"kind":"support","requestKind":"<question, part or fault>","summary":"<one short line>","description":"<the problem>"}');
     expect(prompt).toContain('OFFER: {"kind":"reply","issueKey":"DS-NN","body":');
-    expect(prompt).toContain('OFFER: {"kind":"resolve","issueKey":"DS-NN"}');
+    expect(prompt).toContain('OFFER: {"kind":"resolve","issueKey":"DS-NN","comment":"<optional closing comment>"}');
     expect(prompt).toContain("one short line in the requester's own words");
     expect(prompt).toContain("never include the surrounding conversation, other people's messages");
     expect(prompt).toContain("never sent to Jira");
     expect(prompt).toContain('Do not ask "Shall I" yourself');
     expect(prompt).toContain("add no marker");
+  });
+
+  it("offers a closing comment on resolve only in the requester's words, with its command form", () => {
+    const prompt = integrationsPrompt({ jiraProjectKey: "DS" });
+    expect(prompt).toContain("`@Wire Team Bot resolve DS-NN: <comment>` adds a closing comment to it first");
+    expect(prompt).toContain('For resolve, add "comment" only when the requester asks to close or resolve the request with a note or comment');
+    expect(prompt).toContain("only the text the requester wants added, in their own words");
+    expect(prompt).toContain('Never invent a comment; otherwise leave "comment" out.');
   });
 
   it("has no action-to-Jira commands or old offer kinds", () => {
@@ -73,7 +81,7 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain("give the status command");
     expect(prompt).toContain("never guess a ticket's status");
     expect(prompt).toContain('A "## Support requests" section');
-    expect(prompt).toContain('OFFER: {"kind":"resolve","issueKey":"DS-NN"}');
+    expect(prompt).toContain('OFFER: {"kind":"resolve","issueKey":"DS-NN","comment":"<optional closing comment>"}');
   });
 
   it("explains the three request kinds and the part essentials, which are never invented", () => {
@@ -130,7 +138,7 @@ describe("OpenAIGeneralAnswerAdapter with support requests and offers", () => {
     const system = llm.chatCompletion.mock.calls[0][1][0].content as string;
     const user = llm.chatCompletion.mock.calls[0][1][1].content as string;
     expect(system).toContain('A "Pending offer being amended" line under "## Related Context" is the requester\'s unconfirmed offer');
-    expect(system).toContain("end with a revised marker of the same kind (for reply, the same issueKey)");
+    expect(system).toContain("end with a revised marker of the same kind (for reply or resolve, the same issueKey)");
     expect(user).toContain(`## Related Context\n- ${pending}\n\n`);
   });
 

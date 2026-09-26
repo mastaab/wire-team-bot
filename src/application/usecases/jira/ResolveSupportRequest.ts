@@ -5,9 +5,10 @@ import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
-import { formatResolution } from "./formatIssue";
+import { REPLY_BODY_MAX } from "../../services/offers";
+import { REPLY_FOOTER, formatResolution } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
-import { appendAuditSafely, botActor, notInConversation, refreshStatusCategory } from "./supportRequestStatus";
+import { appendAuditSafely, botActor, notInConversation, refreshStatusCategory, wasRefused } from "./supportRequestStatus";
 
 export interface ResolveSupportRequestInput {
   issueKey: string;
@@ -27,6 +28,10 @@ export interface ResolveSupportRequestInput {
  * resulting category and reports the SLA outcome. A request last known as done is read live
  * first, since the desk may have reopened it. Every attempt that reaches the tracker is
  * audited with the actor, because some transitions may apply before a failure.
+ *
+ * A closing comment is sent first, so the desk never sees a closed request without the
+ * explanation: when it is refused or its delivery cannot be confirmed, nothing is resolved.
+ * The comment is sent to the ticket only; it is never stored, logged or audited.
  */
 export class ResolveSupportRequest {
   constructor(
@@ -50,6 +55,18 @@ export class ResolveSupportRequest {
       return null;
     }
     const key = request.key;
+    let comment: string | undefined;
+    if (input.comment !== undefined) {
+      comment = input.comment.trim();
+      if (!comment) {
+        await reply(`I'm afraid the comment is empty, so I haven't resolved **${key}**.`);
+        return null;
+      }
+      if (comment.length > REPLY_BODY_MAX) {
+        await reply(`I'm afraid that comment is too long for Jira, so I haven't resolved **${key}**; please keep it under ${REPLY_BODY_MAX} characters.`);
+        return null;
+      }
+    }
     let current = request;
     if (request.statusCategory === "done") {
       // The desk may have reopened the ticket since, so the last known category is checked live.
@@ -74,6 +91,8 @@ export class ResolveSupportRequest {
       current = refreshed ?? { ...request, statusCategory: live.statusCategory };
     }
 
+    if (comment !== undefined && !(await this.addComment(input, key, comment, reply))) return null;
+
     const entry: Omit<AuditLogEntry, "details"> = {
       timestamp: new Date(),
       actorId: input.actorId,
@@ -88,7 +107,7 @@ export class ResolveSupportRequest {
     } catch (err) {
       this.logger?.warn("ResolveSupportRequest: resolveIssue failed", { key, ...trackerErrorFields(err) });
       await appendAuditSafely(this.auditLog, { ...entry, details: { outcome: "resolve_failed" } }, "ResolveSupportRequest", this.logger);
-      await reply(`I'm afraid I couldn't resolve **${key}** with the service desk; please check the ticket.`);
+      await reply(withCommentNote(`I'm afraid I couldn't resolve **${key}** with the service desk; please check the ticket.`, comment));
       return null;
     }
 
@@ -100,7 +119,58 @@ export class ResolveSupportRequest {
     if (!refreshed) {
       await appendAuditSafely(this.auditLog, { ...entry, details: { statusCategory: snapshot.statusCategory } }, "ResolveSupportRequest", this.logger);
     }
-    await reply(formatResolution(snapshot));
+    await reply(resolutionReply(snapshot, comment));
     return snapshot;
   }
+
+  /**
+   * Sends the closing comment with the Wire footer. True when Jira accepted it; otherwise the
+   * requester is told that nothing was resolved, and an unconfirmed delivery is audited, since
+   * Jira may have accepted it.
+   */
+  private async addComment(
+    input: ResolveSupportRequestInput, key: string, comment: string, reply: (text: string) => Promise<void>,
+  ): Promise<boolean> {
+    try {
+      await this.tracker.addCustomerReply(key, `${comment}\n\n${REPLY_FOOTER}`);
+    } catch (err) {
+      this.logger?.warn("ResolveSupportRequest: addCustomerReply failed", { key, ...trackerErrorFields(err) });
+      if (wasRefused(err)) {
+        await reply(`I'm afraid I couldn't add the comment to **${key}**, so I haven't resolved it.`);
+        return false;
+      }
+      await this.auditComment(input, key, { supportRequest: key, outcome: "reply_unconfirmed" });
+      await reply(`I'm afraid I couldn't confirm that the comment reached **${key}**, so I haven't resolved it. Please check the ticket.`);
+      return false;
+    }
+    // The comment is public in Jira now, so an audit failure must not stop the resolve.
+    await this.auditComment(input, key, { supportRequest: key });
+    return true;
+  }
+
+  private auditComment(input: ResolveSupportRequestInput, key: string, details: Record<string, unknown>): Promise<void> {
+    return appendAuditSafely(this.auditLog, {
+      timestamp: new Date(),
+      actorId: input.actorId,
+      conversationId: input.conversationId,
+      action: "entity_created",
+      entityType: "JiraComment",
+      entityId: key,
+      details,
+    }, "ResolveSupportRequest", this.logger);
+  }
+}
+
+/** The resolution reply; after a closing comment, a line saying it was added comes before the SLA lines. */
+function resolutionReply(snapshot: IssueSnapshot, comment: string | undefined): string {
+  const text = formatResolution(snapshot);
+  if (comment === undefined) return text;
+  if (snapshot.statusCategory !== "done") return withCommentNote(text, comment);
+  const [first, ...slaLines] = text.split("\n");
+  return [first, "Added your comment before resolving.", ...slaLines].join("\n");
+}
+
+/** A failed or incomplete resolve after the comment was sent says the comment is on the ticket. */
+function withCommentNote(text: string, comment: string | undefined): string {
+  return comment === undefined ? text : `${text}\nYour comment was added to the ticket.`;
 }

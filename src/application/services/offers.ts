@@ -94,8 +94,15 @@ function toCommand(json: string): OfferCommand | null {
       if (!JIRA_KEY_PATTERN.test(issueKey) || !body || body.length > REPLY_BODY_MAX) return null;
       return { kind: "reply", issueKey, body };
     }
-    case "resolve":
-      return JIRA_KEY_PATTERN.test(issueKey) ? { kind: "resolve", issueKey } : null;
+    case "resolve": {
+      if (!JIRA_KEY_PATTERN.test(issueKey)) return null;
+      // A comment is optional, but one that is present and unusable drops the offer, so the
+      // requester is never asked to resolve without the note they asked for.
+      if (v.comment === undefined || v.comment === null) return { kind: "resolve", issueKey };
+      const comment = typeof v.comment === "string" ? v.comment.trim() : "";
+      if (!comment || comment.length > REPLY_BODY_MAX) return null;
+      return { kind: "resolve", issueKey, comment };
+    }
     default:
       return null;
   }
@@ -135,8 +142,9 @@ export const GENERIC_COMMAND_LINE = "Mention me with the command if you'd like m
 export function offerCommandLine(command: OfferCommand, projectKey?: string): string {
   if (command.kind === "support") return "To raise it, send `@Wire Team Bot support: <problem>`.";
   const key = !projectKey || isKeyInProject(command.issueKey, projectKey) ? command.issueKey : `${projectKey}-N`;
-  return command.kind === "reply"
-    ? `To send a reply, use \`@Wire Team Bot reply to ${key}: <text>\`.`
+  if (command.kind === "reply") return `To send a reply, use \`@Wire Team Bot reply to ${key}: <text>\`.`;
+  return command.comment
+    ? `To resolve it with a comment, use \`@Wire Team Bot resolve ${key}: <comment>\`.`
     : `To resolve it, use \`@Wire Team Bot resolve ${key}\`.`;
 }
 
@@ -189,6 +197,19 @@ export function formatStillMissingReply(missing: ReadonlyArray<keyof PartDetails
  */
 export function formatReplyQuestion(key: string, summary: string, body: string): string {
   return `Shall I add this to **${key}** "${collapseLine(summary)}"?\n${quoteLines(body).join("\n")}\n\n(yes or no)?`;
+}
+
+/**
+ * The confirmation for resolving a request. With a closing comment it quotes exactly what will
+ * be sent before the resolve; the caller has bounded the comment. Ends with "?" like every
+ * offer question.
+ */
+export function formatResolveQuestion(key: string, summary: string, comment?: string): string {
+  const lead = `Shall I resolve **${key}** "${collapseLine(summary)}" with the service desk`;
+  const quoted = comment ? quoteLines(comment) : [];
+  return quoted.length > 0
+    ? `${lead} and add this comment?\n${quoted.join("\n")}\n\n(yes or no)?`
+    : `${lead} (yes or no)?`;
 }
 
 /** The part-order essentials, in the order they are asked for and shown. */

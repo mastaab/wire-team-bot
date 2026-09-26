@@ -45,6 +45,7 @@ describe("classifyConfirmation", () => {
 const SUPPORT: OfferCommand = { kind: "support", requestKind: "fault", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes." };
 const REPLY: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops after the reset." };
 const RESOLVE: OfferCommand = { kind: "resolve", issueKey: "DS-6" };
+const RESOLVE_WITH_COMMENT: OfferCommand = { kind: "resolve", issueKey: "DS-6", comment: "The keyboard works again." };
 
 const NOTHING = "There's nothing waiting for your yes: I haven't raised or sent anything.";
 const nothingWaiting = {
@@ -154,10 +155,32 @@ describe("ConfirmOffer", () => {
     expect(handlers.replyToServiceDesk.execute).not.toHaveBeenCalled();
   });
 
+  it("passes the closing comment of a resolve offer to the use case", async () => {
+    const { handlers, useCase, offer } = setup();
+    offer(RESOLVE_WITH_COMMENT);
+
+    expect(await useCase.execute({ ...input, text: "yes please" })).toBe(true);
+
+    expect(handlers.resolveSupportRequest.execute).toHaveBeenCalledWith({
+      issueKey: "DS-6", conversationId: convId, actorId: alice, replyToMessageId: "msg-9", comment: "The keyboard works again.",
+    });
+  });
+
+  it("gives the comment form of the command for a yes after a dropped resolve offer with a comment", async () => {
+    const { store, sent, useCase, offer } = setup();
+    offer(RESOLVE_WITH_COMMENT);
+    store.drop(convId, alice, now);
+
+    expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+    expect(sent).toEqual([`${NOTHING}\nTo resolve it with a comment, use \`@Wire Team Bot resolve DS-6: <comment>\`.`]);
+  });
+
   it.each([
     [SUPPORT, "I need a clear yes or no, so I haven't raised anything with the service desk yet. Shall I raise it (yes or no)?"],
     [REPLY, "I need a clear yes or no, so I haven't added this to **DS-6** yet. Shall I add it (yes or no)?"],
     [RESOLVE, "I need a clear yes or no, so I haven't resolved **DS-6** yet. Shall I resolve it with the service desk (yes or no)?"],
+    [RESOLVE_WITH_COMMENT, "I need a clear yes or no, so I haven't resolved **DS-6** yet. Shall I add the comment and resolve it (yes or no)?"],
   ])("asks again after an acknowledgement for a %j offer, keeps it, and a following yes still confirms it", async (command, question) => {
     const { handlers, wire, store, useCase, offer } = setup();
     offer(command);
