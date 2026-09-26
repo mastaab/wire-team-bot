@@ -104,7 +104,6 @@ describe("parseOfferMarker: request kinds and part details", () => {
     ["absent", undefined],
     ["unknown", "invoice"],
     ["not a string", 3],
-    ["in the wrong case", "Part"],
   ])("defaults the request kind to fault when it is %s", (_label, requestKind) => {
     expect(parseOfferMarker(marker({ ...base, requestKind })).command).toEqual({
       kind: "support", requestKind: "fault", summary: "Brake pads worn", description: "Need new brake pads.",
@@ -119,11 +118,17 @@ describe("parseOfferMarker: request kinds and part details", () => {
     });
   });
 
-  it("leaves out empty, non-string, overlong and unknown part details", () => {
-    const part = { vehicle: "   ", part: 42, quantity: "q".repeat(PART_DETAIL_MAX + 1), deliverTo: "d".repeat(PART_DETAIL_MAX), colour: "red" };
+  it("reads the request kind regardless of letter case", () => {
+    expect(parseOfferMarker(marker({ ...base, requestKind: " Part ", part: { vehicle: "truck 17" } })).command).toMatchObject({
+      requestKind: "part", part: { vehicle: "truck 17" },
+    });
+  });
+
+  it("leaves out empty, non-text, overlong and unknown part details, and takes a number as text", () => {
+    const part = { vehicle: "   ", part: { name: "mirror" }, quantity: 2, deliverTo: "d".repeat(PART_DETAIL_MAX + 1), colour: "red" };
     expect(parseOfferMarker(marker({ ...base, requestKind: "part", part })).command).toEqual({
       kind: "support", requestKind: "part", summary: "Brake pads worn", description: "Need new brake pads.",
-      part: { deliverTo: "d".repeat(PART_DETAIL_MAX) },
+      part: { quantity: "2" },
     });
   });
 

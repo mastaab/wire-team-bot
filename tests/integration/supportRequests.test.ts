@@ -51,6 +51,12 @@ describe.skipIf(process.env.INTEGRATION_TESTS !== "1")("SupportRequestRepository
     expect(await repo.findByKey(`ZZTEST-${runId}-missing`)).toBeNull();
   });
 
+  it("keeps a non-default kind through create, a status update and reading back", async () => {
+    const part = await repo.create(request({ kind: "part" }));
+    await repo.updateStatusCategory(part.key, "in_progress", new Date());
+    expect((await repo.findByKey(part.key))?.kind).toBe("part");
+  });
+
   it("lists by qualified conversation, newest first, without deleted records", async () => {
     const older = await repo.create(request());
     const newer = await repo.create(request({ requesterId: bob, requesterName: "Bob" }));

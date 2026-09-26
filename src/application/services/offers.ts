@@ -83,7 +83,7 @@ function toCommand(json: string): OfferCommand | null {
       const description = typeof v.description === "string" ? v.description.trim() : "";
       if (!summary || summary.length > SUPPORT_SUMMARY_MAX) return null;
       if (!description || description.length > OFFER_DESCRIPTION_MAX) return null;
-      const requestKind = SUPPORT_REQUEST_KINDS.find((k) => k === v.requestKind) ?? "fault";
+      const requestKind = SUPPORT_REQUEST_KINDS.find((k) => typeof v.requestKind === "string" && k === v.requestKind.trim().toLowerCase()) ?? "fault";
       const part = requestKind === "part" ? toPartDetails(v.part) : null;
       return part
         ? { kind: "support", requestKind, summary, description, part }
@@ -102,9 +102,9 @@ function toCommand(json: string): OfferCommand | null {
 }
 
 /**
- * The part essentials the model found, each collapsed to one line. A value that is not a
- * string, is empty or exceeds `PART_DETAIL_MAX` is left out, so the system asks for it
- * instead. Null when none is usable.
+ * The part essentials the model found, each collapsed to one line. A number (a quantity such
+ * as 2) is taken as text. Any other value that is not a string, is empty or exceeds
+ * `PART_DETAIL_MAX` is left out, so the system asks for it instead. Null when none is usable.
  */
 function toPartDetails(value: unknown): PartDetails | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -112,7 +112,7 @@ function toPartDetails(value: unknown): PartDetails | null {
   const part: PartDetails = {};
   for (const { key } of PART_DETAIL_FIELDS) {
     const field = raw[key];
-    const text = typeof field === "string" ? collapseLine(field) : "";
+    const text = typeof field === "string" ? collapseLine(field) : typeof field === "number" && Number.isFinite(field) ? String(field) : "";
     if (text && text.length <= PART_DETAIL_MAX) part[key] = text;
   }
   return Object.keys(part).length > 0 ? part : null;

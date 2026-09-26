@@ -51,6 +51,8 @@ describe("resolveJiraConfig", () => {
       .toEqual({ question: "11809", part: "11810", fault: "11808" });
     expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "parts=11810" })).toThrow(/question=11809/);
     expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "part=abc" })).toThrow(/question=11809/);
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "part=11810,part=11811" })).toThrow(/question=11809/);
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "part=11810=x" })).toThrow(/question=11809/);
   });
 
   it("reads the service scope when set and bounds its length", () => {

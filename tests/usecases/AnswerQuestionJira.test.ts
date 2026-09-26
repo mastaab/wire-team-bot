@@ -561,6 +561,9 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["support", "Create a Jira ticket for the printer"],
       ["support", "Can you log a request for a new laptop?"],
       ["support", "Put this into Jira"],
+      ["support", "Order brake pads for truck 17"],
+      ["support", "Can you order it?"],
+      ["support", "Please reorder the filter we got last month"],
       ["support", "Raise it"],
       ["support", "The printer is jammed again, report it"],
       ["resolve", "Please close my request"],
@@ -612,6 +615,9 @@ describe("AnswerQuestion with Jira: offers", () => {
       ["reply", "Can I get an update on the ticket?"],
       ["reply", "Is there a new note on DS-6?"],
       ["reply", "Add me to the lunch list"],
+      ["support", "Sort them in order of priority"],
+      ["support", "What order should we do this in?"],
+      ["support", "Please order the list by due date"],
       ["reply", "Did anyone update DS-6?"],
       ["reply", "When will support update DS-6?"],
       ["reply", "Who can update the ticket?"],
@@ -987,6 +993,20 @@ describe("AnswerQuestion with Jira: request kinds and part orders", () => {
     await run("truck 17, to Depot North", { pendingOffer: incomplete, amendOnly: true });
     expect(sent).toEqual([partQuestion]);
     expect(stored[0]!.command).toMatchObject({ requestKind: "part", part: PART });
+  });
+
+  it("keeps the details already given when the model returns only the new ones", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: offer({ requestKind: "part", part: { vehicle: "Truck 17", deliverTo: "Depot North" } }) });
+    await run("truck 17, to Depot North", { pendingOffer: incomplete, amendOnly: true });
+    expect(sent).toEqual([partQuestion]);
+    expect(stored[0]!.command).toMatchObject({ part: { part: "Brake pads, front", quantity: "2", vehicle: "Truck 17", deliverTo: "Depot North" } });
+  });
+
+  it("does not accept a switch from a part order to a fault as a revision of the draft", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: offer({ requestKind: "fault" }) });
+    expect(await run("just report it", { pendingOffer: incomplete, amendOnly: true })).toBe("");
+    expect(sent).toEqual([]);
+    expect(stored).toHaveLength(0);
   });
 
   it("asks again for what is still missing after a partial answer", async () => {

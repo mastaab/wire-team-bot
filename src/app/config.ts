@@ -183,8 +183,9 @@ function parseRequestTypes(raw: string | undefined): Partial<Record<SupportReque
   const types: Partial<Record<SupportRequestKind, string>> = {};
   if (!raw) return types;
   for (const entry of raw.split(",").map((e) => e.trim()).filter(Boolean)) {
-    const [kind, id] = entry.split("=").map((part) => part?.trim() ?? "");
-    if (!(SUPPORT_REQUEST_KINDS as readonly string[]).includes(kind ?? "") || !/^\d+$/.test(id ?? "")) {
+    const [kind, id, extra] = entry.split("=").map((part) => part?.trim() ?? "");
+    if (extra !== undefined || !(SUPPORT_REQUEST_KINDS as readonly string[]).includes(kind ?? "") || !/^\d+$/.test(id ?? "")
+        || types[kind as SupportRequestKind] !== undefined) {
       throw new Error("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES must look like question=11809,part=11810,fault=11808");
     }
     types[kind as SupportRequestKind] = id;

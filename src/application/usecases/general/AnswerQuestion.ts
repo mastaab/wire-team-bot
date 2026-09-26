@@ -123,7 +123,7 @@ const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|support|requests?|iss
  * support") and ordering a part ("order two brake pads", "order a replacement mirror", "order
  * me the filter") also count; "in order to" and "the order of" do not.
  */
-const SUPPORT_INTENT = /\b(?:raise|open|create|file|log(?!\s+(?:in|into|on)\b)|submit|report|escalate|put\b[^.?!]*\binto)\b[^.?!]*\b(?:service\s+desk|support|tickets?|requests?|jira|it\s+with)\b|\b(?:raise|report)\s+(?:it|this)\b|\bask\s+(?:the\s+)?(?:service\s+desk|support)\b|\b(?:order|reorder)\s+(?:(?:me|us)\s+)?(?:a|an|the|some|new|replacement|spare|one|two|three|four|five|six|\d+)\b/i;
+const SUPPORT_INTENT = /\b(?:raise|open|create|file|log(?!\s+(?:in|into|on)\b)|submit|report|escalate|put\b[^.?!]*\binto)\b[^.?!]*\b(?:service\s+desk|support|tickets?|requests?|jira|it\s+with)\b|\b(?:raise|report)\s+(?:it|this)\b|\bask\s+(?:the\s+)?(?:service\s+desk|support)\b|(?<!\b(?:in|the|an|of|this|that|which|what|your|my)\s+)\b(?:re)?order(?!\s+(?:of|to|by|in|the\s+(?:list|actions?|items?|rows?))\b)\b/i;
 /** resolve: "close", "resolve", "works again", "working again", "no longer needed" and their inflections. */
 const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?|working)\s+again|no\s+longer\s+(?:needed|necessary|required))\b/i;
 /** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
@@ -252,9 +252,10 @@ export class AnswerQuestion {
     // The raw marker is never sent, whether or not the offer is valid.
     const parsed = parseOfferMarker(modelAnswer);
     const text = parsed.text || FALLBACK_ANSWER;
-    const prepared = parsed.command ? await this.prepareOffer(this.jira, input, parsed.command) : null;
-    if (input.amendOnly && !(prepared && parsed.command && isRevision(input.pendingOffer, parsed.command)
-        && !sameCommand(input.pendingOffer, parsed.command))) {
+    const command = parsed.command ? withPendingDetails(input.pendingOffer, parsed.command) : null;
+    const prepared = command ? await this.prepareOffer(this.jira, input, command) : null;
+    if (input.amendOnly && !(prepared && command && isRevision(input.pendingOffer, command)
+        && !sameCommand(input.pendingOffer, command))) {
       // Unaddressed chat after an offer ("lunch at noon?") is not for the bot, and repeating the
       // same offer would make it follow every message; only a real revision is sent.
       return "";
@@ -262,7 +263,7 @@ export class AnswerQuestion {
     if (!prepared && parsed.hadMarker) {
       // The model meant to propose a change that code did not accept. Its text may claim the
       // change ("Updated with that detail."), so only a code-written reply is sent.
-      const line = parsed.command ? offerCommandLine(parsed.command, this.jira.tracker.projectKey) : GENERIC_COMMAND_LINE;
+      const line = command ? offerCommandLine(command, this.jira.tracker.projectKey) : GENERIC_COMMAND_LINE;
       const reply = `${NO_CHANGE_REPLY}\n${line}`;
       await this.send(input, reply, false);
       return reply;
@@ -470,7 +471,21 @@ function amendableOffer(pending: OfferCommand | undefined): OfferCommand | null 
 function isRevision(pending: OfferCommand | undefined, command: OfferCommand): boolean {
   const amended = amendableOffer(pending);
   if (!amended || amended.kind !== command.kind) return false;
-  return amended.kind !== "reply" || (command.kind === "reply" && amended.issueKey === command.issueKey);
+  if (amended.kind === "support") {
+    // The same kind of request: turning a part order into a fault would skip its essentials.
+    return command.kind === "support" && amended.requestKind === command.requestKind;
+  }
+  return command.kind === "reply" && amended.issueKey === command.issueKey;
+}
+
+/**
+ * A revised part order keeps the essentials already given: the model may return only the
+ * ones the message adds, and a detail the driver gave earlier must not be asked for again.
+ */
+function withPendingDetails(pending: OfferCommand | undefined, command: OfferCommand): OfferCommand {
+  if (pending?.kind !== "support" || pending.requestKind !== "part" || command.kind !== "support" || command.requestKind !== "part") return command;
+  const part = { ...(pending.part ?? {}), ...(command.part ?? {}) };
+  return Object.keys(part).length > 0 ? { ...command, part } : command;
 }
 
 /** True when both commands propose exactly the same change. */
