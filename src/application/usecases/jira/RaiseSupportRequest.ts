@@ -10,6 +10,7 @@ import type { CreateIssueRequest, CreatedIssue, IssueTrackerPort } from "../../p
 import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { appendAuditSafely, wasRefused } from "./supportRequestStatus";
+import { rememberLastMessage } from "./supportRequestMarkers";
 
 export interface RaiseSupportRequestInput {
   /** One line; becomes the ticket title and the stored summary. */
@@ -141,6 +142,8 @@ export class RaiseSupportRequest {
         updatedAt: now,
         deleted: false,
         version: 1,
+        // A new ticket has no replies yet, so the watch has nothing earlier to announce.
+        lastSeenReplyAt: now,
       });
     } catch (err) {
       this.logger?.warn("RaiseSupportRequest: storing the support request failed", { key, err: err instanceof Error ? err.name : "UnknownError" });
@@ -160,7 +163,7 @@ export class RaiseSupportRequest {
 
     let text = `Raised **${key}** with the service desk: ${created.url}`;
     if (!created.fieldsApplied) text += "\nI'm afraid I couldn't set the label on the ticket.";
-    await reply(text);
+    await rememberLastMessage(this.requests, key, await reply(text), "RaiseSupportRequest", this.logger);
     return stored;
   }
 

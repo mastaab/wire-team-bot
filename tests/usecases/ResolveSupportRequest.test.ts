@@ -3,7 +3,7 @@ import { ResolveSupportRequest } from "../../src/application/usecases/jira/Resol
 import { REPLY_BODY_MAX } from "../../src/application/services/offers";
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
-import { OUT_OF_SCOPE, bob, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
+import { OUT_OF_SCOPE, bob, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire, sentRefFor } from "./supportRequestFakes";
 
 const done = makeSnapshot({ statusCategory: "done", slas: [{ name: "Time to done", state: "met", elapsed: "3m", goal: "16h" }] });
 
@@ -268,5 +268,77 @@ describe("ResolveSupportRequest", () => {
       expect(tracker.resolveIssue).toHaveBeenCalledWith("DS-6");
       expect(sent[0]).toContain("Added your comment before resolving.");
     });
+  });
+});
+
+describe("ResolveSupportRequest: last message reference", () => {
+  it("stores the reference of the resolution reply as the request's last message", async () => {
+    const { requests, useCase } = setup();
+
+    expect(await useCase.execute(base)).toEqual(done);
+
+    expect(requests.setLastMessage).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it("stores the reference of every other reply that names this conversation's request", async () => {
+    const already = setup([makeRequest({ statusCategory: "done" })]);
+    already.tracker.getIssue.mockResolvedValue(done);
+    expect(await already.useCase.execute(base)).toBeNull();
+
+    const unreachable = setup([makeRequest({ statusCategory: "done" })]);
+    unreachable.tracker.getIssue.mockRejectedValue(new Error("timeout"));
+    expect(await unreachable.useCase.execute(base)).toBeNull();
+
+    const failed = setup();
+    failed.tracker.resolveIssue.mockRejectedValue(new IssueTrackerError("transition failed", 409));
+    expect(await failed.useCase.execute(base)).toBeNull();
+
+    const refused = setup();
+    refused.tracker.addCustomerReply.mockRejectedValue(new IssueTrackerError("bad request", 400));
+    expect(await refused.useCase.execute({ ...base, comment: "Fitted." })).toBeNull();
+
+    const unconfirmed = setup();
+    unconfirmed.tracker.addCustomerReply.mockRejectedValue(new IssueTrackerError("server error", 500));
+    expect(await unconfirmed.useCase.execute({ ...base, comment: "Fitted." })).toBeNull();
+
+    const empty = setup();
+    expect(await empty.useCase.execute({ ...base, comment: "  " })).toBeNull();
+
+    for (const path of [already, unreachable, failed, refused, unconfirmed, empty]) {
+      expect(path.sent).toHaveLength(1);
+      expect(path.sent[0]).toContain("**DS-6**");
+      expect(path.requests.setLastMessage).toHaveBeenCalledTimes(1);
+      expect(path.requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+    }
+  });
+
+  it.each(OUT_OF_SCOPE)("stores nothing for a key %s", async (_label, records, key) => {
+    const { requests, wire, useCase } = setup(records);
+
+    expect(await useCase.execute({ ...base, issueKey: key })).toBeNull();
+
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("stores nothing when the transport returns no reference", async () => {
+    const { requests, wire, useCase } = setup();
+    wire.sendPlainText.mockResolvedValueOnce(undefined);
+
+    expect(await useCase.execute(base)).toEqual(done);
+
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the reply and the result when storing the reference fails, logging the error name only", async () => {
+    const { requests, sent, logger, useCase } = setup();
+    requests.setLastMessage.mockRejectedValueOnce(new Error("SECRET-DB-DETAIL"));
+
+    expect(await useCase.execute(base)).toEqual(done);
+
+    expect(sent).toEqual(["Resolved **DS-6** with the service desk.\nTime to done: met in 3m (target 16h)"]);
+    expect(logger.warn).toHaveBeenCalledWith("ResolveSupportRequest: storing the last message failed", { key: "DS-6", err: "Error" });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("SECRET-DB-DETAIL");
   });
 });

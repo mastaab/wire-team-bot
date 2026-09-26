@@ -9,7 +9,7 @@ import {
 import { PART_DETAIL_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import type { SupportDraft } from "../../src/application/ports/SupportTriagePort";
-import { alice, bob, convId, created, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
+import { alice, bob, convId, created, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire, sentRefFor } from "./supportRequestFakes";
 
 const MESSAGE = "PRIVATE_MESSAGE_MARKER the printer on floor 3 jams on every job";
 const DRAFT: SupportDraft = {
@@ -957,5 +957,90 @@ describe("OfferSupportFromConversation", () => {
         expect(ctx.sent).toEqual([]);
       }
     });
+  });
+});
+
+describe("OfferSupportFromConversation: last message reference", () => {
+  const ADDITION: SupportDraft = { ...DRAFT, duplicateOf: "ds-6", addition: "It only happens on the 3rd floor." };
+  const RESOLVE: SupportDraft = { ...DRAFT, summary: "", description: "", resolves: "DS-6", closingComment: null };
+
+  it.each<[string, SupportDraft]>([
+    ["an addition offer", ADDITION],
+    ["a resolve offer", RESOLVE],
+  ])("stores the reference of %s, which names an open request of this conversation", async (_label, draft) => {
+    const { requests, offers, useCase } = setup(undefined, draft);
+
+    await expect(useCase.execute(input())).resolves.toBe(true);
+
+    expect(requests.setLastMessage).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+    expect(offers.put).toHaveBeenCalledTimes(1);
+    // The offer is stored as soon as the question was sent; the bookkeeping comes after.
+    expect(offers.put.mock.invocationCallOrder[0]).toBeLessThan(requests.setLastMessage.mock.invocationCallOrder[0]!);
+  });
+
+  it("stores no reference for an offer to raise a new request or a missing-details question", async () => {
+    const raise = setup();
+    await raise.useCase.execute(input());
+    expect(raise.sent).toHaveLength(1);
+    expect(raise.requests.setLastMessage).not.toHaveBeenCalled();
+
+    const part = setup(undefined, { ...DRAFT, requestKind: "part", part: { vehicle: "truck 12" } });
+    await part.useCase.execute(input());
+    expect(part.sent).toHaveLength(1);
+    expect(part.requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("stores no reference when the send failed or returned none", async () => {
+    const failed = setup(undefined, ADDITION);
+    failed.wire.sendPlainText.mockRejectedValue(new TypeError("socket closed"));
+    await failed.useCase.execute(input());
+    expect(failed.requests.setLastMessage).not.toHaveBeenCalled();
+
+    const none = setup(undefined, ADDITION);
+    none.wire.sendPlainText.mockResolvedValueOnce(undefined);
+    await expect(none.useCase.execute(input())).resolves.toBe(true);
+    expect(none.requests.setLastMessage).not.toHaveBeenCalled();
+    expect(none.offers.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores the reference but not the offer when the channel is paused while the question is being sent", async () => {
+    const controller = new AbortController();
+    const { requests, wire, offers, sent, useCase } = setup(undefined, ADDITION);
+    wire.sendPlainText.mockImplementation(async (_conv: unknown, text: string) => {
+      sent.push(text);
+      controller.abort();
+      return sentRefFor(sent.length);
+    });
+
+    await expect(useCase.execute(input({ signal: controller.signal }))).resolves.toBe(true);
+
+    expect(offers.put).not.toHaveBeenCalled();
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it("keeps the offer and the result when storing the reference fails, logging the error name only", async () => {
+    const { requests, offers, sent, logger, useCase } = setup(undefined, ADDITION);
+    requests.setLastMessage.mockRejectedValueOnce(new Error("SECRET-DB-DETAIL"));
+
+    await expect(useCase.execute(input())).resolves.toBe(true);
+
+    expect(sent).toHaveLength(1);
+    expect(offers.put).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith("OfferSupportFromConversation: storing the last message failed", { key: "DS-6", err: "Error" });
+    expect(loggedText(logger)).not.toContain("SECRET-DB-DETAIL");
+  });
+
+  it("stores the reference of a passive status answer through the real GetIssueStatus", async () => {
+    const requests = makeRequests([makeRequest()]);
+    const { wire } = makeWire();
+    const getIssueStatus = new GetIssueStatus(requests, makeTracker(), wire, makeAudit(), makeLogger());
+    const triage = { draftRequest: vi.fn(), matchStatusQuestion: vi.fn().mockResolvedValue("DS-6"), extractPartDetails: vi.fn() };
+    const offers = { put: vi.fn(), take: vi.fn(), has: vi.fn(), clearConversation: vi.fn(), drop: vi.fn(), recentlyDropped: vi.fn() };
+    const useCase = new OfferSupportFromConversation(requests, triage, getIssueStatus, offers, wire, makeLogger());
+
+    await useCase.execute(input({ categories: ["request_status"] }));
+
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
   });
 });

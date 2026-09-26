@@ -3,7 +3,7 @@ import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStat
 import { formatIssueStatus, formatReplies, formatResolution, formatSla, statusLabel } from "../../src/application/usecases/jira/formatIssue";
 import type { IssueSnapshot } from "../../src/application/ports/IssueTrackerPort";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
-import { OUT_OF_SCOPE, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
+import { OUT_OF_SCOPE, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire, sentRefFor } from "./supportRequestFakes";
 
 const snapshot = makeSnapshot();
 
@@ -127,6 +127,101 @@ describe("GetIssueStatus", () => {
 
     expect(sent).toEqual(["I'm afraid I couldn't reach Jira just now."]);
     expect(logger.warn).toHaveBeenCalledWith("GetIssueStatus: getIssue failed", { err: "Error" });
+  });
+});
+
+describe("GetIssueStatus: watch markers", () => {
+  const replies = [
+    { author: "Dana Agent", created: new Date("2026-09-25T14:55:00Z"), body: "We have reset your VPN profile." },
+    { author: "Lee Agent", created: new Date("2026-09-25T16:10:00Z"), body: "Any better?" },
+    { author: "Bot", created: new Date("2026-09-25T15:30:00Z"), body: "Still drops.\n\nSent from Wire.", fromThisBot: true },
+  ];
+
+  it("stores the reference of the status answer as the request's last message", async () => {
+    const { requests, useCase } = setup();
+
+    await useCase.execute({ reference: "ds-6", conversationId: convId });
+
+    expect(requests.setLastMessage).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it("marks the newest reply shown as seen, whoever wrote it", async () => {
+    const { requests, tracker, useCase } = setup();
+    tracker.listCustomerReplies.mockResolvedValue(replies);
+
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
+
+    expect(requests.advanceLastSeenReplyAt).toHaveBeenCalledTimes(1);
+    expect(requests.advanceLastSeenReplyAt).toHaveBeenCalledWith("DS-6", new Date("2026-09-25T16:10:00Z"));
+  });
+
+  it("does not advance the marker when no reply was shown or the replies could not be read", async () => {
+    const none = setup();
+    await none.useCase.execute({ reference: "DS-6", conversationId: convId });
+    expect(none.requests.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+
+    const failed = setup();
+    failed.tracker.listCustomerReplies.mockRejectedValue(new Error("timeout"));
+    await failed.useCase.execute({ reference: "DS-6", conversationId: convId });
+    expect(failed.requests.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+    // The status answer still names the request.
+    expect(failed.requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it("stores the reference of the not-found reply, which names this conversation's request", async () => {
+    const { requests, tracker, useCase } = setup();
+    tracker.getIssue.mockResolvedValue(null);
+
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
+
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+    expect(requests.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+  });
+
+  it("stores nothing when the tracker is unreachable, since the reply does not name the request", async () => {
+    const { requests, tracker, useCase } = setup();
+    tracker.getIssue.mockRejectedValue(new Error("timeout"));
+
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
+
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+    expect(requests.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+  });
+
+  it.each(OUT_OF_SCOPE)("stores nothing for a key %s", async (_label, records, key) => {
+    const { requests, useCase } = setup(records);
+
+    await useCase.execute({ reference: key, conversationId: convId });
+
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+    expect(requests.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+  });
+
+  it("stores no reference when the transport returns none, but still marks the replies seen", async () => {
+    const { requests, tracker, wire, useCase } = setup();
+    wire.sendPlainText.mockResolvedValueOnce(undefined);
+    tracker.listCustomerReplies.mockResolvedValue(replies);
+
+    await useCase.execute({ reference: "DS-6", conversationId: convId });
+
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+    expect(requests.advanceLastSeenReplyAt).toHaveBeenCalledWith("DS-6", new Date("2026-09-25T16:10:00Z"));
+  });
+
+  it("keeps the answer and the result when both marker writes fail, logging error names only", async () => {
+    const { requests, tracker, sent, logger, useCase } = setup();
+    tracker.listCustomerReplies.mockResolvedValue(replies);
+    requests.setLastMessage.mockRejectedValueOnce(new Error("SECRET-DB-DETAIL"));
+    requests.advanceLastSeenReplyAt.mockRejectedValueOnce(new TypeError("SECRET-DB-DETAIL"));
+
+    expect(await useCase.execute({ reference: "DS-6", conversationId: convId })).toEqual(snapshot);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Latest replies on the ticket:");
+    expect(logger.warn).toHaveBeenCalledWith("GetIssueStatus: storing the last message failed", { key: "DS-6", err: "Error" });
+    expect(logger.warn).toHaveBeenCalledWith("GetIssueStatus: advancing the last seen reply failed", { key: "DS-6", err: "TypeError" });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("SECRET-DB-DETAIL");
   });
 });
 

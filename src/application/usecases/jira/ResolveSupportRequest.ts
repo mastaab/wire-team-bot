@@ -9,6 +9,7 @@ import { REPLY_BODY_MAX } from "../../services/offers";
 import { REPLY_FOOTER, formatResolution } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
 import { appendAuditSafely, botActor, notInConversation, refreshStatusCategory, wasRefused } from "./supportRequestStatus";
+import { rememberLastMessage } from "./supportRequestMarkers";
 
 export interface ResolveSupportRequestInput {
   issueKey: string;
@@ -55,15 +56,22 @@ export class ResolveSupportRequest {
       return null;
     }
     const key = request.key;
+    // Every message below names this conversation's request, so each becomes its last message,
+    // quoted by the next watch update.
+    const replyAbout = async (text: string): Promise<SentMessageRef | undefined> => {
+      const ref = await reply(text);
+      await rememberLastMessage(this.requests, key, ref, "ResolveSupportRequest", this.logger);
+      return ref;
+    };
     let comment: string | undefined;
     if (input.comment !== undefined) {
       comment = input.comment.trim();
       if (!comment) {
-        await reply(`I'm afraid the comment is empty, so I haven't resolved **${key}**.`);
+        await replyAbout(`I'm afraid the comment is empty, so I haven't resolved **${key}**.`);
         return null;
       }
       if (comment.length > REPLY_BODY_MAX) {
-        await reply(`I'm afraid that comment is too long for Jira, so I haven't resolved **${key}**; please keep it under ${REPLY_BODY_MAX} characters.`);
+        await replyAbout(`I'm afraid that comment is too long for Jira, so I haven't resolved **${key}**; please keep it under ${REPLY_BODY_MAX} characters.`);
         return null;
       }
     }
@@ -78,14 +86,14 @@ export class ResolveSupportRequest {
         live = null;
       }
       if (!live) {
-        await reply(`I'm afraid I couldn't reach Jira to check **${key}** just now; please try again later.`);
+        await replyAbout(`I'm afraid I couldn't reach Jira to check **${key}** just now; please try again later.`);
         return null;
       }
       const refreshed = await refreshStatusCategory(
         this.requests, this.auditLog, request, live.statusCategory, botActor(input.conversationId), this.logger,
       );
       if (live.statusCategory === "done") {
-        await reply(comment !== undefined
+        await replyAbout(comment !== undefined
           ? `**${key}** is already resolved, so I haven't added your comment.`
           : `**${key}** is already resolved.`);
         return null;
@@ -93,7 +101,7 @@ export class ResolveSupportRequest {
       current = refreshed ?? { ...request, statusCategory: live.statusCategory };
     }
 
-    if (comment !== undefined && !(await this.addComment(input, key, comment, reply))) return null;
+    if (comment !== undefined && !(await this.addComment(input, key, comment, replyAbout))) return null;
 
     const entry: Omit<AuditLogEntry, "details"> = {
       timestamp: new Date(),
@@ -109,7 +117,7 @@ export class ResolveSupportRequest {
     } catch (err) {
       this.logger?.warn("ResolveSupportRequest: resolveIssue failed", { key, ...trackerErrorFields(err) });
       await appendAuditSafely(this.auditLog, { ...entry, details: { outcome: "resolve_failed" } }, "ResolveSupportRequest", this.logger);
-      await reply(withCommentNote(`I'm afraid I couldn't resolve **${key}** with the service desk; please check the ticket.`, comment));
+      await replyAbout(withCommentNote(`I'm afraid I couldn't resolve **${key}** with the service desk; please check the ticket.`, comment));
       return null;
     }
 
@@ -121,7 +129,7 @@ export class ResolveSupportRequest {
     if (!refreshed) {
       await appendAuditSafely(this.auditLog, { ...entry, details: { statusCategory: snapshot.statusCategory } }, "ResolveSupportRequest", this.logger);
     }
-    await reply(resolutionReply(snapshot, comment));
+    await replyAbout(resolutionReply(snapshot, comment));
     return snapshot;
   }
 

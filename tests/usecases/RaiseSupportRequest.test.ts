@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { RaiseSupportRequest } from "../../src/application/usecases/jira/RaiseSupportRequest";
 import { PART_DETAIL_MAX, SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
-import { alice, bob, convId, loggedText, makeAudit, makeLogger, makeRequests, makeTracker, makeWire } from "./supportRequestFakes";
+import { alice, bob, convId, loggedText, makeAudit, makeLogger, makeRequests, makeTracker, makeWire, sentRefFor } from "./supportRequestFakes";
 
 const BODY_MARKER = "SECRET-DESCRIPTION-MARKER";
 
@@ -328,6 +328,70 @@ describe("RaiseSupportRequest: request kinds and part orders", () => {
     expect(requests.create).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
     expect(sent).toEqual([reply]);
+  });
+});
+
+describe("RaiseSupportRequest: watch markers", () => {
+  it("creates the record with lastSeenReplyAt equal to createdAt", async () => {
+    const { requests, useCase } = setup();
+
+    await useCase.execute(base);
+
+    const stored = requests.create.mock.calls[0]![0];
+    expect(stored.lastSeenReplyAt).toBeInstanceOf(Date);
+    expect(stored.lastSeenReplyAt!.getTime()).toBe(stored.createdAt.getTime());
+  });
+
+  it("stores the reference of the Raised confirmation as the request's last message", async () => {
+    const { requests, useCase } = setup();
+
+    await useCase.execute(base);
+
+    expect(requests.setLastMessage).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it("stores nothing when the transport returns no reference", async () => {
+    const { requests, wire, useCase } = setup();
+    wire.sendPlainText.mockResolvedValueOnce(undefined);
+
+    expect(await useCase.execute(base)).toMatchObject({ key: "DS-6" });
+
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the confirmation and the result when storing the reference fails, logging the error name only", async () => {
+    const { requests, sent, logger, useCase } = setup();
+    requests.setLastMessage.mockRejectedValueOnce(new Error(`db down ${BODY_MARKER}`));
+
+    expect(await useCase.execute(base)).toMatchObject({ key: "DS-6" });
+
+    expect(sent).toEqual(["Raised **DS-6** with the service desk: https://jira.test/browse/DS-6"]);
+    expect(logger.warn).toHaveBeenCalledWith("RaiseSupportRequest: storing the last message failed", { key: "DS-6", err: "Error" });
+    expect(loggedText(logger)).not.toContain(BODY_MARKER);
+  });
+
+  it("stores no reference when nothing was recorded: refused, unconfirmed, outside the project or not stored", async () => {
+    const paths = [setup(), setup(), setup(), setup()];
+    paths[0]!.tracker.createIssue.mockRejectedValueOnce(new IssueTrackerError("bad request", 400));
+    paths[1]!.tracker.createIssue.mockRejectedValueOnce(new IssueTrackerError("server error", 500));
+    paths[2]!.tracker.createIssue.mockResolvedValueOnce({ key: "OPS-3", url: "https://jira.test/browse/OPS-3", fieldsApplied: true });
+    paths[3]!.requests.create.mockRejectedValueOnce(new Error("db down"));
+    for (const { requests, wire, useCase } of paths) {
+      expect(await useCase.execute(base)).toBeNull();
+      expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+      expect(requests.setLastMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it("stores no reference for an input error", async () => {
+    const { requests, wire, useCase } = setup();
+
+    expect(await useCase.execute({ ...base, description: " " })).toBeNull();
+
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
   });
 });
 

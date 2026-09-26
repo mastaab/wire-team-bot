@@ -3,7 +3,7 @@ import { ReplyToServiceDesk } from "../../src/application/usecases/jira/ReplyToS
 import { REPLY_BODY_MAX } from "../../src/application/services/offers";
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
-import { OUT_OF_SCOPE, bob, convId, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeTracker, makeWire } from "./supportRequestFakes";
+import { OUT_OF_SCOPE, bob, convId, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeTracker, makeWire, sentRefFor } from "./supportRequestFakes";
 
 const BODY_MARKER = "SECRET-BODY-MARKER";
 
@@ -144,5 +144,69 @@ describe("ReplyToServiceDesk", () => {
       expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
       expect(loggedText(logger)).not.toContain(BODY_MARKER);
     }
+  });
+});
+
+describe("ReplyToServiceDesk: last message reference", () => {
+  it("stores the reference of the confirmation as the request's last message", async () => {
+    const { requests, useCase } = setup();
+
+    expect(await useCase.execute({ ...base, reference: "ds-6", body: "It still drops." })).toBe(true);
+
+    expect(requests.setLastMessage).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it.each([
+    ["refused", new IssueTrackerError("bad request", 400), "I'm afraid I couldn't send the reply to **DS-6** just now."],
+    ["unconfirmed", new IssueTrackerError("server error", 500), "I'm afraid I couldn't confirm that the reply reached **DS-6**. Please check the ticket before sending it again."],
+  ])("stores the reference of a %s reply, which names this conversation's request", async (_label, error, reply) => {
+    const { requests, sent, useCase } = setup({ addCustomerReply: vi.fn().mockRejectedValue(error) });
+
+    expect(await useCase.execute({ ...base, reference: "DS-6", body: "It still drops." })).toBe(false);
+
+    expect(sent).toEqual([reply]);
+    expect(requests.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it.each(OUT_OF_SCOPE)("stores nothing for a key %s", async (_label, records, reference) => {
+    const { requests, wire, useCase } = setup({ records });
+
+    expect(await useCase.execute({ ...base, reference, body: "It still drops." })).toBe(false);
+
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an empty body", "   "],
+    ["a body over the limit", "x".repeat(REPLY_BODY_MAX + 1)],
+  ])("stores nothing for %s, since the reply does not name the request", async (_label, body) => {
+    const { requests, wire, useCase } = setup();
+
+    expect(await useCase.execute({ ...base, reference: "DS-6", body })).toBe(false);
+
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("stores nothing when the transport returns no reference", async () => {
+    const { requests, wire, useCase } = setup();
+    wire.sendPlainText.mockResolvedValueOnce(undefined);
+
+    expect(await useCase.execute({ ...base, reference: "DS-6", body: "It still drops." })).toBe(true);
+
+    expect(requests.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the reply and the result when storing the reference fails, logging the error name only", async () => {
+    const { requests, sent, logger, useCase } = setup();
+    requests.setLastMessage.mockRejectedValueOnce(new Error(`db down ${BODY_MARKER}`));
+
+    expect(await useCase.execute({ ...base, reference: "DS-6", body: "It still drops." })).toBe(true);
+
+    expect(sent).toEqual(["Sent your reply to **DS-6** in Jira."]);
+    expect(logger.warn).toHaveBeenCalledWith("ReplyToServiceDesk: storing the last message failed", { key: "DS-6", err: "Error" });
+    expect(loggedText(logger)).not.toContain(BODY_MARKER);
   });
 });

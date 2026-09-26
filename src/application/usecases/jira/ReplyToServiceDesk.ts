@@ -9,6 +9,7 @@ import { REPLY_BODY_MAX } from "../../services/offers";
 import { REPLY_FOOTER } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
 import { appendAuditSafely, notInConversation, wasRefused } from "./supportRequestStatus";
+import { rememberLastMessage } from "./supportRequestMarkers";
 
 export interface ReplyToServiceDeskInput {
   /** A tracker key, e.g. "DS-6". */
@@ -46,6 +47,9 @@ export class ReplyToServiceDesk {
       return false;
     }
     const key = request.key;
+    // A message naming this conversation's request becomes its last message, quoted by the next watch update.
+    const replyAbout = async (text: string): Promise<void> =>
+      rememberLastMessage(this.requests, key, await reply(text), "ReplyToServiceDesk", this.logger);
 
     const body = input.body.trim();
     if (!body) {
@@ -62,18 +66,18 @@ export class ReplyToServiceDesk {
     } catch (err) {
       this.logger?.warn("ReplyToServiceDesk: addCustomerReply failed", trackerErrorFields(err));
       if (wasRefused(err)) {
-        await reply(`I'm afraid I couldn't send the reply to **${key}** just now.`);
+        await replyAbout(`I'm afraid I couldn't send the reply to **${key}** just now.`);
         return false;
       }
       // Jira may have accepted the reply, so the attempt is recorded.
       await this.audit(input, key, { supportRequest: key, outcome: "reply_unconfirmed" });
-      await reply(`I'm afraid I couldn't confirm that the reply reached **${key}**. Please check the ticket before sending it again.`);
+      await replyAbout(`I'm afraid I couldn't confirm that the reply reached **${key}**. Please check the ticket before sending it again.`);
       return false;
     }
 
     // The reply is public in Jira now, so an audit failure must not suggest otherwise.
     await this.audit(input, key, { supportRequest: key });
-    await reply(`Sent your reply to **${key}** in Jira.`);
+    await replyAbout(`Sent your reply to **${key}** in Jira.`);
     return true;
   }
 

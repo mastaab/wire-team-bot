@@ -11,6 +11,8 @@ import type { AuditLogEntry, AuditLogRepository } from "../../src/domain/reposit
 import type { SupportRequest, SupportRequestStatusCategory } from "../../src/domain/entities/SupportRequest";
 import { sameQualifiedId } from "../../src/domain/ids/QualifiedId";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
+import type { SentMessageRef } from "../../src/application/ports/WireOutboundPort";
+import { sentRefFor } from "./supportRequestFakes";
 
 const convId: QualifiedId = { id: "conv-1", domain: "wire.com" };
 const otherConv: QualifiedId = { id: "conv-2", domain: "wire.com" };
@@ -79,6 +81,9 @@ function memoryRepo(initial: SupportRequest[]) {
       Object.assign(found, { statusCategory, updatedAt, version: found.version + 1 });
       return { ...found };
     }),
+    listWatched: vi.fn(async () => all.filter((r) => !r.deleted)),
+    advanceLastSeenReplyAt: vi.fn(async (_key: string, _at: Date) => undefined),
+    setLastMessage: vi.fn(async (_key: string, _ref: SentMessageRef) => undefined),
   } satisfies SupportRequestRepository & { all: SupportRequest[] };
 }
 
@@ -107,9 +112,10 @@ function setup(options: SetupOptions = {}) {
   const general = { answer: vi.fn().mockResolvedValue(options.modelAnswer ?? "Here is the answer.") };
   const sent: string[] = [];
   const wire = {
-    sendPlainText: vi.fn(async (_c: QualifiedId, text: string) => {
+    sendPlainText: vi.fn(async (_c: QualifiedId, text: string): Promise<SentMessageRef | undefined> => {
       if (options.sendFails) throw new Error("send failed");
       sent.push(text);
+      return sentRefFor(sent.length);
     }),
   };
   const analysis = { analyse: vi.fn().mockResolvedValue({ complexity: 0.5 }) };
@@ -1141,5 +1147,160 @@ describe("AnswerQuestion with Jira: request kinds and part orders", () => {
       "DS-11 | Summary: Problem DS-11 | Kind: question | Requested by: Alice | Last known status: To do",
       "DS-10 | Summary: Problem DS-10 | Kind: fault | Last known status: To do",
     ]);
+  });
+});
+
+describe("AnswerQuestion with Jira: watch markers", () => {
+  const replies: IssueReply[] = [
+    { author: "Service Desk Agent", created: new Date("2026-09-24T09:00:00Z"), body: "We are looking into it." },
+    { author: "WireTeamBotDemo", created: new Date("2026-09-24T11:00:00Z"), body: "Thanks.", fromThisBot: true },
+    { author: "Service Desk Agent", created: new Date("2026-09-24T10:00:00Z"), body: "Try again now." },
+  ];
+
+  it("stores the answer as the last message of each request of this conversation it names", async () => {
+    const { repo, run } = setup({
+      requests: [makeRequest("DS-6"), makeRequest("DS-7"), makeRequest("DS-8", { conversationId: otherConv })],
+      modelAnswer: "DS-6 is being worked on; DS-7 and DS-8 are waiting, and DS-99 does not exist.",
+    });
+    await run("What is happening with my requests?");
+    expect(repo.setLastMessage).toHaveBeenCalledTimes(2);
+    expect(repo.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+    expect(repo.setLastMessage).toHaveBeenCalledWith("DS-7", sentRefFor(1));
+  });
+
+  it.each([
+    ["from another conversation", makeRequest("DS-6", { conversationId: otherConv })],
+    ["from another domain", makeRequest("DS-6", { conversationId: otherDomain })],
+    ["deleted", makeRequest("DS-6", { deleted: true })],
+  ])("stores nothing for a named request %s", async (_label, request) => {
+    const { repo, run } = setup({ requests: [request], modelAnswer: "DS-6 is being worked on." });
+    await run("What about DS-6?");
+    expect(repo.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("stores nothing for an answer that names no request", async () => {
+    const { repo, run } = setup({ requests: [makeRequest("DS-6")], modelAnswer: "Nothing new." });
+    await run("Anything?");
+    expect(repo.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("marks the newest reply passed to the model as seen after the answer was sent, whoever wrote it", async () => {
+    const { repo, wire, run } = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true, modelAnswer: "The desk asked you to try again.",
+      tracker: { listCustomerReplies: vi.fn(async () => replies) },
+    });
+    await run("Any news on my VPN issue?");
+    expect(repo.advanceLastSeenReplyAt).toHaveBeenCalledTimes(1);
+    expect(repo.advanceLastSeenReplyAt).toHaveBeenCalledWith("DS-6", new Date("2026-09-24T11:00:00Z"));
+    expect(wire.sendPlainText.mock.invocationCallOrder[0]).toBeLessThan(repo.advanceLastSeenReplyAt.mock.invocationCallOrder[0]!);
+  });
+
+  it("does not advance the marker without replies, with sharing off, or when the replies could not be read", async () => {
+    const none = setup({ requests: [makeRequest("DS-6")], shareWithModel: true });
+    await none.run("Any news on my VPN issue?");
+    expect(none.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+
+    const off = setup({ requests: [makeRequest("DS-6")], shareWithModel: false, tracker: { listCustomerReplies: vi.fn(async () => replies) } });
+    await off.run("Any news on my VPN issue?");
+    expect(off.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+
+    const failed = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true,
+      tracker: { listCustomerReplies: vi.fn(async () => { throw new IssueTrackerError("server error", 500); }) },
+    });
+    await failed.run("Any news on my VPN issue?");
+    expect(failed.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+  });
+
+  it("does not advance the marker when the model's answer was not sent: a failed send, an offer, a dropped offer or unaddressed chat", async () => {
+    const tracker = { listCustomerReplies: vi.fn(async () => replies) };
+    const sendFails = setup({ requests: [makeRequest("DS-6")], shareWithModel: true, tracker, sendFails: true });
+    await expect(sendFails.run("Any news on my VPN issue?")).rejects.toThrow();
+    expect(sendFails.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+    expect(sendFails.repo.setLastMessage).not.toHaveBeenCalled();
+
+    const offer = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true, tracker,
+      modelAnswer: 'I can tell them.\nOFFER: {"kind":"reply","issueKey":"DS-6","body":"It still drops."}',
+    });
+    await offer.run("Any news on DS-6? Please tell the service desk it still drops.");
+    expect(offer.sent).toHaveLength(1);
+    expect(offer.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+
+    const dropped = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true, tracker,
+      modelAnswer: 'Done.\nOFFER: {"kind":"resolve","issueKey":"DS-6"}',
+    });
+    await dropped.run("Any news on DS-6?");
+    expect(dropped.sent).toEqual([noChange("resolve")]);
+    expect(dropped.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+    // The code-written refusal names a key it never checked against this conversation.
+    expect(dropped.repo.setLastMessage).not.toHaveBeenCalled();
+
+    const chat = setup({ requests: [makeRequest("DS-6")], shareWithModel: true, tracker, modelAnswer: "DS-6 news." });
+    expect(await chat.run("any news on DS-6 then?", { pendingOffer: { kind: "resolve", issueKey: "DS-6" }, amendOnly: true })).toBe("");
+    expect(chat.sent).toEqual([]);
+    expect(chat.repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+    expect(chat.repo.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["reply", 'OFFER: {"kind":"reply","issueKey":"ds-6","body":"It still drops."}', "Please tell the service desk on DS-6 that it still drops."],
+    ["resolve", 'OFFER: {"kind":"resolve","issueKey":"DS-6"}', "DS-6 works again, please close it."],
+  ])("stores the reference of a %s offer question, which names a request of this conversation", async (_kind, marker, question) => {
+    const { repo, stored, sent, run } = setup({ requests: [makeRequest("DS-6")], modelAnswer: marker });
+    await run(question);
+    expect(sent).toHaveLength(1);
+    expect(stored).toHaveLength(1);
+    expect(repo.setLastMessage).toHaveBeenCalledTimes(1);
+    expect(repo.setLastMessage).toHaveBeenCalledWith("DS-6", sentRefFor(1));
+  });
+
+  it("stores no reference for an offer to raise a new request", async () => {
+    const { repo, sent, run } = setup({
+      requests: [makeRequest("DS-6")],
+      modelAnswer: 'OFFER: {"kind":"support","summary":"Printer jammed","description":"The printer is jammed."}',
+    });
+    await run("The printer is jammed, please raise it with the service desk");
+    expect(sent).toHaveLength(1);
+    expect(repo.setLastMessage).not.toHaveBeenCalled();
+  });
+
+  it("stores no reference when the transport returns none, but still marks the replies seen", async () => {
+    const { repo, wire, run } = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true, modelAnswer: "DS-6: the desk asked you to try again.",
+      tracker: { listCustomerReplies: vi.fn(async () => replies) },
+    });
+    wire.sendPlainText.mockResolvedValueOnce(undefined);
+    await run("Any news on DS-6?");
+    expect(repo.setLastMessage).not.toHaveBeenCalled();
+    expect(repo.advanceLastSeenReplyAt).toHaveBeenCalledWith("DS-6", new Date("2026-09-24T11:00:00Z"));
+  });
+
+  it("keeps the answer when both marker writes fail, logging error names only", async () => {
+    const { sent, logger, run } = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true, modelAnswer: "DS-6: the desk asked you to try again.",
+      tracker: { listCustomerReplies: vi.fn(async () => replies) },
+      repo: {
+        setLastMessage: vi.fn(async () => { throw new Error("SECRET-DB-DETAIL"); }),
+        advanceLastSeenReplyAt: vi.fn(async () => { throw new TypeError("SECRET-DB-DETAIL"); }),
+      },
+    });
+    expect(await run("Any news on DS-6?")).toBe("DS-6: the desk asked you to try again.");
+    expect(sent).toEqual(["DS-6: the desk asked you to try again."]);
+    expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: storing the last message failed", { key: "DS-6", err: "Error" });
+    expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: advancing the last seen reply failed", { key: "DS-6", err: "TypeError" });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("SECRET-DB-DETAIL");
+  });
+
+  it("keeps the answer when looking up a named request after sending fails", async () => {
+    const findByKey = vi.fn()
+      .mockResolvedValueOnce(makeRequest("DS-6"))
+      .mockRejectedValueOnce(new Error("db down"));
+    const { repo, sent, logger, run } = setup({ requests: [makeRequest("DS-6")], modelAnswer: "DS-6 is open.", repo: { findByKey } });
+    expect(await run("What about DS-6?")).toBe("DS-6 is open.");
+    expect(sent).toEqual(["DS-6 is open."]);
+    expect(repo.setLastMessage).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith("AnswerQuestion: support request lookup failed", { err: "Error" });
   });
 });

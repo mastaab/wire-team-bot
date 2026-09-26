@@ -1,5 +1,5 @@
 import type { GeneralAnswerService, ConversationMemberContext } from "../../ports/GeneralAnswerPort";
-import type { WireOutboundPort, OutboundMention } from "../../ports/WireOutboundPort";
+import type { WireOutboundPort, OutboundMention, SentMessageRef } from "../../ports/WireOutboundPort";
 import type { QueryAnalysisPort, MemberContext } from "../../ports/QueryAnalysisPort";
 import type { RetrievalPort, RetrievalResult, RetrievalScope } from "../../ports/RetrievalPort";
 import type { ChannelContext } from "../../ports/ClassifierPort";
@@ -20,6 +20,7 @@ import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../servic
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
 import { findSupportRequestInConversation } from "../jira/supportRequestScope";
+import { markRepliesSeen, rememberLastMessage } from "../jira/supportRequestMarkers";
 import { formatTimeInZone } from "../../services/formatTimeInZone";
 
 /**
@@ -154,12 +155,23 @@ const REPLY_TARGET = /\b(?:service\s+desk|support|jira|tickets?)\b/i;
 interface PreparedOffer {
   question: string;
   offer: PendingOffer;
+  /** The request of this conversation the question names (reply and resolve offers). */
+  requestKey?: string;
 }
 
 /** Live data for one support request, and its record when the read refreshed the stored category. */
 interface LiveTicket {
+  key: string;
   result: RetrievalResult;
   refreshed: SupportRequest | null;
+  /** The public replies passed to the model. */
+  replies: IssueReply[];
+}
+
+/** The support request results for the model, and the live tickets among them. */
+interface SupportRequestContext {
+  results: RetrievalResult[];
+  live: LiveTicket[];
 }
 
 /**
@@ -231,9 +243,12 @@ export class AnswerQuestion {
       }
     }
 
+    let live: LiveTicket[] = [];
     if (this.jira) {
       const now = (this.jira.now ?? (() => new Date()))();
-      retrievalResults = [...retrievalResults, ...(await this.supportRequestContext(this.jira, input))];
+      const context = await this.supportRequestContext(this.jira, input);
+      live = context.live;
+      retrievalResults = [...retrievalResults, ...context.results];
       retrievalResults.push(channelTimezoneResult(input.timezone ?? "UTC", input.channelId, now));
       const amended = amendableOffer(input.pendingOffer);
       if (amended) retrievalResults.push(pendingOfferResult(amended, input.channelId, now));
@@ -274,7 +289,8 @@ export class AnswerQuestion {
       return reply;
     }
     if (!prepared) {
-      await this.send(input, text, true);
+      const sent = await this.send(input, text, true);
+      await this.rememberAnswer(this.jira, input, text, sent, live);
       return text;
     }
 
@@ -282,17 +298,48 @@ export class AnswerQuestion {
     // already happened ("I'll send that ..."), which is wrong until the requester confirms.
     // No mentions: a quoted summary or reply body may contain @names that must not ping members.
     // The offer is stored only after the question was sent, so it is never confirmable unseen.
-    await this.send(input, prepared.question, false);
+    const sent = await this.send(input, prepared.question, false);
     this.jira.offers.put(prepared.offer);
+    // A reply or resolve question names a request of this conversation (checked by the scope
+    // helper), so it becomes that request's last message, quoted by the next watch update.
+    if (prepared.requestKey) {
+      await rememberLastMessage(this.jira.requests, prepared.requestKey, sent, "AnswerQuestion", this.logger);
+    }
     return prepared.question;
   }
 
-  private async send(input: AnswerQuestionInput, text: string, withMentions: boolean): Promise<void> {
+  private async send(input: AnswerQuestionInput, text: string, withMentions: boolean): Promise<SentMessageRef | undefined> {
     const mentions = withMentions ? extractMentions(text, input.members ?? []) : [];
-    await this.wireOutbound.sendPlainText(input.conversationId, text, {
+    return this.wireOutbound.sendPlainText(input.conversationId, text, {
       replyToMessageId: input.replyToMessageId,
       mentions: mentions.length > 0 ? mentions : undefined,
     });
+  }
+
+  /**
+   * After the model's answer was sent: each support request of this conversation it names
+   * (checked by the scope helper, so another channel's key is ignored) gets the answer as its
+   * last message, and the replies passed to the model count as shown, so the watch does not
+   * announce them again. Bookkeeping failures are logged and never change the answer.
+   */
+  private async rememberAnswer(
+    jira: AnswerQuestionJira, input: AnswerQuestionInput, text: string, sent: SentMessageRef | undefined, live: readonly LiveTicket[],
+  ): Promise<void> {
+    if (sent) {
+      for (const key of namedKeys(text, jira.tracker.projectKey).slice(0, NAMED_KEYS_CHECKED)) {
+        let request: SupportRequest | null;
+        try {
+          request = await findSupportRequestInConversation(jira.requests, key, input.conversationId, jira.tracker.projectKey);
+        } catch (err) {
+          this.logger?.warn("AnswerQuestion: support request lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
+          continue;
+        }
+        if (request) await rememberLastMessage(jira.requests, request.key, sent, "AnswerQuestion", this.logger);
+      }
+    }
+    for (const ticket of live) {
+      await markRepliesSeen(jira.requests, ticket.key, ticket.replies, "AnswerQuestion", this.logger);
+    }
   }
 
 
@@ -302,7 +349,7 @@ export class AnswerQuestion {
    * ticket-type question, live data for at most three of them. Named keys go through the scope
    * helper, so another channel's key is neither shown nor fetched.
    */
-  private async supportRequestContext(jira: AnswerQuestionJira, input: AnswerQuestionInput): Promise<RetrievalResult[]> {
+  private async supportRequestContext(jira: AnswerQuestionJira, input: AnswerQuestionInput): Promise<SupportRequestContext> {
     const projectKey = jira.tracker.projectKey;
     const named: SupportRequest[] = [];
     let recent: SupportRequest[] = [];
@@ -317,7 +364,7 @@ export class AnswerQuestion {
     }
     const known = uniqueByKey([...named, ...recent]);
     if (!jira.shareWithModel || !asksAboutTickets(input.question, projectKey)) {
-      return known.map((request) => storedRequestResult(request, input.channelId));
+      return { results: known.map((request) => storedRequestResult(request, input.channelId)), live: [] };
     }
 
     let open: SupportRequest[] = [];
@@ -334,7 +381,10 @@ export class AnswerQuestion {
       const index = known.findIndex((request) => request.key === refreshed.key);
       if (index >= 0) known[index] = refreshed;
     }
-    return [...known.map((request) => storedRequestResult(request, input.channelId)), ...live.map((ticket) => ticket.result)];
+    return {
+      results: [...known.map((request) => storedRequestResult(request, input.channelId)), ...live.map((ticket) => ticket.result)],
+      live,
+    };
   }
 
   /**
@@ -358,6 +408,8 @@ export class AnswerQuestion {
       }
       if (!snapshot) return null;
       return {
+        key: request.key,
+        replies,
         result: {
           id: request.key,
           type: "jira_ticket",
@@ -390,9 +442,12 @@ export class AnswerQuestion {
 
     const requester = input.requester;
     let question: string | null = null;
+    let requestKey: string | undefined;
     if (requester?.domain) {
       try {
-        question = await this.offerQuestion(jira, command, input.conversationId);
+        const validated = await this.offerQuestion(jira, command, input.conversationId);
+        question = validated?.question ?? null;
+        requestKey = validated?.requestKey;
       } catch (err) {
         this.logger?.warn("AnswerQuestion: offer validation failed", { kind: command.kind, err: err instanceof Error ? err.name : "UnknownError" });
         return null;
@@ -406,6 +461,7 @@ export class AnswerQuestion {
     const now = (jira.now ?? (() => new Date()))();
     return {
       question,
+      ...(requestKey ? { requestKey } : {}),
       offer: {
         command,
         conversationId: input.conversationId,
@@ -417,23 +473,28 @@ export class AnswerQuestion {
   }
 
   /**
-   * Validates the proposed command against the records; returns the question, or null when invalid.
+   * Validates the proposed command against the records; returns the question and, for a reply
+   * or resolve, the key of the request of this conversation it names, or null when invalid.
    * Every question ends with "?" so the router treats a non-exact answer as a follow-up.
    */
-  private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId): Promise<string | null> {
+  private async offerQuestion(
+    jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId,
+  ): Promise<{ question: string; requestKey?: string } | null> {
     if (command.kind === "support") {
       // An incomplete part order is stored as an amendable draft: the requester's answer fills it.
       const missing = missingPartDetails(command);
-      return missing.length > 0
-        ? formatMissingPartsQuestion(missing)
-        : formatSupportQuestion(command.summary, command.description, command.requestKind, command.part);
+      return {
+        question: missing.length > 0
+          ? formatMissingPartsQuestion(missing)
+          : formatSupportQuestion(command.summary, command.description, command.requestKind, command.part),
+      };
     }
 
     const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
     if (!request) return null;
-    if (command.kind === "reply") return formatReplyQuestion(request.key, request.summary, command.body);
+    if (command.kind === "reply") return { question: formatReplyQuestion(request.key, request.summary, command.body), requestKey: request.key };
     // A request last known as done is not dropped: the desk may have reopened it, and the use case checks live.
-    return formatResolveQuestion(request.key, request.summary, command.comment);
+    return { question: formatResolveQuestion(request.key, request.summary, command.comment), requestKey: request.key };
   }
 }
 

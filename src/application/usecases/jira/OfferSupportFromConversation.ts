@@ -7,13 +7,14 @@ import type { SupportRequestRepository } from "../../../domain/repositories/Supp
 import type { MessageCategory } from "../../ports/ClassifierPort";
 import type { OfferCommand, PendingOfferStore } from "../../ports/PendingOfferPort";
 import type { OpenRequestRef, SupportDraft, SupportTriagePort } from "../../ports/SupportTriagePort";
-import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import {
   OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, PART_DETAIL_FIELDS, REPLY_BODY_MAX,
   formatMissingPartsQuestion, formatReplyQuestion, formatResolveQuestion, formatSupportQuestion, missingPartDetails,
 } from "../../services/offers";
 import type { GetIssueStatus } from "./GetIssueStatus";
+import { rememberLastMessage } from "./supportRequestMarkers";
 
 /** Classifier confidence required before passive help acts on a message. */
 export const PASSIVE_CONFIDENCE_MIN = 0.8;
@@ -222,27 +223,34 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
   /**
    * Sends the code-written question as a native reply to the source message, then stores the
    * offer for the speaker. True when the question was sent, even if a pause during the send
-   * means the offer is not stored.
+   * means the offer is not stored. A reply or resolve offer names an open request of this
+   * conversation, so it becomes that request's last message, quoted by the next watch update.
    */
   private async offer(input: OfferSupportInput, question: string, command: OfferCommand): Promise<boolean> {
     if (input.signal?.aborted || this.offers.has(input.conversationId, input.senderId)) return false;
+    let sent: SentMessageRef | undefined;
     try {
-      await this.wireOutbound.sendPlainText(input.conversationId, question, { replyToMessageId: input.messageId });
+      sent = await this.wireOutbound.sendPlainText(input.conversationId, question, { replyToMessageId: input.messageId });
     } catch (err) {
       this.logger?.warn("OfferSupportFromConversation: sending the offer failed", { err: errorName(err) });
       return false;
     }
     // A pause or secure during the send has already cleared the conversation's offers; storing
     // this one now would let it survive into the paused channel.
-    if (input.signal?.aborted) return true;
-    const now = this.now();
-    this.offers.put({
-      command,
-      conversationId: input.conversationId,
-      requesterId: input.senderId,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + OFFER_TTL_MS),
-    });
+    if (!input.signal?.aborted) {
+      const now = this.now();
+      this.offers.put({
+        command,
+        conversationId: input.conversationId,
+        requesterId: input.senderId,
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + OFFER_TTL_MS),
+      });
+    }
+    // The question is in the channel either way; only its ID and hash are kept.
+    if (command.kind !== "support") {
+      await rememberLastMessage(this.requests, command.issueKey, sent, "OfferSupportFromConversation", this.logger);
+    }
     return true;
   }
 }
