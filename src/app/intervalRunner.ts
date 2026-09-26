@@ -1,7 +1,8 @@
 import type { Logger } from "../application/ports/Logger";
 
 export interface IntervalRunner {
-  stop(): void;
+  /** Stops further runs; resolves once a run in progress has finished. */
+  stop(): Promise<void>;
 }
 
 /**
@@ -14,25 +15,27 @@ export function startIntervalRunner(
   intervalMs: number,
   logger: Logger,
 ): IntervalRunner {
-  let running = false;
+  let current: Promise<void> | undefined;
   let stopped = false;
-  const tick = async (): Promise<void> => {
-    if (running || stopped) return;
-    running = true;
-    try {
-      await task();
-    } catch (err) {
-      logger.warn(`${name}: run failed`, { err: err instanceof Error ? err.name : "UnknownError" });
-    } finally {
-      running = false;
-    }
+  const tick = (): void => {
+    if (current || stopped) return;
+    current = (async () => {
+      try {
+        await task();
+      } catch (err) {
+        logger.warn(`${name}: run failed`, { err: err instanceof Error ? err.name : "UnknownError" });
+      } finally {
+        current = undefined;
+      }
+    })();
   };
-  const timer = setInterval(() => void tick(), intervalMs);
+  const timer = setInterval(tick, intervalMs);
   timer.unref?.();
   return {
-    stop() {
+    async stop() {
       stopped = true;
       clearInterval(timer);
+      await current;
     },
   };
 }

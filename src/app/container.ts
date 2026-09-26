@@ -39,6 +39,7 @@ import { InMemoryPendingOfferStore } from "../infrastructure/services/InMemoryPe
 import { ReplyToServiceDesk } from "../application/usecases/jira/ReplyToServiceDesk";
 import { ConfirmOffer } from "../application/usecases/jira/ConfirmOffer";
 import { WatchSupportRequests } from "../application/usecases/jira/WatchSupportRequests";
+import { SupportRequestWrites } from "../application/services/SupportRequestWrites";
 import { startIntervalRunner, type IntervalRunner } from "./intervalRunner";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
@@ -220,11 +221,14 @@ export function createContainer(config: Config, logger: Logger): Container {
   // Customer demo: support requests, built once so ConfirmOffer shares the router's instances.
   const raiseSupportRequest = issueTracker && supportRequestsRepo ? new RaiseSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger, config.jira?.requestTypes) : undefined;
   const listSupportRequests = issueTracker && supportRequestsRepo ? new ListSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
-  const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
+  // Shared by resolve and the watch, so a resolve from Wire is never announced as the desk's.
+  const supportRequestWrites = new SupportRequestWrites();
+  const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger, supportRequestWrites) : undefined;
   const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   // Announces changes made in Jira; started once the Wire client is ready (see getWireClient).
   const watchSupportRequests = issueTracker && supportRequestsRepo && config.jira?.watchSeconds
-    ? new WatchSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, channelConfigRepo, logger)
+    ? new WatchSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, channelConfigRepo, logger, undefined,
+      { conversations: conversationConfigRepo, writes: supportRequestWrites })
     : undefined;
   const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
     ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)
@@ -413,7 +417,7 @@ export function createContainer(config: Config, logger: Logger): Container {
       return sdkPromise;
     },
     async shutdown(): Promise<void> {
-      jiraWatch?.stop();
+      await jiraWatch?.stop();
       await getPrismaClient().$disconnect();
     },
   };

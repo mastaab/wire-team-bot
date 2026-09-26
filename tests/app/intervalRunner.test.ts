@@ -13,7 +13,7 @@ describe("startIntervalRunner", () => {
     expect(task).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(3000);
     expect(task).toHaveBeenCalledTimes(3);
-    runner.stop();
+    await runner.stop();
     await vi.advanceTimersByTimeAsync(3000);
     expect(task).toHaveBeenCalledTimes(3);
   });
@@ -27,7 +27,22 @@ describe("startIntervalRunner", () => {
     finish();
     await vi.advanceTimersByTimeAsync(1000);
     expect(task).toHaveBeenCalledTimes(2);
-    runner.stop();
+    finish();
+    await runner.stop();
+  });
+
+  it("waits for a run in progress when stopped", async () => {
+    let finish: () => void = () => {};
+    const task = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const runner = startIntervalRunner("watch", task, 1000, logger);
+    await vi.advanceTimersByTimeAsync(1000);
+    let stopped = false;
+    const stopping = runner.stop().then(() => { stopped = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    finish();
+    await stopping;
+    expect(stopped).toBe(true);
   });
 
   it("logs a failed run by error name only and tries again at the next tick", async () => {
@@ -37,6 +52,6 @@ describe("startIntervalRunner", () => {
     expect(task).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith("watch: run failed", { err: "TypeError" });
     expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("reply text");
-    runner.stop();
+    await runner.stop();
   });
 });

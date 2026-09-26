@@ -562,11 +562,27 @@ describe("JiraServiceManagementAdapter.listChangedSince", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("splits a batch Jira rejects for an unknown key and leaves that key out", async () => {
+    const log = logger();
+    // Jira rejects any search that lists DS-3, as it does for a deleted or invisible key.
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      const { jql } = JSON.parse(init.body as string) as { jql: string };
+      if (/\bDS-3\b/.test(jql)) return json({ errorMessages: [MARKER] }, 400)();
+      const keys = [...jql.matchAll(/DS-\d+/g)].map((m) => m[0]);
+      return json({ isLast: true, issues: keys.map((k) => found(k, "new", "2026-09-26T10:00:00.000Z")) })();
+    });
+    vi.stubGlobal("fetch", fetch);
+    const changes = await adapter(log).listChangedSince(["DS-1", "DS-2", "DS-3", "DS-4"]);
+    expect(changes.map((c) => c.key)).toEqual(["DS-1", "DS-2", "DS-4"]);
+    expect(log.warn).toHaveBeenCalledWith(expect.any(String), { key: "DS-3" });
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(MARKER);
+  });
+
   it("surfaces failures as tracker errors without the body", async () => {
     const log = logger();
-    stubJira({ [SEARCH]: [json({ errorMessages: [MARKER] }, 400)] });
+    stubJira({ [SEARCH]: [json({ errorMessages: [MARKER] }, 500)] });
     const error = await adapter(log).listChangedSince(["DS-1"]).catch((e: Error) => e);
-    expect((error as Error).message).toBe("Jira request failed (400)");
+    expect((error as Error).message).toBe("Jira request failed (500)");
     expect((error as Error).name).toBe("IssueTrackerError");
     expect(JSON.stringify([error, log.warn.mock.calls, log.error.mock.calls])).not.toContain(MARKER);
   });

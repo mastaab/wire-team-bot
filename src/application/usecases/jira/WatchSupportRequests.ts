@@ -1,13 +1,15 @@
 import type { ChannelConfigRepository } from "../../../domain/repositories/ChannelConfigRepository";
+import type { ConversationConfigRepository } from "../../../domain/repositories/ConversationConfigRepository";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import type { SupportRequest, SupportRequestStatusCategory } from "../../../domain/entities/SupportRequest";
 import { toChannelId } from "../../../domain/ids/channelId";
 import { isKeyInProject } from "../../../domain/ids/jiraLink";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
-import type { IssueChange, IssueReply, IssueTrackerPort } from "../../ports/IssueTrackerPort";
+import type { IssueChange, IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
+import { SupportRequestWrites } from "../../services/SupportRequestWrites";
 import { formatReplies, formatSla, type RepliesHeading } from "./formatIssue";
 import { botActor, refreshStatusCategory } from "./supportRequestStatus";
 
@@ -24,6 +26,20 @@ const RESOLVED_WATCH_MS = 24 * 60 * 60 * 1000;
 const REPLIES_READ = 10;
 /** New replies shown in one update. */
 const REPLIES_SHOWN = 3;
+
+/**
+ * Changes are asked for from this long before the previous check: Jira's search is eventually
+ * consistent and its clock may differ from ours. Examining a request twice is harmless, since
+ * the markers only move forward.
+ */
+const SINCE_OVERLAP_MS = 2 * 60 * 1000;
+
+export interface WatchGuards {
+  /** The older secret-mode flag, which counts as secure for a channel without a channel config. */
+  conversations?: ConversationConfigRepository;
+  /** Shared with `ResolveSupportRequest`; a request being resolved from Wire is skipped. */
+  writes?: SupportRequestWrites;
+}
 
 const NEW_REPLIES_HEADING: RepliesHeading = {
   one: "New reply from the service desk:",
@@ -54,6 +70,7 @@ export class WatchSupportRequests {
     private readonly channels: ChannelConfigRepository,
     private readonly logger?: Logger,
     private readonly now: () => Date = () => new Date(),
+    private readonly guards: WatchGuards = {},
   ) {}
 
   async check(): Promise<WatchCheckResult> {
@@ -80,12 +97,12 @@ export class WatchSupportRequests {
 
     let changes: IssueChange[];
     try {
-      changes = await this.tracker.listChangedSince([...byKey.keys()], this.lastCheck);
+      changes = await this.tracker.listChangedSince([...byKey.keys()], this.askFrom());
     } catch (err) {
       this.logger?.warn("WatchSupportRequests: listChangedSince failed", trackerErrorFields(err));
       return this.result(0);
     }
-    const since = this.lastCheck;
+    const since = this.askFrom();
     this.lastCheck = checkTime;
 
     const toExamine = new Map(this.pending);
@@ -114,34 +131,53 @@ export class WatchSupportRequests {
     return this.result(announced);
   }
 
+  private askFrom(): Date | undefined {
+    return this.lastCheck ? new Date(this.lastCheck.getTime() - SINCE_OVERLAP_MS) : undefined;
+  }
+
   private result(announced: number): WatchCheckResult {
     return { announced, pending: this.pending.size };
   }
 
   /** Posts the update for one request when there is one and stores the new markers. */
-  private async examine(request: SupportRequest, change: IssueChange): Promise<"announced" | "silent" | "pending"> {
-    const channel = await this.channels.get(toChannelId(request.conversationId));
-    if (channel?.state === "paused" || channel?.state === "secure") return "pending";
-    const timeZone = channel?.timezone || "UTC";
+  private async examine(listed: SupportRequest, change: IssueChange): Promise<"announced" | "silent" | "pending"> {
+    if (this.guards.writes?.has(listed.key)) return "pending";
+    // Re-read: a resolve, `status of` or answer during this check may have moved the markers.
+    const request = await this.requests.findByKey(listed.key);
+    if (!request || request.deleted) return "silent";
+    const timeZone = await this.activeTimeZone(request);
+    if (!timeZone) return "pending";
 
     const replies = await this.tracker.listCustomerReplies(request.key, REPLIES_READ);
     const newest = newestReplyTime(replies);
+    // First sight of this request: take a baseline of replies and status so nothing old is announced.
+    const baseline = !request.lastSeenReplyAt;
     let newReplies: IssueReply[] = [];
     let seenUpTo: Date | undefined;
-    if (!request.lastSeenReplyAt) {
-      // First sight of this request: take a baseline so nothing old is announced.
+    if (baseline) {
       seenUpTo = newest ?? request.createdAt;
     } else {
-      const lastSeen = request.lastSeenReplyAt.getTime();
+      const lastSeen = request.lastSeenReplyAt!.getTime();
       newReplies = replies
         .filter((reply) => reply.created.getTime() > lastSeen && !reply.fromThisBot)
         .slice(-REPLIES_SHOWN);
       if (newest && newest.getTime() > lastSeen) seenUpTo = newest;
     }
 
-    const statusLines = await this.statusLines(request, change.statusCategory);
+    // The listed category may be stale (a pending key, or a change the bot made meanwhile), so
+    // a difference is confirmed with a live read before it is announced or stored.
+    let status = change.statusCategory;
+    let snapshot: IssueSnapshot | null = null;
+    if (status !== request.statusCategory) {
+      snapshot = await this.tracker.getIssue(request.key);
+      if (!snapshot) return "silent";
+      status = snapshot.statusCategory;
+    }
+    const statusLines = baseline ? [] : statusChangeLines(request.statusCategory, status, snapshot);
     const announce = statusLines.length > 0 || newReplies.length > 0;
     if (announce) {
+      // Checked again just before posting: a pause, secure or resolve may have started during the reads.
+      if (this.guards.writes?.has(request.key) || !(await this.activeTimeZone(request))) return "pending";
       const text = [
         `**${request.key}** ${request.summary}`,
         ...statusLines,
@@ -167,7 +203,7 @@ export class WatchSupportRequests {
 
     const now = this.now();
     await refreshStatusCategory(
-      this.requests, this.auditLog, request, change.statusCategory, botActor(request.conversationId), this.logger, now,
+      this.requests, this.auditLog, request, status, botActor(request.conversationId), this.logger, now,
     );
     if (seenUpTo) {
       try {
@@ -179,26 +215,27 @@ export class WatchSupportRequests {
     return announce ? "announced" : "silent";
   }
 
-  /** The status line for a category change, with the SLA outcome after a resolve; none otherwise. */
-  private async statusLines(request: SupportRequest, next: SupportRequestStatusCategory): Promise<string[]> {
-    const previous = request.statusCategory;
-    if (previous === next) return [];
-    if (next === "done") return ["Resolved by the service desk.", ...(await this.slaLines(request.key))];
-    if (previous === "done") return ["Reopened by the service desk."];
-    if (next === "in_progress") return ["Now in progress."];
-    return ["Moved back to To do."];
+  /**
+   * The channel's timezone when the bot may post there, or undefined when it is paused or secure.
+   * Without a channel config, the older secret-mode flag counts as secure, as in the router.
+   */
+  private async activeTimeZone(request: SupportRequest): Promise<string | undefined> {
+    const channel = await this.channels.get(toChannelId(request.conversationId));
+    if (channel) return channel.state === "active" ? channel.timezone || "UTC" : undefined;
+    const legacy = await this.guards.conversations?.get(request.conversationId);
+    return legacy?.secretMode ? undefined : "UTC";
   }
+}
 
-  /** SLA outcome lines; none when the read fails. */
-  private async slaLines(key: string): Promise<string[]> {
-    try {
-      const snapshot = await this.tracker.getIssue(key);
-      return snapshot ? snapshot.slas.map(formatSla) : [];
-    } catch (err) {
-      this.logger?.warn("WatchSupportRequests: getIssue failed", { key, ...trackerErrorFields(err) });
-      return [];
-    }
-  }
+/** The status line for a category change, with the SLA outcome after a resolve; none otherwise. */
+function statusChangeLines(
+  previous: SupportRequestStatusCategory, next: SupportRequestStatusCategory, snapshot: IssueSnapshot | null,
+): string[] {
+  if (previous === next) return [];
+  if (next === "done") return ["Resolved by the service desk.", ...(snapshot?.slas.map(formatSla) ?? [])];
+  if (previous === "done") return ["Reopened by the service desk."];
+  if (next === "in_progress") return ["Now in progress."];
+  return ["Moved back to To do."];
 }
 
 function newestReplyTime(replies: readonly IssueReply[]): Date | undefined {

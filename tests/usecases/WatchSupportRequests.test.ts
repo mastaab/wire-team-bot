@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { WatchSupportRequests } from "../../src/application/usecases/jira/WatchSupportRequests";
+import type { WatchGuards } from "../../src/application/usecases/jira/WatchSupportRequests";
+import { SupportRequestWrites } from "../../src/application/services/SupportRequestWrites";
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import type { ChannelConfig, ChannelState } from "../../src/domain/repositories/ChannelConfigRepository";
@@ -35,21 +37,33 @@ const change = (key: string, statusCategory: IssueStatusCategory, updated: Date)
 const reply = (author: string, at: string, body: string, fromThisBot = false): IssueReply =>
   ({ author, created: new Date(at), body, fromThisBot });
 
+/** The `since` the watch passes: two minutes before the previous check, for late search results and clock skew. */
+const ago = (d: Date) => new Date(d.getTime() - 2 * 60 * 1000);
+
 /** A clock that returns the given times in order and repeats the last one. */
 function clock(...times: Date[]) {
   const queue = [...times];
   return vi.fn(() => (queue.length > 1 ? queue.shift()! : queue[0]));
 }
 
-function setup(records: SupportRequest[], options: { channels?: ReturnType<typeof makeChannels>; now?: () => Date } = {}) {
+function setup(
+  records: SupportRequest[],
+  options: { channels?: ReturnType<typeof makeChannels>; now?: () => Date; guards?: WatchGuards } = {},
+) {
   const requests = makeRequests(records);
   const tracker = makeTracker();
+  // By default the live read confirms the category the latest change check listed.
+  tracker.getIssue.mockImplementation(async (key: string) => {
+    const listed = tracker.listChangedSince.mock.settledResults.at(-1);
+    const found = listed?.type === "fulfilled" ? (listed.value as IssueChange[]).find((c) => c.key === key) : undefined;
+    return makeSnapshot({ key, ...(found ? { statusCategory: found.statusCategory } : {}) });
+  });
   const { wire, sent } = makeWire();
   const audit = makeAudit();
   const logger = makeLogger();
   const channels = options.channels ?? makeChannels();
   const watcher = new WatchSupportRequests(
-    requests, tracker, wire, audit, channels, logger, options.now ?? (() => T0),
+    requests, tracker, wire, audit, channels, logger, options.now ?? (() => T0), options.guards,
   );
   return { requests, tracker, wire, sent, audit, logger, channels, watcher };
 }
@@ -74,14 +88,24 @@ describe("WatchSupportRequests: first check and baseline", () => {
     expect(wire.sendPlainText).not.toHaveBeenCalled();
   });
 
-  it("asks from the previous check time on the next check and ignores changes at or before it", async () => {
+  it("asks from two minutes before the previous check and ignores changes at or before that", async () => {
     const t1 = new Date("2026-09-26T10:00:30Z");
     const { watcher, tracker, wire } = setup([watched()], { now: clock(T0, T0, t1) });
     await watcher.check();
-    tracker.listChangedSince.mockResolvedValue([change("DS-6", "in_progress", T0)]);
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "in_progress", ago(T0))]);
     await watcher.check();
-    expect(tracker.listChangedSince).toHaveBeenLastCalledWith(["DS-6"], T0);
+    expect(tracker.listChangedSince).toHaveBeenLastCalledWith(["DS-6"], ago(T0));
     expect(wire.sendPlainText).not.toHaveBeenCalled();
+  });
+
+  it("still announces a change that reached Jira's search late, within the overlap", async () => {
+    const t1 = new Date("2026-09-26T10:00:30Z");
+    const { watcher, tracker, sent } = setup([watched()], { now: clock(T0, T0, t1) });
+    await watcher.check();
+    // Updated just before the previous check, but only searchable now.
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "in_progress", new Date("2026-09-26T09:59:50Z"))]);
+    await watcher.check();
+    expect(sent).toEqual(["**DS-6** VPN drops every ten minutes\nNow in progress."]);
   });
 
   it("lists watched requests with resolved ones from the last day", async () => {
@@ -98,7 +122,7 @@ describe("WatchSupportRequests: first check and baseline", () => {
     expect(tracker.listChangedSince).not.toHaveBeenCalled();
     records.push(watched());
     await watcher.check();
-    expect(tracker.listChangedSince).toHaveBeenCalledWith(["DS-6"], T0);
+    expect(tracker.listChangedSince).toHaveBeenCalledWith(["DS-6"], ago(T0));
   });
 
   it("leaves out records outside the tracker's project", async () => {
@@ -226,13 +250,28 @@ describe("WatchSupportRequests: status changes", () => {
     ].join("\n")]);
   });
 
-  it("announces a resolve without SLA lines when reading them fails", async () => {
-    const { watcher, tracker, sent, logger } = setup([watched()]);
+  it("keeps a status change pending when the live read fails, and announces it at the next check", async () => {
+    const { watcher, tracker, sent, requests, logger } = setup([watched()]);
     tracker.listChangedSince.mockResolvedValue([change("DS-6", "done", T0)]);
-    tracker.getIssue.mockRejectedValue(new IssueTrackerError("Jira request failed (500)", 500));
-    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
-    expect(sent).toEqual(["**DS-6** VPN drops every ten minutes\nResolved by the service desk."]);
+    const follow = tracker.getIssue.getMockImplementation()!;
+    tracker.getIssue.mockRejectedValueOnce(new IssueTrackerError("Jira request failed (500)", 500));
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
+    expect(sent).toEqual([]);
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { key: "DS-6", err: "IssueTrackerError", status: 500 });
+    tracker.getIssue.mockImplementation(follow);
+    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    expect(sent[0]).toContain("Resolved by the service desk.");
+  });
+
+  it("trusts the live category over a stale listed one", async () => {
+    // Listed as done, but the ticket is back in progress by the time it is read.
+    const { watcher, tracker, sent, requests } = setup([watched({ statusCategory: "in_progress" })]);
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "done", T0)]);
+    tracker.getIssue.mockResolvedValue(makeSnapshot({ statusCategory: "in_progress" }));
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
+    expect(sent).toEqual([]);
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -299,7 +338,7 @@ describe("WatchSupportRequests: paused and secure channels", () => {
     setState(channels, "active");
     tracker.listChangedSince.mockResolvedValueOnce([]);
     expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
-    expect(tracker.listChangedSince).toHaveBeenLastCalledWith(["DS-6"], t1);
+    expect(tracker.listChangedSince).toHaveBeenLastCalledWith(["DS-6"], ago(t1));
     expect(sent).toEqual([[
       "**DS-6** VPN drops every ten minutes",
       "Now in progress.",
@@ -364,9 +403,9 @@ describe("WatchSupportRequests: failures", () => {
     expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
     expect(logger.warn).toHaveBeenCalledWith(expect.any(String), { err: "IssueTrackerError", status: 503 });
     await watcher.check();
-    expect(tracker.listChangedSince.mock.calls.map((c) => c[1])).toEqual([undefined, T0, T0]);
+    expect(tracker.listChangedSince.mock.calls.map((c) => c[1])).toEqual([undefined, ago(T0), ago(T0)]);
     await watcher.check();
-    expect(tracker.listChangedSince).toHaveBeenLastCalledWith(["DS-6"], t2);
+    expect(tracker.listChangedSince).toHaveBeenLastCalledWith(["DS-6"], ago(t2));
   });
 
   it("does not let one failing request stop the others", async () => {
@@ -433,5 +472,78 @@ describe("formatReplies heading", () => {
       "",
       "https://jira.test/browse/DS-6",
     ].join("\n"));
+  });
+});
+
+describe("WatchSupportRequests: review guards", () => {
+  it("baselines the status too on first sight, so an old resolve is not announced", async () => {
+    const { watcher, tracker, sent, requests } = setup([makeRequest({ statusCategory: "todo" })]);
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "done", T0)]);
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
+    expect(sent).toEqual([]);
+    expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "done", T0);
+  });
+
+  it("skips a request the bot is resolving from Wire and keeps it pending", async () => {
+    const writes = new SupportRequestWrites();
+    const { watcher, tracker, sent, requests } = setup([watched({ statusCategory: "in_progress" })], { guards: { writes } });
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "done", T0)]);
+    let finish: () => void = () => {};
+    const resolving = writes.during("DS-6", () => new Promise<void>((resolve) => { finish = resolve; }));
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
+    expect(sent).toEqual([]);
+    expect(requests.updateStatusCategory).not.toHaveBeenCalled();
+    finish();
+    await resolving;
+    expect(writes.has("DS-6")).toBe(false);
+  });
+
+  it("does not post when a resolve from Wire starts during the reads", async () => {
+    const writes = new SupportRequestWrites();
+    const { watcher, tracker, sent } = setup([watched({ statusCategory: "in_progress" })], { guards: { writes } });
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "done", T0)]);
+    let finish: () => void = () => {};
+    tracker.listCustomerReplies.mockImplementation(async () => {
+      void writes.during("DS-6", () => new Promise<void>((resolve) => { finish = resolve; }));
+      return [];
+    });
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
+    expect(sent).toEqual([]);
+    finish();
+  });
+
+  it("does not post when the channel is paused during the reads", async () => {
+    const channels = makeChannels();
+    const { watcher, tracker, sent, requests } = setup([watched()], { channels });
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "todo", T0)]);
+    tracker.listCustomerReplies.mockImplementation(async () => {
+      setState(channels, "paused");
+      return [reply("Dana", "2026-09-26T09:30:00Z", "Looking into it.")];
+    });
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
+    expect(sent).toEqual([]);
+    expect(requests.advanceLastSeenReplyAt).not.toHaveBeenCalled();
+  });
+
+  it("treats a channel without a config but with the older secret-mode flag as secure", async () => {
+    const conversations = { get: vi.fn().mockResolvedValue({ secretMode: true }), upsert: vi.fn() };
+    const { watcher, tracker, sent } = setup([watched()], {
+      channels: makeChannels(), guards: { conversations: conversations as unknown as WatchGuards["conversations"] },
+    });
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "in_progress", T0)]);
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
+    expect(sent).toEqual([]);
+    expect(conversations.get).toHaveBeenCalledWith(convId);
+  });
+
+  it("uses the record as stored now, so a reply `status of` just showed is not announced again", async () => {
+    const records = [watched()];
+    const { watcher, tracker, requests, sent } = setup(records);
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "todo", T0)]);
+    tracker.listCustomerReplies.mockResolvedValue([reply("Dana", "2026-09-26T09:30:00Z", "Please restart the router.")]);
+    // `status of` ran after the watch listed the request and moved the marker past the reply.
+    requests.findByKey.mockResolvedValueOnce({ ...records[0]!, lastSeenReplyAt: new Date("2026-09-26T09:30:00Z") });
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
+    expect(sent).toEqual([]);
   });
 });

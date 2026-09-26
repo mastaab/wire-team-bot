@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { ResolveSupportRequest } from "../../src/application/usecases/jira/ResolveSupportRequest";
 import { REPLY_BODY_MAX } from "../../src/application/services/offers";
+import { SupportRequestWrites } from "../../src/application/services/SupportRequestWrites";
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import { OUT_OF_SCOPE, bob, convId, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire, sentRefFor } from "./supportRequestFakes";
@@ -21,6 +22,23 @@ function setup(records: SupportRequest[] = [makeRequest()]) {
 const base = { issueKey: "ds-6", conversationId: convId, actorId: bob, replyToMessageId: "msg-1" };
 
 describe("ResolveSupportRequest", () => {
+  it("marks the key as being written from the resolve until the new category is stored", async () => {
+    const records = [makeRequest()];
+    const requests = makeRequests(records);
+    const tracker = makeTracker();
+    const writes = new SupportRequestWrites();
+    const during: boolean[] = [];
+    tracker.resolveIssue.mockImplementation(async () => { during.push(writes.has("DS-6")); return done; });
+    const store = requests.updateStatusCategory.getMockImplementation()!;
+    requests.updateStatusCategory.mockImplementation(async (...args) => { during.push(writes.has("DS-6")); return store(...args); });
+    const useCase = new ResolveSupportRequest(requests, tracker, makeWire().wire, makeAudit(), makeLogger(), writes);
+
+    await useCase.execute(base);
+
+    expect(during).toEqual([true, true]);
+    expect(writes.has("DS-6")).toBe(false);
+  });
+
   it("resolves the request, stores the category, audits the actor and reports the SLA outcome", async () => {
     const { requests, tracker, wire, sent, audit, useCase } = setup();
 

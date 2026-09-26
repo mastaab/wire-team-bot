@@ -251,28 +251,55 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
       : "";
     const changes: IssueChange[] = [];
     for (let start = 0; start < unique.length; start += SEARCH_BATCH_SIZE) {
-      const batch = unique.slice(start, start + SEARCH_BATCH_SIZE);
-      const jql = `project = ${this.projectKey} AND key in (${batch.join(", ")})${bound}`;
-      let nextPageToken: string | undefined;
-      for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
-        const res = await this.request<JiraSearchPage>("POST", "/rest/api/3/search/jql", {
-          jql,
-          fields: ["status", "updated"],
-          maxResults: SEARCH_BATCH_SIZE,
-          ...(nextPageToken ? { nextPageToken } : {}),
-        });
-        for (const issue of res.data?.issues ?? []) {
-          const key = issue.key;
-          if (typeof key !== "string" || !isKeyInProject(key, this.projectKey)) continue;
-          const updated = parseJiraTime(issue.fields?.updated);
-          if (!updated) continue;
-          if (since && updated.getTime() <= since.getTime()) continue;
-          changes.push({ key, statusCategory: toCategory(issue.fields?.status?.statusCategory?.key), updated });
-        }
-        const token = res.data?.nextPageToken;
-        nextPageToken = typeof token === "string" && token ? token : undefined;
-        if (!nextPageToken || res.data?.isLast === true) break;
+      changes.push(...(await this.searchChanged(unique.slice(start, start + SEARCH_BATCH_SIZE), bound, since)));
+    }
+    return changes;
+  }
+
+  /**
+   * One batch of the change check. Jira rejects the whole search (400) when one listed key no
+   * longer exists or is not visible, so a rejected batch is split and retried, and a key that
+   * is rejected on its own is left out, as the port promises.
+   */
+  private async searchChanged(batch: readonly string[], bound: string, since?: Date): Promise<IssueChange[]> {
+    try {
+      return await this.searchChangedPages(batch, bound, since);
+    } catch (err) {
+      if (!(err instanceof IssueTrackerError) || err.status !== 400) throw err;
+      if (batch.length === 1) {
+        this.logger.warn("Jira change check: key rejected, left out", { key: batch[0] });
+        return [];
       }
+      const half = Math.ceil(batch.length / 2);
+      return [
+        ...(await this.searchChanged(batch.slice(0, half), bound, since)),
+        ...(await this.searchChanged(batch.slice(half), bound, since)),
+      ];
+    }
+  }
+
+  private async searchChangedPages(batch: readonly string[], bound: string, since?: Date): Promise<IssueChange[]> {
+    const changes: IssueChange[] = [];
+    const jql = `project = ${this.projectKey} AND key in (${batch.join(", ")})${bound}`;
+    let nextPageToken: string | undefined;
+    for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+      const res = await this.request<JiraSearchPage>("POST", "/rest/api/3/search/jql", {
+        jql,
+        fields: ["status", "updated"],
+        maxResults: SEARCH_BATCH_SIZE,
+        ...(nextPageToken ? { nextPageToken } : {}),
+      });
+      for (const issue of res.data?.issues ?? []) {
+        const key = issue.key;
+        if (typeof key !== "string" || !isKeyInProject(key, this.projectKey)) continue;
+        const updated = parseJiraTime(issue.fields?.updated);
+        if (!updated) continue;
+        if (since && updated.getTime() <= since.getTime()) continue;
+        changes.push({ key, statusCategory: toCategory(issue.fields?.status?.statusCategory?.key), updated });
+      }
+      const token = res.data?.nextPageToken;
+      nextPageToken = typeof token === "string" && token ? token : undefined;
+      if (!nextPageToken || res.data?.isLast === true) break;
     }
     return changes;
   }

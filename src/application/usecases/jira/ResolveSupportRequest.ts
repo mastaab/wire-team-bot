@@ -1,4 +1,5 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import type { SupportRequest } from "../../../domain/entities/SupportRequest";
 import type { AuditLogEntry, AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
@@ -6,6 +7,7 @@ import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPo
 import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { REPLY_BODY_MAX } from "../../services/offers";
+import { SupportRequestWrites } from "../../services/SupportRequestWrites";
 import { REPLY_FOOTER, formatResolution } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
 import { appendAuditSafely, botActor, notInConversation, refreshStatusCategory, wasRefused } from "./supportRequestStatus";
@@ -41,6 +43,8 @@ export class ResolveSupportRequest {
     private readonly wireOutbound: WireOutboundPort,
     private readonly auditLog: AuditLogRepository,
     private readonly logger?: Logger,
+    /** Shared with the watch, which skips a request while it is being resolved here. */
+    private readonly writes: SupportRequestWrites = new SupportRequestWrites(),
   ) {}
 
   /** The final snapshot, or null when nothing was resolved. Exactly one Wire message is sent. */
@@ -112,8 +116,17 @@ export class ResolveSupportRequest {
       entityId: key,
     };
     let snapshot: IssueSnapshot;
+    let refreshed: SupportRequest | null;
     try {
-      snapshot = await this.tracker.resolveIssue(key);
+      // The new category is stored inside the guard, so the watch never sees Jira ahead of the record.
+      [snapshot, refreshed] = await this.writes.during(key, async () => {
+        const resolved = await this.tracker.resolveIssue(key);
+        // The refresh audits a changed category with the actor; an unchanged one is audited
+        // below, so every resolve attempt that reached the tracker has an entry.
+        return [resolved, await refreshStatusCategory(
+          this.requests, this.auditLog, current, resolved.statusCategory, input.actorId, this.logger,
+        )] as const;
+      });
     } catch (err) {
       this.logger?.warn("ResolveSupportRequest: resolveIssue failed", { key, ...trackerErrorFields(err) });
       await appendAuditSafely(this.auditLog, { ...entry, details: { outcome: "resolve_failed" } }, "ResolveSupportRequest", this.logger);
@@ -121,11 +134,6 @@ export class ResolveSupportRequest {
       return null;
     }
 
-    // The refresh audits a changed category with the actor; an unchanged one is audited here,
-    // so every resolve attempt that reached the tracker has an entry.
-    const refreshed = await refreshStatusCategory(
-      this.requests, this.auditLog, current, snapshot.statusCategory, input.actorId, this.logger,
-    );
     if (!refreshed) {
       await appendAuditSafely(this.auditLog, { ...entry, details: { statusCategory: snapshot.statusCategory } }, "ResolveSupportRequest", this.logger);
     }
