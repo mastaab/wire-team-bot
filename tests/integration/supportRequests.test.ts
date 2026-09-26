@@ -28,6 +28,7 @@ describe.skipIf(process.env.INTEGRATION_TESTS !== "1")("SupportRequestRepository
       requesterId: alice,
       requesterName: "Alice",
       summary: `Printer offline ${seq}`,
+      kind: "fault",
       statusCategory: "todo",
       createdAt,
       updatedAt: createdAt,

@@ -1,5 +1,5 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
-import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import type { SupportRequest, SupportRequestKind } from "../../../domain/entities/SupportRequest";
 import { isKeyInProject } from "../../../domain/ids/jiraLink";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
@@ -18,6 +18,13 @@ export interface ListSupportRequestsInput {
 }
 
 const LISTED_MAX = 10;
+
+/** How each kind opens its line, so the desk's queues are visible in the list. */
+const KIND_LABEL: Record<SupportRequestKind, string> = {
+  question: "Question",
+  part: "Part order",
+  fault: "Fault",
+};
 
 /**
  * Lists the open support requests of this conversation with their live status. The newest
@@ -58,7 +65,7 @@ export class ListSupportRequests {
       }
       const status = snapshot ? statusLabel(snapshot.statusCategory) : `${statusLabel(request.statusCategory)} (last known)`;
       const requester = request.requesterName ? ` (${request.requesterName})` : "";
-      lines.push(`- **${request.key}** ${request.summary}${requester}: ${status}`);
+      lines.push(`- ${KIND_LABEL[request.kind]} **${request.key}** ${request.summary}${requester}: ${status}`);
       shown.push(request);
     }
 

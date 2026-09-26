@@ -28,8 +28,8 @@ describe("ListSupportRequests", () => {
     expect(shown.map((r) => r.key)).toEqual(["DS-6", "DS-7"]);
     expect(sent).toEqual([[
       "Open support requests in this channel:",
-      "- **DS-6** VPN drops every ten minutes (Alice): To do",
-      "- **DS-7** Printer is jammed (Bob): In progress",
+      "- Fault **DS-6** VPN drops every ten minutes (Alice): To do",
+      "- Fault **DS-7** Printer is jammed (Bob): In progress",
     ].join("\n")]);
     expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-1" });
   });
@@ -48,7 +48,7 @@ describe("ListSupportRequests", () => {
 
     await useCase.execute({ conversationId: convId });
 
-    expect(sent[0]).toContain("- **DS-6** VPN drops every ten minutes: In progress");
+    expect(sent[0]).toContain("- Fault **DS-6** VPN drops every ten minutes: In progress");
   });
 
   it("refreshes a changed status, leaves out a request found done live and audits only changes", async () => {
@@ -58,7 +58,7 @@ describe("ListSupportRequests", () => {
     const shown = await useCase.execute({ conversationId: convId });
 
     expect(shown.map((r) => r.key)).toEqual(["DS-7"]);
-    expect(sent).toEqual(["Open support requests in this channel:\n- **DS-7** Printer is jammed (Bob): In progress"]);
+    expect(sent).toEqual(["Open support requests in this channel:\n- Fault **DS-7** Printer is jammed (Bob): In progress"]);
     expect(requests.updateStatusCategory).toHaveBeenCalledTimes(1);
     expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "done", expect.any(Date));
     expect(audit.append).toHaveBeenCalledTimes(1);
@@ -79,8 +79,8 @@ describe("ListSupportRequests", () => {
     expect(shown).toHaveLength(2);
     expect(sent).toEqual([[
       "Open support requests in this channel:",
-      "- **DS-6** VPN drops every ten minutes (Alice): To do (last known)",
-      "- **DS-7** Printer is jammed (Bob): In progress (last known)",
+      "- Fault **DS-6** VPN drops every ten minutes (Alice): To do (last known)",
+      "- Fault **DS-7** Printer is jammed (Bob): In progress (last known)",
     ].join("\n")]);
     expect(requests.updateStatusCategory).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith("ListSupportRequests: getIssue failed", { key: "DS-6", err: "IssueTrackerError", status: 503 });
@@ -93,7 +93,7 @@ describe("ListSupportRequests", () => {
     const shown = await useCase.execute({ conversationId: convId });
 
     expect(shown.map((r) => r.key)).toEqual(["DS-6"]);
-    expect(sent).toEqual(["Open support requests in this channel:\n- **DS-6** VPN drops every ten minutes (Alice): In progress"]);
+    expect(sent).toEqual(["Open support requests in this channel:\n- Fault **DS-6** VPN drops every ten minutes (Alice): In progress"]);
     expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "in_progress", expect.any(Date));
     expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({ entityId: "DS-6", details: { statusCategory: "in_progress" } }));
   });
@@ -105,7 +105,7 @@ describe("ListSupportRequests", () => {
     const shown = await useCase.execute({ conversationId: convId });
 
     expect(shown.map((r) => r.key)).toEqual(["DS-7"]);
-    expect(sent).toEqual(["Open support requests in this channel:\n- **DS-7** Printer is jammed (Bob): In progress (last known)"]);
+    expect(sent).toEqual(["Open support requests in this channel:\n- Fault **DS-7** Printer is jammed (Bob): In progress (last known)"]);
   });
 
   it("skips a stored record whose key is outside the configured project, without reading it", async () => {
@@ -138,5 +138,23 @@ describe("ListSupportRequests", () => {
     await useCase.execute({ conversationId: convId });
 
     expect(sent).toEqual(["There are no open support requests in this channel."]);
+  });
+
+  it("opens each line with the request's kind", async () => {
+    const { tracker, sent, useCase } = setup([
+      makeRequest({ key: "DS-12", summary: "Brake pads for truck 17", kind: "part" }),
+      makeRequest({ key: "DS-11", summary: "Service interval for truck 17", kind: "question" }),
+      makeRequest({ key: "DS-10", summary: "Brake warning light on", kind: "fault" }),
+    ]);
+    tracker.getIssue.mockImplementation(async (key: string) => makeSnapshot({ key, statusCategory: "todo" }));
+
+    await useCase.execute({ conversationId: convId });
+
+    expect(sent).toEqual([[
+      "Open support requests in this channel:",
+      "- Part order **DS-12** Brake pads for truck 17 (Alice): To do",
+      "- Question **DS-11** Service interval for truck 17 (Alice): To do",
+      "- Fault **DS-10** Brake warning light on (Alice): To do",
+    ].join("\n")]);
   });
 });

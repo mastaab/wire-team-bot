@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OFFER_DESCRIPTION_MAX, parseOfferMarker, REPLY_BODY_MAX } from "../../src/application/services/offers";
-import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
+import { PART_DETAIL_MAX, SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 
 const marker = (value: unknown): string => `OFFER: ${JSON.stringify(value)}`;
 
@@ -8,14 +8,14 @@ describe("parseOfferMarker", () => {
   it("separates a support offer on the last line from the answer", () => {
     expect(parseOfferMarker(`I can raise that.\n${marker({ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." })}`)).toEqual({
       text: "I can raise that.",
-      command: { kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." },
+      command: { kind: "support", requestKind: "fault", summary: "VPN drops", description: "My VPN drops every ten minutes." },
       hadMarker: true,
     });
   });
 
   it("collapses whitespace in the summary to one line and trims the description", () => {
     const command = parseOfferMarker(marker({ kind: "support", summary: "  VPN \n drops\tagain ", description: "  Line one.\nLine two.  " })).command;
-    expect(command).toEqual({ kind: "support", summary: "VPN drops again", description: "Line one.\nLine two." });
+    expect(command).toEqual({ kind: "support", requestKind: "fault", summary: "VPN drops again", description: "Line one.\nLine two." });
   });
 
   it("accepts reply and resolve offers and normalises keys", () => {
@@ -27,7 +27,7 @@ describe("parseOfferMarker", () => {
   it("accepts a summary and description at their limits", () => {
     const summary = "s".repeat(SUPPORT_SUMMARY_MAX);
     const description = "d".repeat(OFFER_DESCRIPTION_MAX);
-    expect(parseOfferMarker(marker({ kind: "support", summary, description })).command).toEqual({ kind: "support", summary, description });
+    expect(parseOfferMarker(marker({ kind: "support", summary, description })).command).toEqual({ kind: "support", requestKind: "fault", summary, description });
     const body = "b".repeat(REPLY_BODY_MAX);
     expect(parseOfferMarker(marker({ kind: "reply", issueKey: "DS-4", body })).command).toEqual({ kind: "reply", issueKey: "DS-4", body });
   });
@@ -88,5 +88,59 @@ describe("parseOfferMarker", () => {
   it("hides a multi-line marker in the middle of the answer without honouring it", () => {
     const answer = 'Before.\nOFFER: {\n  "kind": "resolve",\n  "issueKey": "DS-1"\n}\nAfter the marker.';
     expect(parseOfferMarker(answer)).toEqual({ text: "Before.\nAfter the marker.", command: null, hadMarker: true });
+  });
+});
+
+describe("parseOfferMarker: request kinds and part details", () => {
+  const base = { kind: "support", summary: "Brake pads worn", description: "Need new brake pads." };
+
+  it.each(["question", "part", "fault"])("keeps the request kind %s", (requestKind) => {
+    expect(parseOfferMarker(marker({ ...base, requestKind })).command).toEqual({
+      kind: "support", requestKind, summary: "Brake pads worn", description: "Need new brake pads.",
+    });
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["unknown", "invoice"],
+    ["not a string", 3],
+    ["in the wrong case", "Part"],
+  ])("defaults the request kind to fault when it is %s", (_label, requestKind) => {
+    expect(parseOfferMarker(marker({ ...base, requestKind })).command).toEqual({
+      kind: "support", requestKind: "fault", summary: "Brake pads worn", description: "Need new brake pads.",
+    });
+  });
+
+  it("keeps the part details of a part order, trimmed and collapsed to one line", () => {
+    const part = { vehicle: "  truck\n 17 ", part: "brake\tpads", quantity: " 2 ", deliverTo: "Depot   North" };
+    expect(parseOfferMarker(marker({ ...base, requestKind: "part", part })).command).toEqual({
+      kind: "support", requestKind: "part", summary: "Brake pads worn", description: "Need new brake pads.",
+      part: { vehicle: "truck 17", part: "brake pads", quantity: "2", deliverTo: "Depot North" },
+    });
+  });
+
+  it("leaves out empty, non-string, overlong and unknown part details", () => {
+    const part = { vehicle: "   ", part: 42, quantity: "q".repeat(PART_DETAIL_MAX + 1), deliverTo: "d".repeat(PART_DETAIL_MAX), colour: "red" };
+    expect(parseOfferMarker(marker({ ...base, requestKind: "part", part })).command).toEqual({
+      kind: "support", requestKind: "part", summary: "Brake pads worn", description: "Need new brake pads.",
+      part: { deliverTo: "d".repeat(PART_DETAIL_MAX) },
+    });
+  });
+
+  it.each([
+    ["no part object", undefined],
+    ["an array", ["truck 17"]],
+    ["a string", "truck 17"],
+    ["only empty details", { vehicle: " ", part: "" }],
+  ])("keeps a part order without details when it has %s", (_label, part) => {
+    expect(parseOfferMarker(marker({ ...base, requestKind: "part", part })).command).toEqual({
+      kind: "support", requestKind: "part", summary: "Brake pads worn", description: "Need new brake pads.",
+    });
+  });
+
+  it("ignores part details on other kinds", () => {
+    expect(parseOfferMarker(marker({ ...base, requestKind: "fault", part: { vehicle: "truck 17" } })).command).toEqual({
+      kind: "support", requestKind: "fault", summary: "Brake pads worn", description: "Need new brake pads.",
+    });
   });
 });

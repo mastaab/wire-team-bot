@@ -1,7 +1,7 @@
 import type { OfferCommand } from "../ports/PendingOfferPort";
 import type { PartDetails, SupportRequestKind } from "../../domain/entities/SupportRequest";
 import { JIRA_KEY_PATTERN, isKeyInProject } from "../../domain/ids/jiraLink";
-import { SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
+import { PART_DETAIL_MAX, SUPPORT_REQUEST_KINDS, SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
 
 /**
  * Offers let the answer model propose a supported Jira change in plain language. The model
@@ -83,7 +83,11 @@ function toCommand(json: string): OfferCommand | null {
       const description = typeof v.description === "string" ? v.description.trim() : "";
       if (!summary || summary.length > SUPPORT_SUMMARY_MAX) return null;
       if (!description || description.length > OFFER_DESCRIPTION_MAX) return null;
-      return { kind: "support", summary, description };
+      const requestKind = SUPPORT_REQUEST_KINDS.find((k) => k === v.requestKind) ?? "fault";
+      const part = requestKind === "part" ? toPartDetails(v.part) : null;
+      return part
+        ? { kind: "support", requestKind, summary, description, part }
+        : { kind: "support", requestKind, summary, description };
     }
     case "reply": {
       const body = typeof v.body === "string" ? v.body.trim() : "";
@@ -95,6 +99,23 @@ function toCommand(json: string): OfferCommand | null {
     default:
       return null;
   }
+}
+
+/**
+ * The part essentials the model found, each collapsed to one line. A value that is not a
+ * string, is empty or exceeds `PART_DETAIL_MAX` is left out, so the system asks for it
+ * instead. Null when none is usable.
+ */
+function toPartDetails(value: unknown): PartDetails | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const part: PartDetails = {};
+  for (const { key } of PART_DETAIL_FIELDS) {
+    const field = raw[key];
+    const text = typeof field === "string" ? collapseLine(field) : "";
+    if (text && text.length <= PART_DETAIL_MAX) part[key] = text;
+  }
+  return Object.keys(part).length > 0 ? part : null;
 }
 
 /** Sent instead of the model's text when its offer was dropped, so no unperformed write is claimed. */

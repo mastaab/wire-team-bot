@@ -1,5 +1,7 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
-import { NOTHING_TO_CONFIRM_REPLY, offerCommandLine } from "../../services/offers";
+import {
+  NOTHING_TO_CONFIRM_REPLY, formatMissingPartsQuestion, formatStillMissingReply, missingPartDetails, offerCommandLine,
+} from "../../services/offers";
 import type { OfferCommand, PendingOfferStore } from "../../services/offers";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { RaiseSupportRequest } from "./RaiseSupportRequest";
@@ -119,11 +121,19 @@ export class ConfirmOffer {
     }
 
     const command = offer.command;
+    const missing = missingPartDetails(command);
+    if (missing.length > 0) {
+      // An incomplete part order can only be amended: keep it so the next answer can fill it.
+      this.offers.put(offer);
+      await this.wireOutbound.sendPlainText(conversationId, formatStillMissingReply(missing), { replyToMessageId });
+      return true;
+    }
     switch (command.kind) {
       case "support":
         await this.handlers.raiseSupportRequest.execute({
           summary: command.summary, description: command.description, conversationId, requesterId: actorId,
-          requesterName: input.requesterName, replyToMessageId,
+          requesterName: input.requesterName, replyToMessageId, requestKind: command.requestKind,
+          ...(command.part ? { part: command.part } : {}),
         });
         break;
       case "reply":
@@ -158,6 +168,8 @@ export class ConfirmOffer {
 
 /** The code-written re-ask after an acknowledgement; it ends with a question like the offer itself. */
 function askAgain(command: OfferCommand): string {
+  const missing = missingPartDetails(command);
+  if (missing.length > 0) return formatMissingPartsQuestion(missing);
   switch (command.kind) {
     case "support":
       return "I need a clear yes or no, so I haven't raised anything with the service desk yet. Shall I raise it (yes or no)?";

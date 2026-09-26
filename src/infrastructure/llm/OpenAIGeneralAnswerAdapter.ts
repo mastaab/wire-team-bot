@@ -148,6 +148,8 @@ export interface AnswerIntegrations {
   jiraProjectKey?: string;
   /** True when live ticket data may reach the model as a "## Live support request tickets" section. */
   jiraShareWithModel?: boolean;
+  /** What the service desk handles, in plain words (`WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE`); generic wording when absent. */
+  jiraServiceScope?: string;
 }
 
 /**
@@ -166,11 +168,13 @@ export function integrationsPrompt(integrations: AnswerIntegrations): string {
   const statusRule = integrations.jiraShareWithModel
     ? `Never invent ticket keys, statuses or replies, and never guess a ticket's status in Jira; state a live status only as given in "## Live support request tickets". Otherwise you may give the last known status from "## Support requests", saying that it is the last known status, and give the status command for the live one.`
     : `Never invent ticket keys, statuses or replies, and never state or guess a ticket's live status in Jira; only the status command reports it. You may give the last known status from "## Support requests", saying that it is the last known status.`;
+  const scope = integrations.jiraServiceScope?.replace(/\s+/g, " ").trim();
+  const scopeLine = scope ? `\n- The service desk handles ${scope.replace(/\.$/, "")}.` : "";
   return `
 
 Jira integration:
-- This bot is connected to the Jira Service Management project ${project}. Team members raise support requests with the service desk from Wire and follow them here. Never say that it has no Jira integration or cannot work with Jira.
-- A "## Support requests" section, when present, lists the support requests raised from this conversation as stored by the bot: key, summary, requester and last known status. Use it to recall which request is which (for example "the VPN request is ${project}-6"). ${statusRule}
+- This bot is connected to the Jira Service Management project ${project}. Team members raise support requests with the service desk from Wire and follow them here. Never say that it has no Jira integration or cannot work with Jira.${scopeLine}
+- A "## Support requests" section, when present, lists the support requests raised from this conversation as stored by the bot: key, summary, kind, requester and last known status. Use it to recall which request is which (for example "the VPN request is ${project}-6"). ${statusRule}
 ${reading}
 - When asked to raise, follow, reply to or resolve a support request, give the exact supported command, using real keys from the records provided; do not describe internal mechanics such as answer paths:
   - \`@Wire Team Bot support: <problem>\` raises a support request with the service desk; the first line becomes its summary.
@@ -181,13 +185,16 @@ ${reading}
 - Actions, decisions and reminders stay in Wire and are never sent to Jira. Never suggest sending an action to Jira; for a problem the team needs help with, suggest a support request.
 
 Support request offers:
-- If and only if the requester asks you to raise a problem with the service desk, to send a reply to the service desk on one of the support requests provided, or to resolve one of them, end the answer with exactly one final line in one of these forms:
-  OFFER: {"kind":"support","summary":"<one short line>","description":"<the problem>"}
+- If and only if the requester asks you to raise a problem with the service desk, to ask the service desk a question, to order a replacement part, to send a reply to the service desk on one of the support requests provided, or to resolve one of them, end the answer with exactly one final line in one of these forms:
+  OFFER: {"kind":"support","requestKind":"<question, part or fault>","summary":"<one short line>","description":"<the problem>"}
+  OFFER: {"kind":"support","requestKind":"part","summary":"<one short line>","description":"<the request>","part":{"vehicle":"<fleet or chassis number>","part":"<part name or number>","quantity":"<how many>","deliverTo":"<delivery location>"}}
   OFFER: {"kind":"reply","issueKey":"${project}-NN","body":"<the reply text the requester wants sent>"}
   OFFER: {"kind":"resolve","issueKey":"${project}-NN"}
 - For support, the summary is one short line in the requester's own words saying what the problem is. The description is only the problem the requester described in their own messages: never include the surrounding conversation, other people's messages, or anything the requester did not say about the problem.
+- For support, requestKind is one of three kinds: "question" for a question to the service desk, "part" for an order of a replacement part, and "fault" for a fault, breakdown, damage, or a service or maintenance need. When unsure, use "fault".
+- For a part order, add "part" with the essentials: "vehicle" (fleet number or chassis number/VIN), "part" (part name or number), "quantity" and "deliverTo" (the delivery location). Take each value only from the requester's own messages, in their words; never invent, guess or infer one. Leave out every essential the requester has not given; the system asks for the missing ones, so do not ask for them yourself.
 - Reply to and resolve only a ${project} request listed in "## Support requests". Resolve only a request whose last known status is not Done.
-- A "Pending offer being amended" line under "## Related Context" is the requester's unconfirmed offer. Only when their message changes that offer, apply the change and end with a revised marker of the same kind (for reply, the same issueKey) holding the full revised text. If the message is about something else or withdraws the offer, add no marker.
+- A "Pending offer being amended" line under "## Related Context" is the requester's unconfirmed offer. Only when their message changes that offer, apply the change and end with a revised marker of the same kind (for reply, the same issueKey) holding the full revised text. For a part order, keep the essentials already given and add those the message supplies. If the message is about something else or withdraws the offer, add no marker.
 - Do not ask "Shall I" yourself and never say that the change has been made; the system asks the requester to confirm. Keep the answer before the marker short.
 - Earlier offers in the conversation are closed once answered. If the requester replied no (the bot then said "Understood, I won't.") or the change was confirmed, never call that offer pending and do not suggest it again unless the requester asks.
 - In a ticket, replies are messages from the service desk to this team, who are the customer. Call them replies from the service desk, never replies from the customer.

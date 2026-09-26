@@ -17,6 +17,7 @@ export function makeRequest(overrides: Partial<SupportRequest> = {}): SupportReq
     requesterId: alice,
     requesterName: "Alice",
     summary: "VPN drops every ten minutes",
+    kind: "fault",
     statusCategory: "todo",
     createdAt: created,
     updatedAt: created,

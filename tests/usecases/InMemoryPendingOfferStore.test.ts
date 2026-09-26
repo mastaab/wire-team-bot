@@ -120,7 +120,7 @@ describe("InMemoryPendingOfferStore", () => {
 });
 
 describe("InMemoryPendingOfferStore: dropped offers", () => {
-  const SUPPORT: OfferCommand = { kind: "support", summary: "VPN drops", description: "My VPN drops." };
+  const SUPPORT: OfferCommand = { kind: "support", requestKind: "fault", summary: "VPN drops", description: "My VPN drops." };
   const REPLY: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops." };
   const base = (): Date => new Date(Date.now() + 1000);
   const live = (at: Date, command: OfferCommand = SUPPORT, overrides: Partial<PendingOffer> = {}): PendingOffer =>

@@ -6,13 +6,16 @@ import type { ChannelContext } from "../../ports/ClassifierPort";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import { sameQualifiedId } from "../../../domain/ids/QualifiedId";
 import { isKeyInProject } from "../../../domain/ids/jiraLink";
-import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import type { SupportRequest, SupportRequestKind } from "../../../domain/entities/SupportRequest";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { Logger } from "../../ports/Logger";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueReply, IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import { GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatReplyQuestion, formatSupportQuestion, offerCommandLine, parseOfferMarker } from "../../services/offers";
+import {
+  GENERIC_COMMAND_LINE, NO_CHANGE_REPLY, OFFER_TTL_MS, formatMissingPartsQuestion, formatReplyQuestion, formatSupportQuestion,
+  missingPartDetails, offerCommandLine, parseOfferMarker,
+} from "../../services/offers";
 import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../services/offers";
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
@@ -85,6 +88,12 @@ export interface AnswerQuestionJira {
    * statements, so a support offer needs no raising wording in the question.
    */
   passive?: boolean;
+  /**
+   * What the service desk handles (`WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE`). The answer model reads
+   * it from its prompt, so the composition root passes the same text to the answer adapter
+   * (`jiraServiceScope`); it is kept here so the Jira settings of the answer path stay together.
+   */
+  serviceScope?: string;
   now?: () => Date;
 }
 
@@ -116,9 +125,11 @@ const TICKET_QUESTION = /\b(?:jira|tickets?|service\s+desk|support|requests?|iss
  * "escalate", "put ... into") followed by a service-desk target ("service desk", "support",
  * "ticket", "request", "Jira", "it with"), or "raise it"/"report it". A question about an
  * existing request ("any news on my ticket?", "is my ticket still open?") names no raising verb
- * before the target, so it does not pass.
+ * before the target, so it does not pass. Asking the desk ("ask the service desk", "ask
+ * support") and ordering a part ("order two brake pads", "order a replacement mirror", "order
+ * me the filter") also count; "in order to" and "the order of" do not.
  */
-const SUPPORT_INTENT = /\b(?:raise|open|create|file|log(?!\s+(?:in|into|on)\b)|submit|report|escalate|put\b[^.?!]*\binto)\b[^.?!]*\b(?:service\s+desk|support|tickets?|requests?|jira|it\s+with)\b|\b(?:raise|report)\s+(?:it|this)\b/i;
+const SUPPORT_INTENT = /\b(?:raise|open|create|file|log(?!\s+(?:in|into|on)\b)|submit|report|escalate|put\b[^.?!]*\binto)\b[^.?!]*\b(?:service\s+desk|support|tickets?|requests?|jira|it\s+with)\b|\b(?:raise|report)\s+(?:it|this)\b|\bask\s+(?:the\s+)?(?:service\s+desk|support)\b|\b(?:order|reorder)\s+(?:(?:me|us)\s+)?(?:a|an|the|some|new|replacement|spare|one|two|three|four|five|six|\d+)\b/i;
 /** resolve: "close", "resolve", "works again", "working again", "no longer needed" and their inflections. */
 const RESOLVE_INTENT = /\b(?:clos(?:e|es|ed|ing)|resolv(?:e|es|ed|ing)|(?:works?|working)\s+again|no\s+longer\s+(?:needed|necessary|required))\b/i;
 /** reply, first part: a verb of sending a message ("reply", "tell", "send", "let ... know", "message", "answer"). */
@@ -410,7 +421,13 @@ export class AnswerQuestion {
    * Every question ends with "?" so the router treats a non-exact answer as a follow-up.
    */
   private async offerQuestion(jira: AnswerQuestionJira, command: OfferCommand, conversationId: QualifiedId): Promise<string | null> {
-    if (command.kind === "support") return formatSupportQuestion(command.summary, command.description);
+    if (command.kind === "support") {
+      // An incomplete part order is stored as an amendable draft: the requester's answer fills it.
+      const missing = missingPartDetails(command);
+      return missing.length > 0
+        ? formatMissingPartsQuestion(missing)
+        : formatSupportQuestion(command.summary, command.description, command.requestKind, command.part);
+    }
 
     const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
     if (!request) return null;
@@ -500,7 +517,14 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** The stored record for the model: key, summary, requester name and last known status only. */
+/** The kind of a stored request as the model reads it. */
+const KIND_LABEL: Record<SupportRequestKind, string> = {
+  question: "question",
+  part: "part order",
+  fault: "fault",
+};
+
+/** The stored record for the model: key, summary, kind, requester name and last known status only. */
 function storedRequestResult(request: SupportRequest, channelId: string | undefined): RetrievalResult {
   const requesterName = request.requesterName.trim();
   return {
@@ -509,6 +533,7 @@ function storedRequestResult(request: SupportRequest, channelId: string | undefi
     content: [
       request.key,
       `Summary: ${oneLine(request.summary)}`,
+      `Kind: ${KIND_LABEL[request.kind]}`,
       ...(requesterName ? [`Requested by: ${requesterName}`] : []),
       `Last known status: ${statusLabel(request.statusCategory)}`,
     ].join(" | "),

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RaiseSupportRequest } from "../../src/application/usecases/jira/RaiseSupportRequest";
-import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
+import { PART_DETAIL_MAX, SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import { alice, bob, convId, loggedText, makeAudit, makeLogger, makeRequests, makeTracker, makeWire } from "./supportRequestFakes";
 
@@ -235,6 +235,99 @@ describe("RaiseSupportRequest", () => {
       expect(wire.sendPlainText).toHaveBeenCalledTimes(1);
       expect(loggedText(logger)).not.toContain(BODY_MARKER);
     }
+  });
+});
+
+describe("RaiseSupportRequest: request kinds and part orders", () => {
+  const types = { question: "11809", part: "11810" };
+  const part = { vehicle: "Truck 17", part: "Brake pads, front", quantity: "2", deliverTo: "Depot North" };
+
+  function kindSetup(requestTypes?: Record<string, string>) {
+    const requests = makeRequests([]);
+    const tracker = makeTracker();
+    tracker.createIssue.mockResolvedValue({ key: "DS-12", url: "https://jira.test/browse/DS-12", fieldsApplied: true });
+    const { wire, sent } = makeWire();
+    const audit = makeAudit();
+    const useCase = new RaiseSupportRequest(requests, tracker, wire, audit, makeLogger(), requestTypes);
+    return { requests, tracker, sent, audit, useCase };
+  }
+
+  it("uses the mapped request type for the kind", async () => {
+    const { tracker, useCase } = kindSetup(types);
+
+    await useCase.execute({ ...base, requestKind: "question" });
+
+    expect(tracker.createIssue.mock.calls[0]![0].requestTypeId).toBe("11809");
+  });
+
+  it.each([
+    ["a kind without a mapping", types, "fault" as const],
+    ["no mapping at all", undefined, "question" as const],
+  ])("sends no request type for %s, so the tracker's default applies", async (_label, requestTypes, requestKind) => {
+    const { tracker, useCase } = kindSetup(requestTypes);
+
+    await useCase.execute({ ...base, requestKind });
+
+    expect(tracker.createIssue.mock.calls[0]![0]).not.toHaveProperty("requestTypeId");
+  });
+
+  it("defaults to a fault: stored, audited and typed as one", async () => {
+    const { tracker, requests, audit, useCase } = kindSetup({ fault: "11808" });
+
+    const result = await useCase.execute(base);
+
+    expect(tracker.createIssue.mock.calls[0]![0].requestTypeId).toBe("11808");
+    expect(requests.create.mock.calls[0]![0].kind).toBe("fault");
+    expect(result?.kind).toBe("fault");
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      action: "entity_created", entityType: "SupportRequest", details: { statusCategory: "todo", kind: "fault" },
+    }));
+  });
+
+  it("puts the part lines above the driver's description and stores the kind", async () => {
+    const { tracker, requests, audit, sent, useCase } = kindSetup(types);
+
+    await useCase.execute({
+      ...base, summary: "Brake pads for truck 17", description: "Front pads are worn down.", requestKind: "part",
+      part: { ...part, vehicle: "  Truck\n 17 " },
+    });
+
+    expect(tracker.createIssue).toHaveBeenCalledWith({
+      summary: "Brake pads for truck 17",
+      description: "Vehicle: Truck 17\nPart: Brake pads, front\nQuantity: 2\nDeliver to: Depot North\n\nFront pads are worn down.\n\nRequested by Alice via Wire.",
+      labels: ["wire-team-bot"],
+      requestTypeId: "11810",
+    });
+    expect(requests.create.mock.calls[0]![0].kind).toBe("part");
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({ details: { statusCategory: "todo", kind: "part" } }));
+    // The details go to the ticket only, never to the record or the audit log.
+    expect(JSON.stringify(requests.create.mock.calls)).not.toContain("Depot North");
+    expect(JSON.stringify(audit.append.mock.calls)).not.toContain("Depot North");
+    expect(sent).toEqual(["Raised **DS-12** with the service desk: https://jira.test/browse/DS-12"]);
+  });
+
+  it("ignores part details for other kinds", async () => {
+    const { tracker, useCase } = kindSetup();
+
+    await useCase.execute({ ...base, requestKind: "fault", part });
+
+    expect(tracker.createIssue.mock.calls[0]![0].description).toBe("My VPN drops every ten minutes since this morning.\n\nRequested by Alice via Wire.");
+  });
+
+  it.each([
+    ["no details", undefined, "I haven't ordered anything yet: I still need the vehicle (fleet or chassis number), the part (name or number), the quantity and the delivery location."],
+    ["an empty vehicle and no delivery location", { part: "Mirror", quantity: "1", vehicle: "  " }, "I haven't ordered anything yet: I still need the vehicle (fleet or chassis number) and the delivery location."],
+    ["an overlong quantity", { ...part, quantity: "9".repeat(PART_DETAIL_MAX + 1) }, "I haven't ordered anything yet: I still need the quantity."],
+  ])("refuses a part order with %s and raises nothing", async (_label, details, reply) => {
+    const { tracker, requests, audit, sent, useCase } = kindSetup(types);
+
+    const result = await useCase.execute({ ...base, requestKind: "part", ...(details ? { part: details } : {}) });
+
+    expect(result).toBeNull();
+    expect(tracker.createIssue).not.toHaveBeenCalled();
+    expect(requests.create).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+    expect(sent).toEqual([reply]);
   });
 });
 
