@@ -44,4 +44,9 @@ export interface SupportTriagePort {
   draftRequest(message: string, openRequests: readonly OpenRequestRef[]): Promise<SupportDraft | null>;
   /** The key of the open request this question asks about, or null when it matches none. */
   matchStatusQuestion(message: string, openRequests: readonly OpenRequestRef[]): Promise<string | null>;
+  /**
+   * The part-order essentials this single message states (vehicle, part, quantity, delivery
+   * location), each in the speaker's words, never invented; an empty object when it states none.
+   */
+  extractPartDetails(message: string): Promise<PartDetails>;
 }

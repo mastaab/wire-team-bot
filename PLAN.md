@@ -1978,6 +1978,25 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Work split.** Main session: contract and docs. One subagent: triage prompt and parser, classifier line, use case and pipeline gate, tests. Then an independent review, CLI checks and the live check.
 
+### Part orders completed in code, and no double capture (planned 2026-09-26)
+
+**Why.** In the demo run on the local model (Qwen3.5-4B), "deliver to depot north", sent after "To order it I need the delivery location", did not complete the order: the answer model returned no revised offer, the message fell through to passive help, and a fresh part draft asked for all four details again. In the same run, ordinary action capture handled the support messages too: the part order also created ACT-0035 "Acquire a new left mirror for Truck 7" (📝), and "the brake light … please close it" marked the unrelated ACT-0010 "Write the customer proposal" done (✅). The operator left both records as they are for now.
+
+**Fix 1: completing a part order in code.**
+- While the requester's pending offer is a part order with missing essentials, their next message (mentioned or not) goes to a new use case `CompletePartOrder` before the answer path.
+- It asks the triage model a narrow question: which essentials (vehicle, part, quantity, delivery location) does this message state? Code merges them into the draft; a value in the message replaces an earlier one, so "actually three" corrects the quantity.
+- Still missing: the bot asks for exactly what is missing and keeps the draft. Complete: the bot shows "Shall I order this part?" with the four lines, and the yes raises it as today.
+- If the message states none of the essentials, the use case does nothing and the message continues as today (a yes still gets "I still need …", other messages drop the draft or reach the answer path).
+- It does not depend on the answer model returning a revised marker, so it works with small local models.
+
+**Fix 3: no action capture for messages passive help has handled.**
+- `OfferSupportFromConversation.execute` reports whether it sent anything (an offer, a missing-details question or a status answer). When it did, the pipeline skips extraction for that message: no new actions or decisions, no completions and no 📝 or ✅ reactions. The message still counts as conversation context.
+- Messages passive help did not answer are captured as today, so "I'll order the mirror tomorrow" still becomes an action.
+
+**Contract.** `SupportTriagePort.extractPartDetails(message)` returns the essentials the message states (never invented, bounded); `CompletePartOrder(triage, offers, wireOutbound, logger?)` with `execute({ text, conversationId, requesterId, pending, replyToMessageId? }): Promise<boolean>` (true when it replied); `OfferSupportFromConversationPort.execute` returns `Promise<boolean>`.
+
+**Work split.** Main session: contract, router hook (before the amend path), wiring, docs. One subagent: `CompletePartOrder`, the triage method and prompt, `OfferSupportFromConversation` returning whether it replied, the pipeline skip, tests. Then an independent review, CLI checks on the local model (offers answered no) and a live check.
+
 ### Handover for the next session (2026-09-26)
 
 **Start here.** Read AGENTS.md, then this section 6. Built, reviewed and checked live on staging: the support-request rework, passive service-desk help (off by default, `WIRE_TEAM_BOT_JIRA_PASSIVE`), adding to an open request, truck premium support (request kinds mapped to request types, part essentials, service scope), resolving with a closing comment, the channel timezone command, and passive resolve offers. What remains is Jira clean-up (operator approval) and the open items listed below.

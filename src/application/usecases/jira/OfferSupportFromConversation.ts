@@ -39,7 +39,8 @@ export interface OfferSupportInput {
  * Called by the pipeline for unaddressed ACTIVE messages when passive help is on.
  */
 export interface OfferSupportFromConversationPort {
-  execute(input: OfferSupportInput): Promise<void>;
+  /** True when it sent anything (an offer, a missing-details question or a status answer). */
+  execute(input: OfferSupportInput): Promise<boolean>;
 }
 
 /** Most open requests shown to the model. */
