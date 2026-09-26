@@ -69,6 +69,14 @@ describe("resolveJiraConfig", () => {
     expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "yes" })).toThrow(/on or off/);
   });
 
+  it("watches Jira only when an interval of at least 15 seconds is set", () => {
+    expect(resolveJiraConfig(full)!.watchSeconds).toBeUndefined();
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_WATCH_SECONDS: "30" })!.watchSeconds).toBe(30);
+    for (const bad of ["14", "0", "-30", "30s", "1.5"]) {
+      expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_WATCH_SECONDS: bad })).toThrow(/WATCH_SECONDS/);
+    }
+  });
+
   it("switches to Basic auth when an email is configured", () => {
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_EMAIL: "bot@example.com" })!.email).toBe("bot@example.com");
   });

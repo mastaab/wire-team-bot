@@ -8,9 +8,20 @@ export interface OutboundMention {
   length: number;
 }
 
-/** Reply to the matching incoming message while its handler is active, if Wire permits it. */
+/**
+ * A message the bot sent: its Wire message ID and the integrity hash (SHA-256, lower-case hex)
+ * that a later reply quoting it must carry. Never holds message text.
+ */
+export interface SentMessageRef {
+  messageId: string;
+  sha256: string;
+}
+
 export interface OutboundTextOptions {
+  /** Reply to the matching incoming message while its handler is active, if Wire permits it. */
   replyToMessageId?: string;
+  /** Reply to an earlier message the bot sent (outlives the handler). Ignored when `replyToMessageId` is set. */
+  quote?: SentMessageRef;
   mentions?: OutboundMention[];
 }
 
@@ -34,11 +45,15 @@ export interface WireOutboundPort {
   /** Fetch a user's display name from the Wire backend. Returns null on failure. */
   getUserProfile(userId: QualifiedId): Promise<UserProfile | null>;
 
+  /**
+   * Returns a reference to the sent message, for a later quote, or undefined when the transport
+   * cannot provide one (no connection, a self-deleting message, a transport without IDs).
+   */
   sendPlainText(
     conversationId: QualifiedId,
     text: string,
     options?: OutboundTextOptions,
-  ): Promise<void>;
+  ): Promise<SentMessageRef | undefined>;
 
   sendCompositePrompt(
     conversationId: QualifiedId,

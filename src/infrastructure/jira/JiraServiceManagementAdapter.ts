@@ -12,6 +12,7 @@ import {
   IssueTrackerError,
   type CreateIssueRequest,
   type CreatedIssue,
+  type IssueChange,
   type IssueSnapshot,
   type IssueStatusCategory,
   type IssueReply,
@@ -212,6 +213,10 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
       snapshot = { ...snapshot, slas: await this.readSlas(key) };
     }
     return snapshot;
+  }
+
+  async listChangedSince(_keys: readonly string[], _since?: Date): Promise<IssueChange[]> {
+    throw new Error("JiraServiceManagementAdapter.listChangedSince is not implemented yet");
   }
 
   async listCustomerReplies(key: string, limit: number): Promise<IssueReply[]> {

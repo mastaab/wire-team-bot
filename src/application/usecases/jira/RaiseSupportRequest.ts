@@ -7,7 +7,7 @@ import type { AuditLogEntry, AuditLogRepository } from "../../../domain/reposito
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { CreateIssueRequest, CreatedIssue, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { appendAuditSafely, wasRefused } from "./supportRequestStatus";
 
@@ -51,7 +51,7 @@ export class RaiseSupportRequest {
   ) {}
 
   async execute(input: RaiseSupportRequestInput): Promise<SupportRequest | null> {
-    const reply = (text: string): Promise<void> =>
+    const reply = (text: string): Promise<SentMessageRef | undefined> =>
       this.wireOutbound.sendPlainText(input.conversationId, text, { replyToMessageId: input.replyToMessageId });
 
     const summary = input.summary.replace(/\s+/g, " ").trim();
@@ -93,7 +93,7 @@ export class RaiseSupportRequest {
 
   private async raise(
     summary: string, description: string, kind: SupportRequestKind, input: RaiseSupportRequestInput,
-    reply: (text: string) => Promise<void>,
+    reply: (text: string) => Promise<SentMessageRef | undefined>,
   ): Promise<SupportRequest | null> {
     const requesterName = displayName(input.requesterName);
     let created: CreatedIssue;

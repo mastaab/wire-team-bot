@@ -58,6 +58,14 @@ export interface CreatedIssue {
   fieldsApplied: boolean;
 }
 
+/** Current state of an issue, as returned by the change check. */
+export interface IssueChange {
+  key: string;
+  statusCategory: IssueStatusCategory;
+  /** The tracker's last update time of the issue (any field, comment or transition). */
+  updated: Date;
+}
+
 export interface IssueTrackerPort {
   /** Project key the tracker is scoped to. Keys from other projects must be rejected by callers. */
   readonly projectKey: string;
@@ -77,6 +85,14 @@ export interface IssueTrackerPort {
   listCustomerReplies(key: string, limit: number): Promise<IssueReply[]>;
   /** Adds a customer-facing reply (never an internal note) to the issue. */
   addCustomerReply(key: string, body: string): Promise<void>;
+  /**
+   * Of the given keys (all of this project), those updated after `since`, or all of them that
+   * exist when `since` is absent, with status category and last update time. Reads keys and
+   * statuses only, never comment text. Keys that do not exist or are not visible are left out.
+   * Implementations batch the keys and may return issues updated shortly before `since`
+   * (the tracker's search works in minutes); callers compare `updated` themselves.
+   */
+  listChangedSince(keys: readonly string[], since?: Date): Promise<IssueChange[]>;
 }
 
 /** Tracker failure. Messages never include response bodies or credentials. */

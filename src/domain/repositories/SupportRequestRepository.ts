@@ -22,4 +22,17 @@ export interface SupportRequestRepository {
   listByConversation(conversationId: QualifiedId, options?: SupportRequestListOptions): Promise<SupportRequest[]>;
   /** Stores a new last known category, bumps `version` and `updatedAt`; returns the updated record or null when absent. */
   updateStatusCategory(key: string, statusCategory: SupportRequestStatusCategory, updatedAt: Date): Promise<SupportRequest | null>;
+  /**
+   * Not-deleted requests of every conversation to watch for tracker changes: all whose last
+   * known category is not `done`, plus `done` ones updated at or after `resolvedSince` (to catch
+   * a reopen). Oldest first, at most `limit` (defaults to 500).
+   */
+  listWatched(resolvedSince: Date, limit?: number): Promise<SupportRequest[]>;
+  /**
+   * Bookkeeping, not audited; leaves `version` and `updatedAt` alone. Sets `lastSeenReplyAt`
+   * only when it is absent or earlier than `at`, so it never moves back.
+   */
+  advanceLastSeenReplyAt(key: string, at: Date): Promise<void>;
+  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. */
+  setLastMessage(key: string, ref: { messageId: string; sha256: string }): Promise<void>;
 }

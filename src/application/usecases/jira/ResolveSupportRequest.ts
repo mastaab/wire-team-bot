@@ -3,7 +3,7 @@ import type { AuditLogEntry, AuditLogRepository } from "../../../domain/reposito
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { REPLY_BODY_MAX } from "../../services/offers";
 import { REPLY_FOOTER, formatResolution } from "./formatIssue";
@@ -44,7 +44,7 @@ export class ResolveSupportRequest {
 
   /** The final snapshot, or null when nothing was resolved. Exactly one Wire message is sent. */
   async execute(input: ResolveSupportRequestInput): Promise<IssueSnapshot | null> {
-    const reply = (text: string): Promise<void> =>
+    const reply = (text: string): Promise<SentMessageRef | undefined> =>
       this.wireOutbound.sendPlainText(input.conversationId, text, { replyToMessageId: input.replyToMessageId });
 
     const request = await findSupportRequestInConversation(
@@ -131,7 +131,7 @@ export class ResolveSupportRequest {
    * Jira may have accepted it.
    */
   private async addComment(
-    input: ResolveSupportRequestInput, key: string, comment: string, reply: (text: string) => Promise<void>,
+    input: ResolveSupportRequestInput, key: string, comment: string, reply: (text: string) => Promise<SentMessageRef | undefined>,
   ): Promise<boolean> {
     try {
       await this.tracker.addCustomerReply(key, `${comment}\n\n${REPLY_FOOTER}`);

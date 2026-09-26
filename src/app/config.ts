@@ -122,6 +122,11 @@ export interface JiraConfig {
   requestTypes: RequestTypes;
   /** What the service desk handles, in plain words, for the model prompts; generic wording when absent. */
   serviceScope?: string;
+  /**
+   * Seconds between checks of open support requests for changes made in Jira (new desk replies,
+   * status changes), announced in the request's channel. Absent: no watching. At least 15.
+   */
+  watchSeconds?: number;
 }
 
 const JIRA_REQUIRED_KEYS = [
@@ -172,6 +177,10 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
   const requestTypes = parseRequestTypes(value("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES")!);
   const serviceScope = value("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE");
   if (serviceScope && serviceScope.length > 500) throw new Error("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE must be at most 500 characters");
+  const watchRaw = value("WIRE_TEAM_BOT_JIRA_WATCH_SECONDS");
+  if (watchRaw !== undefined && (!/^\d+$/.test(watchRaw) || parseInt(watchRaw, 10) < 15)) {
+    throw new Error("WIRE_TEAM_BOT_JIRA_WATCH_SECONDS must be a whole number of seconds, at least 15");
+  }
 
   return {
     baseUrl: httpsUrl("WIRE_TEAM_BOT_JIRA_BASE_URL"),
@@ -185,6 +194,7 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
     passive: passive === "on",
     requestTypes,
     ...(serviceScope ? { serviceScope } : {}),
+    ...(watchRaw !== undefined ? { watchSeconds: parseInt(watchRaw, 10) } : {}),
   };
 }
 

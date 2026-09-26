@@ -268,6 +268,9 @@ model SupportRequest {
   updatedAt       DateTime @map("updated_at")
   deleted         Boolean  @default(false)
   version         Int      @default(1)
+  lastSeenReplyAt DateTime? @map("last_seen_reply_at")
+  lastMessageId   String?   @map("last_message_id")
+  lastMessageSha256 String? @map("last_message_sha256")
 
   @@index([conversationId, conversationDom])
   @@map("support_requests")

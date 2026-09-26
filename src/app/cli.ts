@@ -121,6 +121,8 @@ function createCliOutbound(): WireOutboundPort {
     async sendPlainText(_convId: QualifiedId, text: string, _opts?: OutboundTextOptions) {
       if (evaluationMode) evaluationReplies.push(text);
       else process.stdout.write(`[Wire Team Bot] ${text}\n`);
+      // Synthetic: the CLI has no message IDs, but use cases store and quote whatever they get.
+      return { messageId: `cli-${randomUUID()}`, sha256: "0".repeat(64) };
     },
     async sendCompositePrompt(_convId: QualifiedId, text: string) {
       if (evaluationMode) evaluationReplies.push(text);

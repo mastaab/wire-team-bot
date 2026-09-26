@@ -33,6 +33,9 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
         updatedAt: request.updatedAt,
         deleted: request.deleted,
         version: request.version,
+        lastSeenReplyAt: request.lastSeenReplyAt ?? null,
+        lastMessageId: request.lastMessage?.messageId ?? null,
+        lastMessageSha256: request.lastMessage?.sha256 ?? null,
       },
     });
     return request;
@@ -77,6 +80,32 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     return this.findByKey(key);
   }
 
+  async listWatched(resolvedSince: Date, limit = 500): Promise<SupportRequest[]> {
+    const rows = await this.prisma.supportRequest.findMany({
+      where: {
+        deleted: false,
+        OR: [{ statusCategory: { not: "done" } }, { updatedAt: { gte: resolvedSince } }],
+      },
+      take: limit,
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.map((r) => this.fromRow(r));
+  }
+
+  async advanceLastSeenReplyAt(key: string, at: Date): Promise<void> {
+    await this.prisma.supportRequest.updateMany({
+      where: { key, OR: [{ lastSeenReplyAt: null }, { lastSeenReplyAt: { lt: at } }] },
+      data: { lastSeenReplyAt: at },
+    });
+  }
+
+  async setLastMessage(key: string, ref: { messageId: string; sha256: string }): Promise<void> {
+    await this.prisma.supportRequest.updateMany({
+      where: { key },
+      data: { lastMessageId: ref.messageId, lastMessageSha256: ref.sha256 },
+    });
+  }
+
   private fromRow(row: {
     key: string;
     conversationId: string;
@@ -91,6 +120,9 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     updatedAt: Date;
     deleted: boolean;
     version: number;
+    lastSeenReplyAt: Date | null;
+    lastMessageId: string | null;
+    lastMessageSha256: string | null;
   }): SupportRequest {
     return {
       key: row.key,
@@ -104,6 +136,10 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
       updatedAt: row.updatedAt,
       deleted: row.deleted,
       version: row.version,
+      ...(row.lastSeenReplyAt ? { lastSeenReplyAt: row.lastSeenReplyAt } : {}),
+      ...(row.lastMessageId && row.lastMessageSha256
+        ? { lastMessage: { messageId: row.lastMessageId, sha256: row.lastMessageSha256 } }
+        : {}),
     };
   }
 }

@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
 import type { IssueSnapshot } from "../../src/application/ports/IssueTrackerPort";
+import type { OutboundTextOptions, SentMessageRef } from "../../src/application/ports/WireOutboundPort";
 
 /** Shared mocked ports for the support-request use case tests. No DB, network or SDK. */
 
@@ -51,6 +52,9 @@ export function makeRequests(records: SupportRequest[] = [makeRequest()]) {
       const found = records.find((r) => r.key === key);
       return found ? { ...found, statusCategory, updatedAt, version: found.version + 1 } : null;
     }),
+    listWatched: vi.fn(async () => records.filter((r) => !r.deleted)),
+    advanceLastSeenReplyAt: vi.fn().mockResolvedValue(undefined),
+    setLastMessage: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -62,13 +66,22 @@ export function makeTracker() {
     resolveIssue: vi.fn(),
     listCustomerReplies: vi.fn().mockResolvedValue([]),
     addCustomerReply: vi.fn().mockResolvedValue(undefined),
+    listChangedSince: vi.fn().mockResolvedValue([]),
   };
+}
+
+/** The reference `makeWire` returns for the n-th sent message (1-based). */
+export function sentRefFor(n: number): SentMessageRef {
+  return { messageId: `msg-${n}`, sha256: n.toString(16).padStart(64, "0") };
 }
 
 export function makeWire() {
   const sent: string[] = [];
   const wire = {
-    sendPlainText: vi.fn(async (_c: QualifiedId, text: string) => { sent.push(text); }),
+    sendPlainText: vi.fn(async (_c: QualifiedId, text: string, _o?: OutboundTextOptions): Promise<SentMessageRef | undefined> => {
+      sent.push(text);
+      return sentRefFor(sent.length);
+    }),
     getUserProfile: vi.fn(),
     sendCompositePrompt: vi.fn(),
     sendReaction: vi.fn(),

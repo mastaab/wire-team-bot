@@ -52,4 +52,14 @@ export interface SupportRequest {
   updatedAt: Date;
   deleted: boolean;
   version: number;
+  /**
+   * Creation time of the newest customer-facing reply already shown or announced in Wire.
+   * Absent on records from before watching existed; the first check sets it without announcing.
+   */
+  lastSeenReplyAt?: Date;
+  /**
+   * The bot's latest message about this request in its conversation, quoted by the next update.
+   * Message ID and integrity hash only, never text.
+   */
+  lastMessage?: { messageId: string; sha256: string };
 }

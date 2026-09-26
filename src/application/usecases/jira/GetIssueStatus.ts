@@ -3,7 +3,7 @@ import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRe
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueSnapshot, IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { formatIssueStatus, formatReplies } from "./formatIssue";
 import { findSupportRequestInConversation } from "./supportRequestScope";
@@ -36,7 +36,7 @@ export class GetIssueStatus {
   }
 
   async execute(input: GetIssueStatusInput): Promise<IssueSnapshot | null> {
-    const reply = (text: string): Promise<void> =>
+    const reply = (text: string): Promise<SentMessageRef | undefined> =>
       this.wireOutbound.sendPlainText(input.conversationId, text, { replyToMessageId: input.replyToMessageId });
 
     const request = await findSupportRequestInConversation(

@@ -32,6 +32,37 @@ describe("WireOutboundAdapter contract", () => {
     expect(arg.text ?? (arg as { text: string }).text).toBe("Hello world");
   });
 
+  it("sendPlainText returns the sent message's ID and the hash a later quote needs", async () => {
+    const sendMessage = vi.fn().mockResolvedValue("sent-1");
+    const adapter = createWireOutboundAdapter(makeRef(sendMessage), mockLogger);
+    const ref = await adapter.sendPlainText(convId, "Raised **DS-16**.");
+    const sent = sendMessage.mock.calls[0]![0] as TextMessage;
+    const expected = TextMessage.createReply({ originalMessage: { ...sent, id: "sent-1" }, text: "" }).quotedMessageSha256!;
+    expect(ref).toEqual({ messageId: "sent-1", sha256: Buffer.from(expected).toString("hex") });
+    expect(ref!.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("sendPlainText quotes a stored reference, and the handler's quote wins when both are given", async () => {
+    const sendMessage = vi.fn().mockResolvedValue("sent-2");
+    const stored = { messageId: "bot-msg-1", sha256: "ab".repeat(32) };
+    const adapter = createWireOutboundAdapter(makeRef(sendMessage), mockLogger);
+    await adapter.sendPlainText(convId, "Update", { quote: stored });
+    const quoted = sendMessage.mock.calls[0]![0] as TextMessage;
+    expect(quoted.quotedMessageId).toBe("bot-msg-1");
+    expect(Buffer.from(quoted.quotedMessageSha256!).toString("hex")).toBe(stored.sha256);
+
+    const context = new WireReplyContext();
+    const source = TextMessage.create({ conversationId: convId, text: "status of DS-16" });
+    const withContext = createWireOutboundAdapter(makeRef(sendMessage), mockLogger, context);
+    await context.withMessage(source, () => withContext.sendPlainText(convId, "Status", { replyToMessageId: source.id, quote: stored }));
+    expect((sendMessage.mock.calls[1]![0] as TextMessage).quotedMessageId).toBe(source.id);
+  });
+
+  it("sendPlainText returns undefined without a connection", async () => {
+    const adapter = createWireOutboundAdapter({ current: null }, mockLogger);
+    expect(await adapter.sendPlainText(convId, "Hello")).toBeUndefined();
+  });
+
   it("sendCompositePrompt sends a CompositeMessage with a leading text item and button items", async () => {
     const sendMessage = vi.fn().mockResolvedValue("ok");
     const adapter = createWireOutboundAdapter(makeRef(sendMessage), mockLogger);

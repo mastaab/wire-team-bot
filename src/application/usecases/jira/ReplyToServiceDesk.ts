@@ -3,7 +3,7 @@ import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRe
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
 import { trackerErrorFields } from "../../ports/IssueTrackerPort";
 import type { IssueTrackerPort } from "../../ports/IssueTrackerPort";
-import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { REPLY_BODY_MAX } from "../../services/offers";
 import { REPLY_FOOTER } from "./formatIssue";
@@ -35,7 +35,7 @@ export class ReplyToServiceDesk {
 
   /** True when the reply was sent. Exactly one Wire message is sent either way. */
   async execute(input: ReplyToServiceDeskInput): Promise<boolean> {
-    const reply = (text: string): Promise<void> =>
+    const reply = (text: string): Promise<SentMessageRef | undefined> =>
       this.wireOutbound.sendPlainText(input.conversationId, text, { replyToMessageId: input.replyToMessageId });
 
     const request = await findSupportRequestInConversation(

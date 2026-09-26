@@ -4,6 +4,7 @@ import type {
   OutboundTextOptions,
   CompositePromptOptions,
   CompositeButton as PromptButton,
+  SentMessageRef,
   UserProfile,
 } from "../../application/ports/WireOutboundPort";
 import type { Logger } from "../../application/ports/Logger";
@@ -23,6 +24,16 @@ export interface ManagerHandle {
 
 export interface HandlerManagerRef {
   current: { manager?: ManagerHandle } | null;
+}
+
+/**
+ * The reference a later reply needs: the message ID and the SDK's integrity hash of the text as
+ * built. Wire clients check the hash against the send time rounded to the second; the SDK does
+ * not return the backend's time, so the local build time is used.
+ */
+function sentRef(message: TextMessage, messageId: string): SentMessageRef | undefined {
+  const digest = TextMessage.createReply({ originalMessage: { ...message, id: messageId }, text: "" }).quotedMessageSha256;
+  return digest ? { messageId, sha256: Buffer.from(digest).toString("hex") } : undefined;
 }
 
 async function streamToUint8Array(stream: NodeJS.ReadableStream): Promise<Uint8Array> {
@@ -59,14 +70,20 @@ export function createWireOutboundAdapter(handlerRef: HandlerManagerRef, logger:
       conversationId: QualifiedId,
       text: string,
       options?: OutboundTextOptions,
-    ): Promise<void> {
+    ): Promise<SentMessageRef | undefined> {
       const h = handlerRef.current;
-      if (!h?.manager) return;
-      logger.debug("sendPlainText", { conversationId: conversationId.id, textLength: text.length });
-      await h.manager.sendMessage({
+      if (!h?.manager) return undefined;
+      logger.debug("sendPlainText", { conversationId: conversationId.id, textLength: text.length, quote: !!options?.quote });
+      const handlerQuote = replyContext?.get(conversationId, options?.replyToMessageId);
+      const storedQuote = !options?.replyToMessageId && options?.quote
+        ? { quotedMessageId: options.quote.messageId, quotedMessageSha256: Uint8Array.from(Buffer.from(options.quote.sha256, "hex")) }
+        : undefined;
+      const message: TextMessage = {
         ...TextMessage.create({ conversationId, text, mentions: options?.mentions }),
-        ...replyContext?.get(conversationId, options?.replyToMessageId),
-      });
+        ...(handlerQuote ?? storedQuote),
+      };
+      const messageId = await h.manager.sendMessage(message);
+      return sentRef(message, messageId);
     },
 
     async sendCompositePrompt(
