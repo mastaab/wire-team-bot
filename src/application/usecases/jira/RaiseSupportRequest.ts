@@ -1,6 +1,7 @@
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
-import { SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../../domain/entities/SupportRequest";
-import type { SupportRequest } from "../../../domain/entities/SupportRequest";
+import { PART_DETAIL_MAX, SUPPORT_DESCRIPTION_MAX, SUPPORT_SUMMARY_MAX } from "../../../domain/entities/SupportRequest";
+import type { PartDetails, SupportRequest, SupportRequestKind } from "../../../domain/entities/SupportRequest";
+import { PART_DETAIL_FIELDS, formatStillMissingReply } from "../../services/offers";
 import { isKeyInProject } from "../../../domain/ids/jiraLink";
 import type { AuditLogEntry, AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { SupportRequestRepository } from "../../../domain/repositories/SupportRequestRepository";
@@ -20,6 +21,10 @@ export interface RaiseSupportRequestInput {
   /** Wire display name of the requester, when resolved. */
   requesterName?: string;
   replyToMessageId?: string;
+  /** Decides the tracker's request type; `fault` when absent. */
+  requestKind?: SupportRequestKind;
+  /** The essentials of a part order; all four are required when `requestKind` is `part`. */
+  part?: PartDetails;
 }
 
 const LABEL = "wire-team-bot";
@@ -41,6 +46,8 @@ export class RaiseSupportRequest {
     private readonly wireOutbound: WireOutboundPort,
     private readonly auditLog: AuditLogRepository,
     private readonly logger?: Logger,
+    /** Tracker request type per kind; a kind without an entry uses the tracker's default. */
+    private readonly requestTypes: Partial<Record<SupportRequestKind, string>> = {},
   ) {}
 
   async execute(input: RaiseSupportRequestInput): Promise<SupportRequest | null> {
@@ -61,6 +68,13 @@ export class RaiseSupportRequest {
       await reply(`I'm afraid that description is too long; please keep it under ${SUPPORT_DESCRIPTION_MAX} characters.`);
       return null;
     }
+    const kind = input.requestKind ?? "fault";
+    const part = kind === "part" ? partLines(input.part) : null;
+    if (part && part.missing.length > 0) {
+      // The offer path never confirms an incomplete order; this guards any other caller.
+      await reply(formatStillMissingReply(part.missing));
+      return null;
+    }
 
     const guardKey = [input.conversationId.id, input.conversationId.domain, input.requesterId.id, input.requesterId.domain].join("|");
     if (this.inFlight.has(guardKey)) {
@@ -70,19 +84,21 @@ export class RaiseSupportRequest {
     this.inFlight.add(guardKey);
     try {
       // Summaries often start lower-case ("my VPN drops"); a ticket title should not.
-      return await this.raise(summary.charAt(0).toUpperCase() + summary.slice(1), description, input, reply);
+      const body = part ? `${part.lines.join("\n")}\n\n${description}` : description;
+      return await this.raise(summary.charAt(0).toUpperCase() + summary.slice(1), body, kind, input, reply);
     } finally {
       this.inFlight.delete(guardKey);
     }
   }
 
   private async raise(
-    summary: string, description: string, input: RaiseSupportRequestInput, reply: (text: string) => Promise<void>,
+    summary: string, description: string, kind: SupportRequestKind, input: RaiseSupportRequestInput,
+    reply: (text: string) => Promise<void>,
   ): Promise<SupportRequest | null> {
     const requesterName = displayName(input.requesterName);
     let created: CreatedIssue;
     try {
-      created = await this.tracker.createIssue(buildRequest(summary, description, requesterName));
+      created = await this.tracker.createIssue(buildRequest(summary, description, requesterName, this.requestTypes[kind]));
     } catch (err) {
       this.logger?.warn("RaiseSupportRequest: createIssue failed", trackerErrorFields(err));
       const refused = wasRefused(err);
@@ -119,6 +135,7 @@ export class RaiseSupportRequest {
         requesterId: input.requesterId,
         requesterName,
         summary,
+        kind,
         statusCategory: "todo",
         createdAt: now,
         updatedAt: now,
@@ -138,7 +155,7 @@ export class RaiseSupportRequest {
 
     await this.appendAudit({
       timestamp: new Date(), actorId: input.requesterId, conversationId: input.conversationId,
-      action: "entity_created", entityType: "SupportRequest", entityId: key, details: { statusCategory: "todo" },
+      action: "entity_created", entityType: "SupportRequest", entityId: key, details: { statusCategory: "todo", kind },
     });
 
     let text = `Raised **${key}** with the service desk: ${created.url}`;
@@ -160,11 +177,28 @@ function displayName(name: string | undefined): string {
 }
 
 /** The ticket carries the requester's own words and their name only (extract-and-forget). */
-function buildRequest(summary: string, description: string, requesterName: string): CreateIssueRequest {
+function buildRequest(summary: string, description: string, requesterName: string, requestTypeId: string | undefined): CreateIssueRequest {
   const requesterLine = requesterName ? `Requested by ${requesterName} via Wire.` : "Requested via Wire.";
   return {
     summary,
     description: `${description}\n\n${requesterLine}`,
     labels: [LABEL],
+    ...(requestTypeId ? { requestTypeId } : {}),
   };
+}
+
+/**
+ * The part-order essentials as ticket lines (`Vehicle: …`), in the order they are shown to the
+ * driver, plus those missing. A value is collapsed to one line; one that is empty or over
+ * `PART_DETAIL_MAX` counts as missing.
+ */
+function partLines(part: PartDetails | undefined): { lines: string[]; missing: Array<keyof PartDetails> } {
+  const lines: string[] = [];
+  const missing: Array<keyof PartDetails> = [];
+  for (const { key, label } of PART_DETAIL_FIELDS) {
+    const value = (part?.[key] ?? "").replace(/\s+/g, " ").trim();
+    if (value && value.length <= PART_DETAIL_MAX) lines.push(`${label}: ${value}`);
+    else missing.push(key);
+  }
+  return { lines, missing };
 }

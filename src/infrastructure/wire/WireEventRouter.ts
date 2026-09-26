@@ -466,7 +466,7 @@ export class WireEventRouter extends WireEventsHandler {
       const { summary, description } = splitSupportText(supportMatch[1]!);
       await this.deps.raiseSupportRequest.execute({
         summary, description, conversationId: convId, requesterId: sender,
-        requesterName: senderDisplayName, replyToMessageId: wireMessage.id,
+        requesterName: senderDisplayName, replyToMessageId: wireMessage.id, requestKind: "fault",
       });
       return;
     }

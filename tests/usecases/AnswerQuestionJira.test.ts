@@ -26,6 +26,7 @@ function makeRequest(key: string, overrides: Partial<SupportRequest> = {}): Supp
     requesterId: { id: "user-1", domain: "wire.com" },
     requesterName: "Alice",
     summary: `Problem ${key}`,
+    kind: "fault",
     statusCategory: "todo",
     // Higher numbers are newer, as in the tracker.
     createdAt: new Date(Date.UTC(2026, 8, 1, 0, n)),
@@ -144,11 +145,11 @@ describe("AnswerQuestion with Jira: stored support requests", () => {
     expect(ofType("support_request")).toEqual([
       {
         id: "DS-7", type: "support_request", sourceChannel: "conv-1@wire.com", sourceDate: requests[1]!.createdAt, confidence: 1, pathsMatched: ["support_requests"],
-        content: "DS-7 | Summary: Problem DS-7 | Last known status: Done",
+        content: "DS-7 | Summary: Problem DS-7 | Kind: fault | Last known status: Done",
       },
       {
         id: "DS-6", type: "support_request", sourceChannel: "conv-1@wire.com", sourceDate: requests[0]!.createdAt, confidence: 1, pathsMatched: ["support_requests"],
-        content: "DS-6 | Summary: VPN drops every ten minutes | Requested by: Alice | Last known status: In progress",
+        content: "DS-6 | Summary: VPN drops every ten minutes | Kind: fault | Requested by: Alice | Last known status: In progress",
       },
     ]);
   });
@@ -451,7 +452,7 @@ describe("AnswerQuestion with Jira: offers", () => {
   const support = 'OFFER: {"kind":"support","summary":"VPN  drops\\nevery ten minutes","description":"My VPN drops every ten minutes since Monday."}';
   const reply = 'OFFER: {"kind":"reply","issueKey":"DS-6","body":"Alice here: it still drops.\\nThanks"}';
   const resolve = 'OFFER: {"kind":"resolve","issueKey":"DS-6"}';
-  const supportQuestion = "Shall I raise this with the service desk?\n> **VPN drops every ten minutes**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
+  const supportQuestion = "Shall I report this to the service desk?\n> **VPN drops every ten minutes**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
   const replyQuestion = 'Shall I add this to **DS-6** "VPN drops every ten minutes"?\n> Alice here: it still drops.\n> Thanks\n\n(yes or no)?';
   const resolveQuestion = 'Shall I resolve **DS-6** "VPN drops every ten minutes" with the service desk (yes or no)?';
   const vpn = (): SupportRequest => makeRequest("DS-6", { summary: "VPN drops  every\nten minutes", statusCategory: "in_progress" });
@@ -460,7 +461,7 @@ describe("AnswerQuestion with Jira: offers", () => {
     const { stored, sent, repo, run } = setup({ modelAnswer: `I can raise that.\n${support}` });
     const answer = await run("My VPN drops every ten minutes, can you raise it with the service desk?");
     expect(stored).toEqual([{
-      command: { kind: "support", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes since Monday." },
+      command: { kind: "support", requestKind: "fault", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes since Monday." },
       conversationId: convId,
       requesterId: { id: "user-1", domain: "wire.com" },
       createdAt: NOW,
@@ -475,14 +476,14 @@ describe("AnswerQuestion with Jira: offers", () => {
     const marker = `OFFER: ${JSON.stringify({ kind: "support", summary: "Printer jammed", description: "The printer is jammed.\n\n  It shows error E4.  \n" })}`;
     const { sent, run } = setup({ modelAnswer: marker });
     await run("Please raise it with the service desk");
-    expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer jammed**\n> The printer is jammed.\n> It shows error E4.\n\n(yes or no)?"]);
+    expect(sent).toEqual(["Shall I report this to the service desk?\n> **Printer jammed**\n> The printer is jammed.\n> It shows error E4.\n\n(yes or no)?"]);
   });
 
   it("leaves out a description that only repeats the summary", async () => {
     const marker = `OFFER: ${JSON.stringify({ kind: "support", summary: "Printer jammed", description: "printer  jammed" })}`;
     const { sent, run } = setup({ modelAnswer: marker });
     await run("Please raise it with the service desk");
-    expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer jammed**\n\n(yes or no)?"]);
+    expect(sent).toEqual(["Shall I report this to the service desk?\n> **Printer jammed**\n\n(yes or no)?"]);
   });
 
   it("writes the reply question with the stored summary and the body quoted line by line, and keeps the requester's name (decision 1)", async () => {
@@ -801,7 +802,7 @@ describe("AnswerQuestion with Jira: passive service-desk help on", () => {
   it("accepts a support offer for a plain problem statement, since the operator opted in", async () => {
     const { stored, sent, run } = setup({ passive: true, modelAnswer: support });
     await run("the printer on floor 2 is out of toner");
-    expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer on floor 2 is out of toner**\n> The printer on floor 2 is out of toner.\n\n(yes or no)?"]);
+    expect(sent).toEqual(["Shall I report this to the service desk?\n> **Printer on floor 2 is out of toner**\n> The printer on floor 2 is out of toner.\n\n(yes or no)?"]);
     expect(stored).toHaveLength(1);
   });
 
@@ -820,7 +821,7 @@ describe("AnswerQuestion with Jira: passive service-desk help on", () => {
 });
 
 describe("AnswerQuestion with Jira: amending a pending offer", () => {
-  const original: OfferCommand = { kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." };
+  const original: OfferCommand = { kind: "support", requestKind: "fault", summary: "VPN drops", description: "My VPN drops every ten minutes." };
   const pendingReply: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops." };
   const revisedSupport = `OFFER: ${JSON.stringify({ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes since Monday." })}`;
   const revisedReply = `OFFER: ${JSON.stringify({ kind: "reply", issueKey: "DS-6", body: "It still drops after a reboot." })}`;
@@ -852,9 +853,9 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
   it("accepts a revised support offer without change intent, shows it in full and stores it", async () => {
     const { stored, sent, run } = setup({ modelAnswer: `Updated.\n${revisedSupport}` });
     await run("The description should mention it started on Monday", { pendingOffer: original });
-    const question = "Shall I raise this with the service desk?\n> **VPN drops**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
+    const question = "Shall I report this to the service desk?\n> **VPN drops**\n> My VPN drops every ten minutes since Monday.\n\n(yes or no)?";
     expect(sent).toEqual([question]);
-    expect(stored.map((o) => o.command)).toEqual([{ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes since Monday." }]);
+    expect(stored.map((o) => o.command)).toEqual([{ kind: "support", requestKind: "fault", summary: "VPN drops", description: "My VPN drops every ten minutes since Monday." }]);
   });
 
   it("sends nothing for unaddressed chat after an offer that does not revise it", async () => {
@@ -932,5 +933,102 @@ describe("AnswerQuestion with Jira: amending a pending offer", () => {
     await run("Change it", { pendingOffer: original });
     expect(stored).toHaveLength(0);
     expect(sent).toEqual(["Which detail should I add?"]);
+  });
+});
+
+describe("AnswerQuestion with Jira: request kinds and part orders", () => {
+  const offer = (fields: Record<string, unknown>): string =>
+    `OFFER: ${JSON.stringify({ kind: "support", summary: "Brake pads for truck 17", description: "Front pads are worn down.", ...fields })}`;
+  const PART = { vehicle: "Truck 17", part: "Brake pads, front", quantity: "2", deliverTo: "Depot North" };
+  const partQuestion = "Shall I order this part?\n> **Brake pads for truck 17**\n> Vehicle: Truck 17\n> Part: Brake pads, front\n> Quantity: 2\n> Deliver to: Depot North\n> Front pads are worn down.\n\n(yes or no)?";
+  const incomplete: OfferCommand = {
+    kind: "support", requestKind: "part", summary: "Brake pads for truck 17", description: "Front pads are worn down.",
+    part: { part: "Brake pads, front", quantity: "2" },
+  };
+
+  it.each([
+    ["question", "Shall I ask the service desk?"],
+    ["fault", "Shall I report this to the service desk?"],
+  ])("asks the %s question for that kind", async (requestKind, lead) => {
+    const { stored, sent, run } = setup({ modelAnswer: offer({ requestKind }) });
+    await run("Please raise it with the service desk");
+    expect(sent).toEqual([`${lead}\n> **Brake pads for truck 17**\n> Front pads are worn down.\n\n(yes or no)?`]);
+    expect(stored[0]!.command).toMatchObject({ kind: "support", requestKind });
+  });
+
+  it("shows a complete part order with its details above the description and stores it", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: offer({ requestKind: "part", part: PART }) });
+    await run("Please order two front brake pads for truck 17, deliver to Depot North");
+    expect(sent).toEqual([partQuestion]);
+    expect(stored.map((o) => o.command)).toEqual([{
+      kind: "support", requestKind: "part", summary: "Brake pads for truck 17", description: "Front pads are worn down.", part: PART,
+    }]);
+  });
+
+  it("asks for the missing details of an incomplete part order and stores it as an amendable draft", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: `Happy to.\n${offer({ requestKind: "part", part: { part: "Brake pads, front", quantity: "2" } })}` });
+    const answer = await run("Can you order two front brake pads?");
+    const question = "To order it I need the vehicle (fleet or chassis number) and the delivery location. What are they?";
+    expect(sent).toEqual([question]);
+    expect(answer).toBe(question);
+    expect(stored.map((o) => o.command)).toEqual([incomplete]);
+  });
+
+  it("asks for every essential when a part order has none", async () => {
+    const { sent, run } = setup({ modelAnswer: offer({ requestKind: "part" }) });
+    await run("Please order a replacement mirror");
+    expect(sent).toEqual([
+      "To order it I need the vehicle (fleet or chassis number), the part (name or number), the quantity and the delivery location. What are they?",
+    ]);
+  });
+
+  it("treats the driver's answer that fills the details as a revision, even unaddressed, and then offers the order", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: offer({ requestKind: "part", part: PART }) });
+    await run("truck 17, to Depot North", { pendingOffer: incomplete, amendOnly: true });
+    expect(sent).toEqual([partQuestion]);
+    expect(stored[0]!.command).toMatchObject({ requestKind: "part", part: PART });
+  });
+
+  it("asks again for what is still missing after a partial answer", async () => {
+    const { stored, sent, run } = setup({ modelAnswer: offer({ requestKind: "part", part: { part: "Brake pads, front", quantity: "2", vehicle: "Truck 17" } }) });
+    await run("it's truck 17", { pendingOffer: incomplete, amendOnly: true });
+    expect(sent).toEqual(["To order it I need the delivery location. What is it?"]);
+    expect(stored).toHaveLength(1);
+  });
+
+  it.each([
+    "Please order two brake pads for truck 17",
+    "Can you order a replacement mirror?",
+    "order me the oil filter",
+    "Ask the service desk how often the oil is changed",
+  ])("accepts %j as asking for a support offer", async (question) => {
+    const { stored, run } = setup({ modelAnswer: offer({ requestKind: "part", part: PART }) });
+    await run(question);
+    expect(stored).toHaveLength(1);
+  });
+
+  it.each([
+    "What order should we do the checks in?",
+    "I came in order to fix the mirror",
+    "The order of the steps is wrong",
+  ])("does not accept %j as asking for a support offer", async (question) => {
+    const { stored, run } = setup({ modelAnswer: offer({ requestKind: "part", part: PART }) });
+    await run(question);
+    expect(stored).toHaveLength(0);
+  });
+
+  it("shows the kind of each stored request to the model", async () => {
+    const requests = [
+      makeRequest("DS-12", { kind: "part" }),
+      makeRequest("DS-11", { kind: "question" }),
+      makeRequest("DS-10", { kind: "fault", requesterName: "" }),
+    ];
+    const { ofType, run } = setup({ requests });
+    await run("Which requests are open?");
+    expect(ofType("support_request").map((r) => r.content)).toEqual([
+      "DS-12 | Summary: Problem DS-12 | Kind: part order | Requested by: Alice | Last known status: To do",
+      "DS-11 | Summary: Problem DS-11 | Kind: question | Requested by: Alice | Last known status: To do",
+      "DS-10 | Summary: Problem DS-10 | Kind: fault | Last known status: To do",
+    ]);
   });
 });

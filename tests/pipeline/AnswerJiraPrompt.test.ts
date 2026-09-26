@@ -43,7 +43,7 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain("`@Wire Team Bot resolve DS-NN`");
     expect(prompt).toContain("do not describe internal mechanics");
     expect(prompt).not.toContain("## Live support request tickets");
-    expect(prompt).toContain('OFFER: {"kind":"support","summary":"<one short line>","description":"<the problem>"}');
+    expect(prompt).toContain('OFFER: {"kind":"support","requestKind":"<question, part or fault>","summary":"<one short line>","description":"<the problem>"}');
     expect(prompt).toContain('OFFER: {"kind":"reply","issueKey":"DS-NN","body":');
     expect(prompt).toContain('OFFER: {"kind":"resolve","issueKey":"DS-NN"}');
     expect(prompt).toContain("one short line in the requester's own words");
@@ -74,6 +74,25 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain("never guess a ticket's status");
     expect(prompt).toContain('A "## Support requests" section');
     expect(prompt).toContain('OFFER: {"kind":"resolve","issueKey":"DS-NN"}');
+  });
+
+  it("explains the three request kinds and the part essentials, which are never invented", () => {
+    const prompt = integrationsPrompt({ jiraProjectKey: "DS" });
+    expect(prompt).toContain('"question" for a question to the service desk, "part" for an order of a replacement part, and "fault" for a fault, breakdown, damage, or a service or maintenance need. When unsure, use "fault".');
+    expect(prompt).toContain('"part":{"vehicle":"<fleet or chassis number>","part":"<part name or number>","quantity":"<how many>","deliverTo":"<delivery location>"}');
+    expect(prompt).toContain("Take each value only from the requester's own messages, in their words; never invent, guess or infer one.");
+    expect(prompt).toContain("Leave out every essential the requester has not given; the system asks for the missing ones, so do not ask for them yourself.");
+    expect(prompt).toContain("For a part order, keep the essentials already given and add those the message supplies.");
+    expect(prompt).toContain("to ask the service desk a question, to order a replacement part,");
+    expect(prompt).toContain("key, summary, kind, requester and last known status");
+  });
+
+  it("describes the desk with the configured service scope, and keeps the generic wording without it", () => {
+    const scope = "questions about the truck, faults, breakdowns, damage, service and maintenance, and replacement part orders";
+    const prompt = integrationsPrompt({ jiraProjectKey: "DS", jiraServiceScope: `  ${scope}.\n` });
+    expect(prompt).toContain(`Never say that it has no Jira integration or cannot work with Jira.\n- The service desk handles ${scope}.\n`);
+    expect(integrationsPrompt({ jiraProjectKey: "DS" })).not.toContain("The service desk handles");
+    expect(integrationsPrompt({ jiraServiceScope: scope })).toBe("");
   });
 
   it("uses the configured project key in the commands and offer format", () => {
@@ -129,7 +148,7 @@ describe("OpenAIGeneralAnswerAdapter with support requests and offers", () => {
     const returned = await adapter.answer("My VPN drops every ten minutes, can you raise it?", [], [], [], undefined, 0.5);
     expect(returned).toBe(answer);
     expect(llm.chatCompletion).toHaveBeenCalledTimes(1);
-    expect(parseOfferMarker(returned).command).toEqual({ kind: "support", summary: "VPN drops", description: "My VPN drops every ten minutes." });
+    expect(parseOfferMarker(returned).command).toEqual({ kind: "support", requestKind: "fault", summary: "VPN drops", description: "My VPN drops every ten minutes." });
   });
 
   it("keeps a reply marker whose body contains sentences and a question", async () => {

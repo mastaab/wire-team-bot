@@ -928,7 +928,7 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
     expect(deps.raiseSupportRequest!.execute).toHaveBeenCalledWith(expect.objectContaining({
-      summary, description, conversationId: convId, requesterId: sender, replyToMessageId: "msg-1",
+      summary, description, conversationId: convId, requesterId: sender, replyToMessageId: "msg-1", requestKind: "fault",
     }));
     expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
   });
@@ -1068,7 +1068,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     replyToServiceDesk: { execute: vi.fn().mockResolvedValue(undefined) },
     pendingOffers: {
       has: vi.fn().mockReturnValue(pending), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(),
-      drop: vi.fn().mockReturnValue(pending ? { kind: "support", summary: "VPN drops", description: "VPN drops" } : null),
+      drop: vi.fn().mockReturnValue(pending ? { kind: "support", requestKind: "fault", summary: "VPN drops", description: "VPN drops" } : null),
       recentlyDropped: vi.fn().mockReturnValue(recent), forgetDropped: vi.fn(),
     },
     processingQueue: { enqueue: vi.fn() },
@@ -1131,7 +1131,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     const deps = offerDeps(true, false);
     await new WireEventRouter(deps).onTextMessageReceived(customMention("the description should mention the office Wi-Fi"));
     expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
-      pendingOffer: { kind: "support", summary: "VPN drops", description: "VPN drops" },
+      pendingOffer: { kind: "support", requestKind: "fault", summary: "VPN drops", description: "VPN drops" },
     }));
   });
 
@@ -1141,7 +1141,7 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("the description should mention the office Wi-Fi"));
     expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
       question: "the description should mention the office Wi-Fi",
-      pendingOffer: { kind: "support", summary: "VPN drops", description: "VPN drops" },
+      pendingOffer: { kind: "support", requestKind: "fault", summary: "VPN drops", description: "VPN drops" },
       amendOnly: true,
     }));
     expect(deps.processingQueue!.enqueue).not.toHaveBeenCalled();

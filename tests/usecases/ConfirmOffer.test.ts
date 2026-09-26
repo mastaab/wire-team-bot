@@ -42,7 +42,7 @@ describe("classifyConfirmation", () => {
   });
 });
 
-const SUPPORT: OfferCommand = { kind: "support", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes." };
+const SUPPORT: OfferCommand = { kind: "support", requestKind: "fault", summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes." };
 const REPLY: OfferCommand = { kind: "reply", issueKey: "DS-6", body: "It still drops after the reset." };
 const RESOLVE: OfferCommand = { kind: "resolve", issueKey: "DS-6" };
 
@@ -112,8 +112,9 @@ describe("ConfirmOffer", () => {
 
     expect(handlers.raiseSupportRequest.execute).toHaveBeenCalledWith({
       summary: "VPN drops every ten minutes", description: "My VPN drops every ten minutes.",
-      conversationId: convId, requesterId: alice, requesterName: "Alice", replyToMessageId: "msg-9",
+      conversationId: convId, requesterId: alice, requesterName: "Alice", replyToMessageId: "msg-9", requestKind: "fault",
     });
+    expect(handlers.raiseSupportRequest.execute.mock.calls[0]![0]).not.toHaveProperty("part");
     expect(handlers.replyToServiceDesk.execute).not.toHaveBeenCalled();
     expect(handlers.resolveSupportRequest.execute).not.toHaveBeenCalled();
   });
@@ -311,6 +312,80 @@ describe("ConfirmOffer", () => {
 
       expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
       expect(sent).toEqual(["Understood, I won't."]);
+    });
+  });
+
+  describe("part orders", () => {
+    const PART = { vehicle: "Truck 17", part: "Brake pads", quantity: "2", deliverTo: "Depot North" };
+    const COMPLETE: OfferCommand = { kind: "support", requestKind: "part", summary: "Brake pads for truck 17", description: "Front pads are worn.", part: PART };
+    const INCOMPLETE: OfferCommand = { kind: "support", requestKind: "part", summary: "Brake pads", description: "Front pads are worn.", part: { part: "Brake pads", quantity: "2" } };
+
+    it("raises a complete part order with its kind and details", async () => {
+      const { handlers, useCase, offer } = setup();
+      offer(COMPLETE);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expect(handlers.raiseSupportRequest.execute).toHaveBeenCalledWith({
+        summary: "Brake pads for truck 17", description: "Front pads are worn.", conversationId: convId, requesterId: alice,
+        requesterName: "Alice", replyToMessageId: "msg-9", requestKind: "part", part: PART,
+      });
+    });
+
+    it("passes the question kind through", async () => {
+      const { handlers, useCase, offer } = setup();
+      offer({ kind: "support", requestKind: "question", summary: "Service interval", description: "How often is the oil changed?" });
+
+      await useCase.execute({ ...input, text: "yes" });
+
+      expect(handlers.raiseSupportRequest.execute).toHaveBeenCalledWith(expect.objectContaining({ requestKind: "question" }));
+    });
+
+    it("does not raise an incomplete part order on yes: says what is missing and keeps the draft", async () => {
+      const { handlers, wire, sent, store, useCase, offer } = setup();
+      offer(INCOMPLETE);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expectNothingDispatched(handlers);
+      expect(sent).toEqual(["I haven't ordered anything yet: I still need the vehicle (fleet or chassis number) and the delivery location."]);
+      expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+      expect(store.has(convId, alice, now)).toBe(true);
+      expect(store.recentlyDropped(convId, alice, now)).toBeNull();
+    });
+
+    it("refuses an order with no details at all, naming every essential", async () => {
+      const { handlers, sent, useCase, offer } = setup();
+      offer({ kind: "support", requestKind: "part", summary: "Mirror", description: "Need a new mirror." });
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expectNothingDispatched(handlers);
+      expect(sent).toEqual([
+        "I haven't ordered anything yet: I still need the vehicle (fleet or chassis number), the part (name or number), the quantity and the delivery location.",
+      ]);
+    });
+
+    it("asks for the missing details again after an acknowledgement", async () => {
+      const { handlers, sent, store, useCase, offer } = setup();
+      offer(INCOMPLETE);
+
+      expect(await useCase.execute({ ...input, text: "ok" })).toBe(true);
+
+      expectNothingDispatched(handlers);
+      expect(sent).toEqual(["To order it I need the vehicle (fleet or chassis number) and the delivery location. What are they?"]);
+      expect(store.has(convId, alice, now)).toBe(true);
+    });
+
+    it("cancels an incomplete part order on no", async () => {
+      const { handlers, sent, store, useCase, offer } = setup();
+      offer(INCOMPLETE);
+
+      expect(await useCase.execute({ ...input, text: "no" })).toBe(true);
+
+      expectNothingDispatched(handlers);
+      expect(sent).toEqual(["Understood, I won't."]);
+      expect(store.has(convId, alice, now)).toBe(false);
     });
   });
 
