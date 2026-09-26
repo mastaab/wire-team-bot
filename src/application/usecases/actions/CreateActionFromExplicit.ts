@@ -6,6 +6,7 @@ import type { DateTimeService } from "../../../domain/services/DateTimeService";
 import type { UserResolutionService } from "../../../domain/services/UserResolutionService";
 import type { ConversationConfigRepository } from "../../../domain/repositories/ConversationConfigRepository";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import { formatTimeInZone } from "../../services/formatTimeInZone";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { Logger } from "../../ports/Logger";
 
@@ -53,7 +54,7 @@ export class CreateActionFromExplicit {
     const assigneeId = assigneeResult.userId;
     const assigneeName = input.assigneeReference ?? input.authorName;
 
-    const deadline = await this.parseDeadline(input.deadlineText, input.conversationId);
+    const { deadline, timezone } = await this.parseDeadline(input.deadlineText, input.conversationId);
     if (input.deadlineText && !deadline) {
       await this.wireOutbound.sendPlainText(input.conversationId, "I could not parse that deadline. Please give a date or time.", { replyToMessageId: input.rawMessageId });
       return null;
@@ -96,7 +97,7 @@ export class CreateActionFromExplicit {
 
     await this.wireOutbound.sendPlainText(
       input.conversationId,
-      `Action **${saved.id}** created for **${assigneeName}**: ${saved.description}${saved.deadline ? ` (due ${input.deadlineText}: ${saved.deadline.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })})` : ""}`,
+      `Action **${saved.id}** created for **${assigneeName}**: ${saved.description}${saved.deadline ? ` (due ${input.deadlineText}: ${formatTimeInZone(saved.deadline, timezone, "date")})` : ""}`,
       { replyToMessageId: input.rawMessageId },
     );
 
@@ -113,11 +114,12 @@ export class CreateActionFromExplicit {
     });
   }
 
-  private async parseDeadline(deadlineText: string | undefined, conversationId: QualifiedId): Promise<Date | null> {
-    if (!deadlineText) return null;
+  /** The deadline read in the conversation's timezone, and that timezone for displaying it. */
+  private async parseDeadline(deadlineText: string | undefined, conversationId: QualifiedId): Promise<{ deadline: Date | null; timezone: string }> {
+    if (!deadlineText) return { deadline: null, timezone: "UTC" };
     const config = await this.conversationConfig.get(conversationId);
     const timezone = config?.timezone ?? "UTC";
     const parsed = this.dateTimeService.parse(deadlineText, { timezone });
-    return parsed?.value ?? null;
+    return { deadline: parsed?.value ?? null, timezone };
   }
 }

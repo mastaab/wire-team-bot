@@ -3,6 +3,7 @@ import type { Reminder } from "../../../domain/entities/Reminder";
 import type { ReminderRepository } from "../../../domain/repositories/ReminderRepository";
 import type { DateTimeService } from "../../../domain/services/DateTimeService";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import { formatTimeInZone } from "../../services/formatTimeInZone";
 import type { SchedulerPort, ScheduledJob } from "../../ports/SchedulerPort";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { Logger } from "../../ports/Logger";
@@ -73,10 +74,7 @@ export class CreateReminder {
       details: { description: saved.description, triggerAt: saved.triggerAt },
     });
 
-    const triggerFormatted = saved.triggerAt.toLocaleString("en-GB", {
-      weekday: "long", day: "numeric", month: "short", year: "numeric",
-      hour: "2-digit", minute: "2-digit", timeZone: input.timezone ?? "UTC", timeZoneName: "short",
-    });
+    const triggerFormatted = formatTimeInZone(saved.triggerAt, input.timezone ?? "UTC", "weekdayDate");
     await this.wireOutbound.sendPlainText(
       input.conversationId,
       `Reminder **${saved.id}** set for **${triggerFormatted}**: ${saved.description}`,

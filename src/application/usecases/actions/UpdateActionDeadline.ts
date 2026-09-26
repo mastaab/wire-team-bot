@@ -3,6 +3,7 @@ import type { Action } from "../../../domain/entities/Action";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { DateTimeService } from "../../../domain/services/DateTimeService";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import { formatTimeInZone } from "../../services/formatTimeInZone";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 
@@ -64,7 +65,7 @@ export class UpdateActionDeadline {
 
     await this.wireOutbound.sendPlainText(
       input.conversationId,
-      `**${action.id}** deadline set to **${newDeadline.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}**.`,
+      `**${action.id}** deadline set to **${formatTimeInZone(newDeadline, input.timezone, "date")}**.`,
       { replyToMessageId: input.replyToMessageId },
     );
 

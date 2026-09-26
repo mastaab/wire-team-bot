@@ -75,7 +75,7 @@ describe("GetIssueStatus", () => {
     expect(sent[0]).toContain([
       "Latest reply on the ticket:",
       "",
-      "**Dana Agent**, 25 Sept, 16:55",
+      "**Dana Agent**, 25 Sept, 16:55 CEST",
       "> We have reset your VPN profile.",
       "> Please try again.",
     ].join("\n"));
@@ -136,7 +136,7 @@ describe("formatIssue", () => {
       { author: "Dana", created: new Date("2026-09-25T09:00:00Z"), body: "First" },
       { author: "Lee", created: new Date("2026-09-25T10:00:00Z"), body: "x".repeat(600) },
     ], "Not/AZone");
-    expect(text.startsWith("Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00\n> First\n\n**Lee**, 25 Sept, 10:00\n> ")).toBe(true);
+    expect(text.startsWith("Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00 UTC\n> First\n\n**Lee**, 25 Sept, 10:00 UTC\n> ")).toBe(true);
     expect(text.endsWith(`${"x".repeat(497)}...`)).toBe(true);
   });
 

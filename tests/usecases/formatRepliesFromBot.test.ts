@@ -10,13 +10,13 @@ describe("formatReplies with the bot's own replies", () => {
     ], "UTC")).toBe([
       "Latest reply on the ticket:",
       "",
-      "**Your team (via Wire)**, 25 Sept, 09:00",
+      "**Your team (via Wire)**, 25 Sept, 09:00 UTC",
       "> Section 3 is attached.",
     ].join("\n"));
   });
 
   it("keeps the account name for other replies", () => {
-    const expected = "Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00\n> First\n\n**Lee**, 25 Sept, 09:00\n> Second";
+    const expected = "Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00 UTC\n> First\n\n**Lee**, 25 Sept, 09:00 UTC\n> Second";
     expect(formatReplies([
       { author: "Dana", created, body: "First" },
       { author: "Lee", created, body: "Second", fromThisBot: false },
@@ -28,8 +28,8 @@ describe("formatReplies with the bot's own replies", () => {
       { author: "Dana", created, body: "Please send the form." },
       { author: "WireTeamBotDemo", created, body: "Sent.", fromThisBot: true },
     ], "UTC");
-    expect(text).toContain("**Dana**, 25 Sept, 09:00");
-    expect(text).toContain("**Your team (via Wire)**, 25 Sept, 09:00");
+    expect(text).toContain("**Dana**, 25 Sept, 09:00 UTC");
+    expect(text).toContain("**Your team (via Wire)**, 25 Sept, 09:00 UTC");
     expect(text).not.toContain("WireTeamBotDemo");
   });
 
@@ -43,7 +43,7 @@ describe("formatReplies with the bot's own replies", () => {
     const lines = text.split("\n");
     expect(lines).not.toContain("> ");
     expect(lines).not.toContain(">");
-    for (const author of ["**Your team (via Wire)**, 25 Sept, 09:00", "**Dana**, 25 Sept, 09:00"]) {
+    for (const author of ["**Your team (via Wire)**, 25 Sept, 09:00 UTC", "**Dana**, 25 Sept, 09:00 UTC"]) {
       expect(lines[lines.indexOf(author) - 1]).toBe("");
     }
     expect(text).toContain("> Thanks.\n> We will countersign today.");
@@ -55,7 +55,7 @@ describe("formatReplies with the bot's own replies", () => {
     ["the older footer naming an action", "Sent from Wire (ACT-0004)."],
   ])("strips %s from the bot's own replies", (_label, footer) => {
     expect(formatReplies([{ author: "WireTeamBotDemo", created, body: `It still drops.\n\n${footer}\n`, fromThisBot: true }], "UTC"))
-      .toBe("Latest reply on the ticket:\n\n**Your team (via Wire)**, 25 Sept, 09:00\n> It still drops.");
+      .toBe("Latest reply on the ticket:\n\n**Your team (via Wire)**, 25 Sept, 09:00 UTC\n> It still drops.");
   });
 
   it("strips only a trailing footer", () => {

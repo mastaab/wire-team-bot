@@ -4,6 +4,7 @@ import type { ReminderRepository } from "../../../domain/repositories/ReminderRe
 import type { DateTimeService } from "../../../domain/services/DateTimeService";
 import type { SchedulerPort } from "../../ports/SchedulerPort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import { formatTimeInZone } from "../../services/formatTimeInZone";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 
@@ -94,7 +95,7 @@ export class SnoozeReminder {
 
     await this.wireOutbound.sendPlainText(
       input.conversationId,
-      `**${reminder.id}** snoozed until **${newDate.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: input.timezone, timeZoneName: "short" })}**.`,
+      `**${reminder.id}** snoozed until **${formatTimeInZone(newDate, input.timezone, "date")}**.`,
       { replyToMessageId: input.replyToMessageId },
     );
 
