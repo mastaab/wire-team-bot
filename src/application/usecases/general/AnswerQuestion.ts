@@ -20,6 +20,7 @@ import type { OfferCommand, PendingOffer, PendingOfferStore } from "../../servic
 import { botActor, refreshStatusCategory } from "../jira/supportRequestStatus";
 import { formatSla, statusLabel } from "../jira/formatIssue";
 import { findSupportRequestInConversation } from "../jira/supportRequestScope";
+import { formatTimeInZone } from "../../services/formatTimeInZone";
 
 /**
  * Scans `text` for `@Name` tokens and returns Wire mention objects with UTF-16 offsets.
@@ -69,6 +70,8 @@ export interface AnswerQuestionInput {
    * string is returned so the router can treat it as ordinary conversation.
    */
   amendOnly?: boolean;
+  /** The channel's IANA timezone, in which times given to the model are shown; UTC when absent. */
+  timezone?: string;
 }
 
 /**
@@ -229,9 +232,11 @@ export class AnswerQuestion {
     }
 
     if (this.jira) {
+      const now = (this.jira.now ?? (() => new Date()))();
       retrievalResults = [...retrievalResults, ...(await this.supportRequestContext(this.jira, input))];
+      retrievalResults.push(channelTimezoneResult(input.timezone ?? "UTC", input.channelId, now));
       const amended = amendableOffer(input.pendingOffer);
-      if (amended) retrievalResults.push(pendingOfferResult(amended, input.channelId, (this.jira.now ?? (() => new Date()))()));
+      if (amended) retrievalResults.push(pendingOfferResult(amended, input.channelId, now));
     }
 
     const modelAnswer = await this.generalAnswer.answer(
@@ -356,7 +361,7 @@ export class AnswerQuestion {
         result: {
           id: request.key,
           type: "jira_ticket",
-          content: ticketContent(snapshot, replies),
+          content: ticketContent(snapshot, replies, input.timezone ?? "UTC"),
           sourceChannel: input.channelId ?? "",
           sourceDate: now,
           confidence: 1,
@@ -463,12 +468,11 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
 }
 
 /**
- * The displaced offer when the requester may amend it: only offers that carry text to correct,
- * that is `support`, `reply` and a `resolve` with a closing comment.
+ * The displaced offer when the requester may amend it: `support`, `reply` and `resolve`, so a
+ * plain resolve offer can gain a closing comment.
  */
 function amendableOffer(pending: OfferCommand | undefined): OfferCommand | null {
-  if (!pending) return null;
-  return pending.kind === "support" || pending.kind === "reply" || (pending.kind === "resolve" && pending.comment) ? pending : null;
+  return pending ?? null;
 }
 
 /**
@@ -511,6 +515,19 @@ function pendingOfferResult(command: OfferCommand, channelId: string | undefined
     sourceDate: now,
     confidence: 1,
     pathsMatched: ["pending_offer"],
+  };
+}
+
+/** The channel's timezone for the model, so it reads and states times of day in that zone. */
+function channelTimezoneResult(timezone: string, channelId: string | undefined, now: Date): RetrievalResult {
+  return {
+    id: "channel-timezone",
+    type: "summary",
+    content: `This channel's timezone is ${timezone}; times of day in service-desk replies are shown in it.`,
+    sourceChannel: channelId ?? "",
+    sourceDate: now,
+    confidence: 1,
+    pathsMatched: ["channel_config"],
   };
 }
 
@@ -562,12 +579,12 @@ function storedRequestResult(request: SupportRequest, channelId: string | undefi
 }
 
 /** Compact ticket text for the model. Uses the English status label, never the tracker's status name. */
-function ticketContent(snapshot: IssueSnapshot, replies: readonly IssueReply[]): string {
+function ticketContent(snapshot: IssueSnapshot, replies: readonly IssueReply[], timezone: string): string {
   const replyLines = replies.map((reply) => {
     const author = reply.fromThisBot ? "your team via Wire" : reply.author;
     const body = oneLine(reply.body);
     const text = body.length <= SHARED_REPLY_MAX ? body : `${body.slice(0, SHARED_REPLY_MAX - 3).trimEnd()}...`;
-    return `Reply from ${author} at ${reply.created.toISOString()}: ${text}`;
+    return `Reply from ${author} at ${formatTimeInZone(reply.created, timezone, "dayMonth")}: ${text}`;
   });
   return [
     `${snapshot.key}: ${snapshot.summary}`,

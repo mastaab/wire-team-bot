@@ -393,12 +393,18 @@ export class WireEventRouter extends WireEventsHandler {
         return;
       }
 
-      // @Wire Team Bot timezone [Europe/Berlin]
-      const timezoneMatch = commandText.match(/^(?:set\s+(?:the\s+)?)?time\s*zone(?:\s+(?:to\s+)?([^\s].*?))?[.!?]?\s*$/i);
-      if (timezoneMatch && this.deps.setChannelTimezone) {
+      // @Wire Team Bot timezone [Europe/Berlin], "set our time zone to Europe/Berlin",
+      // "timezone: Europe/Berlin". An argument that does not look like a zone name ("timezone
+      // differences?") is a question for the normal routing.
+      const timezoneMatch = commandText.match(
+        /^(?:(?:set|change)\s+(?:(?:our|the|this\s+channel['’]s|the\s+channel['’]s)\s+)?)?time\s*zone(?:[.!?]|(?:\s*:\s*|\s+(?:to\s+)?)(\S.*?))?\s*$/i,
+      );
+      const timezoneArg = timezoneMatch?.[1]?.replace(/[.!]$/, "");
+      if (timezoneMatch && this.deps.setChannelTimezone
+          && (timezoneArg === undefined || /^[A-Za-z_]+(?:\/[A-Za-z0-9_+\-]+)*$/.test(timezoneArg))) {
         await this.deps.setChannelTimezone.execute({
           conversationId: convId, channelId, actorId: sender,
-          ...(timezoneMatch[1] ? { timezone: timezoneMatch[1].trim() } : {}),
+          ...(timezoneArg ? { timezone: timezoneArg } : {}),
           replyToMessageId: wireMessage.id,
         });
         return;
@@ -467,7 +473,7 @@ export class WireEventRouter extends WireEventsHandler {
       await this.deps.snoozeReminder.execute({
         reminderId: snoozeReminderMatch[1].toUpperCase(), conversationId: convId, actorId: sender,
         snoozeExpression: snoozeReminderMatch[2].trim(),
-        timezone: config?.timezone ?? "UTC",
+        timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC",
         replyToMessageId: wireMessage.id,
       });
       return;
@@ -528,7 +534,7 @@ export class WireEventRouter extends WireEventsHandler {
       const config = await this.deps.conversationConfig.get(convId);
       await this.deps.getIssueStatus.execute({
         reference: issueReference, conversationId: convId,
-        timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id,
+        timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id,
       });
       return;
     }
@@ -567,7 +573,7 @@ export class WireEventRouter extends WireEventsHandler {
       const config = await this.deps.conversationConfig.get(convId);
       await this.deps.updateActionDeadline.execute({
         actionId: actDeadlineMatch[1].toUpperCase(), conversationId: convId, actorId: sender,
-        deadlineText: actDeadlineMatch[2].trim(), timezone: config?.timezone ?? "UTC",
+        deadlineText: actDeadlineMatch[2].trim(), timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC",
         replyToMessageId: wireMessage.id,
       });
       return;
@@ -657,7 +663,7 @@ export class WireEventRouter extends WireEventsHandler {
                      ?? commandText.match(/^(?:make|set|create|add)\s+(?:a\s+)?reminder\s+(.+?)\s+(?:that|to)\s+(.+)$/i);
     if (remindMatch) {
       const config = await this.deps.conversationConfig.get(convId);
-      const parsed = this.deps.dateTimeService.parse(remindMatch[1].trim(), { timezone: config?.timezone ?? "UTC" });
+      const parsed = this.deps.dateTimeService.parse(remindMatch[1].trim(), { timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC" });
       if (!parsed?.value) {
         await this.deps.wireOutbound.sendPlainText(convId,
           `I'm afraid I couldn't parse _"${remindMatch[1].trim()}"_ as a time. Try: _"remind me at 3pm to call John"_ or _"remind me in 2 hours to check the build"_.`,
@@ -667,7 +673,7 @@ export class WireEventRouter extends WireEventsHandler {
       await this.deps.createReminder.execute({
         conversationId: convId, authorId: sender, authorName: senderDisplayName ?? "",
         rawMessageId: wireMessage.id,
-        description: remindMatch[2].trim(), targetId: sender, triggerAt: parsed.value, timezone: config?.timezone ?? "UTC",
+        description: remindMatch[2].trim(), targetId: sender, triggerAt: parsed.value, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC",
       });
       return;
     }
@@ -686,15 +692,18 @@ export class WireEventRouter extends WireEventsHandler {
     if (commandLowered === "my actions" || commandLowered === "my action"
         || /^(?:what\s+are\s+(?:my|all\s+my)|show\s+(?:me\s+)?my|list\s+my)\s+(?:open\s+|current\s+)?actions?\s*[?]?$/i.test(commandLowered)
         || /^(?:do\s+i\s+have\s+(?:any\s+)?(?:open\s+)?actions?)\s*[?]?$/i.test(commandLowered)) {
-      await this.deps.listMyActions.execute({ conversationId: convId, assigneeId: sender, replyToMessageId: wireMessage.id });
+      const config = await this.deps.conversationConfig.get(convId);
+      await this.deps.listMyActions.execute({ conversationId: convId, assigneeId: sender, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id });
       return;
     }
     if (commandLowered === "team actions" || commandLowered === "team action") {
-      await this.deps.listTeamActions.execute({ conversationId: convId, replyToMessageId: wireMessage.id });
+      const config = await this.deps.conversationConfig.get(convId);
+      await this.deps.listTeamActions.execute({ conversationId: convId, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id });
       return;
     }
     if (commandLowered === "overdue actions" || commandLowered === "overdue" || commandLowered === "overdue tasks") {
-      await this.deps.listOverdueActions.execute({ conversationId: convId, replyToMessageId: wireMessage.id });
+      const config = await this.deps.conversationConfig.get(convId);
+      await this.deps.listOverdueActions.execute({ conversationId: convId, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id });
       return;
     }
     if (commandLowered === "my reminders" || commandLowered === "show reminders" || commandLowered === "list reminders" || commandLowered === "reminders"
@@ -702,7 +711,7 @@ export class WireEventRouter extends WireEventsHandler {
         || /^(?:what\s+reminders\s+do\s+i\s+have)\s*[?]?$/i.test(commandLowered)
         || /^(?:what|show|list)\s+(?:are\s+(?:the|our|my)\s+)?(?:open\s+|pending\s+)?reminders?\s*[?]?$/i.test(commandLowered)) {
       const config = await this.deps.conversationConfig.get(convId);
-      await this.deps.listMyReminders.execute({ conversationId: convId, targetId: sender, timezone: config?.timezone ?? "UTC", replyToMessageId: wireMessage.id });
+      await this.deps.listMyReminders.execute({ conversationId: convId, targetId: sender, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id });
       return;
     }
     if (commandLowered === "list decisions" || commandLowered === "decisions" || commandLowered === "decisions list") {
@@ -712,11 +721,13 @@ export class WireEventRouter extends WireEventsHandler {
 
     // Retired task commands — redirect to action equivalents
     if (/^(my tasks?|list my tasks?)$/.test(commandLowered)) {
-      await this.deps.listMyActions.execute({ conversationId: convId, assigneeId: sender, replyToMessageId: wireMessage.id });
+      const config = await this.deps.conversationConfig.get(convId);
+      await this.deps.listMyActions.execute({ conversationId: convId, assigneeId: sender, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id });
       return;
     }
     if (/^(team tasks?|all tasks?|list team tasks?)$/.test(commandLowered)) {
-      await this.deps.listTeamActions.execute({ conversationId: convId, replyToMessageId: wireMessage.id });
+      const config = await this.deps.conversationConfig.get(convId);
+      await this.deps.listTeamActions.execute({ conversationId: convId, timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id });
       return;
     }
     if (/^(knowledge|list knowledge|my knowledge|show knowledge)$/.test(commandLowered)) {
@@ -762,11 +773,11 @@ export class WireEventRouter extends WireEventsHandler {
       return lastSentence.trimEnd().endsWith("?");
     })();
 
-    // A message that displaced the requester's support or reply offer is about that offer, even
-    // when the offer came from passive help and is not in the conversation buffer, so a
-    // correction ("the description should mention X") reaches the answer path to be revised.
-    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply"
-      || (droppedOffer?.kind === "resolve" && !!droppedOffer.comment);
+    // A message that displaced the requester's offer is about that offer, even when the offer
+    // came from passive help and is not in the conversation buffer, so a correction ("the
+    // description should mention X", "also add the comment 'thanks'") reaches the answer path
+    // to be revised.
+    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply" || droppedOffer?.kind === "resolve";
 
     // ── @Wire Team Bot mention or follow-up — answer question ────────────────────────
     const amendOnly = amendsOffer && !botMentionedEarly && !isFollowUp;
@@ -791,6 +802,7 @@ export class WireEventRouter extends WireEventsHandler {
         userId: isPersonal ? sender.id : undefined,
         ...(droppedOffer ? { pendingOffer: droppedOffer } : {}),
         ...(amendOnly ? { amendOnly: true } : {}),
+        timezone: config?.timezone ?? this.deps.defaultTimezone,
       });
       // Not a revision: the message was ordinary conversation, so it continues to capture.
       if (amendOnly && !answer) {

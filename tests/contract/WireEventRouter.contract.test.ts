@@ -912,6 +912,34 @@ it.each([
   expect(deps[useCase].execute).toHaveBeenCalledWith(expect.objectContaining({ timezone: "Europe/London" }));
 });
 
+it.each([
+  ["remind me in 2 minutes to check the zone", "createReminder"],
+  ["show reminders", "listMyReminders"],
+  ["my actions", "listMyActions"],
+  ["team actions", "listTeamActions"],
+  ["overdue actions", "listOverdueActions"],
+  ["my tasks", "listMyActions"],
+  ["team tasks", "listTeamActions"],
+  ["what is the weather like?", "answerQuestion"],
+] as const)("falls back to the configured default timezone for %s when the channel has no config", async (command, useCase) => {
+  const deps = makeDeps({ defaultTimezone: "Europe/Berlin" } as Partial<WireEventRouterDeps>);
+  vi.mocked(deps.dateTimeService.parse).mockReturnValue({ value: new Date("2026-09-21T11:20:00Z"), ambiguous: false });
+  await new WireEventRouter(deps).onTextMessageReceived(customMention(command));
+  expect(deps[useCase].execute).toHaveBeenCalledWith(expect.objectContaining({ timezone: "Europe/Berlin" }));
+});
+
+it.each([
+  ["my actions", "listMyActions"],
+  ["team actions", "listTeamActions"],
+  ["overdue actions", "listOverdueActions"],
+  ["what is the weather like?", "answerQuestion"],
+] as const)("passes the conversation timezone to %s", async (command, useCase) => {
+  const deps = makeDeps();
+  vi.mocked(deps.conversationConfig.get).mockResolvedValue({ timezone: "Europe/London" } as never);
+  await new WireEventRouter(deps).onTextMessageReceived(customMention(command));
+  expect(deps[useCase].execute).toHaveBeenCalledWith(expect.objectContaining({ timezone: "Europe/London" }));
+});
+
 describe("WireEventRouter contract: Jira demo commands", () => {
   const jiraDeps = () => makeDeps({
     raiseSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
@@ -1197,16 +1225,23 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     }));
   });
 
-  it("leaves an unmentioned message after a dropped resolve offer to normal routing", async () => {
+  it("sends an unmentioned message after a dropped plain resolve offer to the answer path as amend-only", async () => {
     const deps = makeDeps({
       pendingOffers: {
         has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(),
         drop: vi.fn().mockReturnValue({ kind: "resolve", issueKey: "DS-8" }), recentlyDropped: vi.fn().mockReturnValue(null), forgetDropped: vi.fn(),
       },
       confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      processingQueue: { enqueue: vi.fn() },
+      pipeline: {},
     } as unknown as Partial<WireEventRouterDeps>);
-    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("lunch at noon?"));
-    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    (deps.answerQuestion.execute as ReturnType<typeof vi.fn>).mockResolvedValue("");
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("also add the comment 'thanks'"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
+      pendingOffer: { kind: "resolve", issueKey: "DS-8" }, amendOnly: true,
+    }));
+    // Not a revision: the message continues to normal capture.
+    expect(deps.processingQueue!.enqueue).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-1" }));
   });
 
   it("does not pass an offer to the answer path when none was dropped", async () => {
@@ -1276,6 +1311,12 @@ describe("WireEventRouter contract: channel timezone", () => {
     ["timezone Europe/Berlin", "Europe/Berlin"],
     ["set the timezone to america/new_york", "america/new_york"],
     ["time zone UTC.", "UTC"],
+    ["change our time zone to Europe/London", "Europe/London"],
+    ["set this channel's timezone Europe/Paris", "Europe/Paris"],
+    ["change the channel's timezone to America/Argentina/Buenos_Aires", "America/Argentina/Buenos_Aires"],
+    ["timezone: Asia/Tokyo", "Asia/Tokyo"],
+    ["timezone to Europe/Berlin!", "Europe/Berlin"],
+    ["timezone Etc/GMT+1", "Etc/GMT+1"],
   ])("'%s' → setChannelTimezone(%s) when the bot is mentioned", async (text, timezone) => {
     const deps = tzDeps();
     await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
@@ -1288,6 +1329,14 @@ describe("WireEventRouter contract: channel timezone", () => {
     await new WireEventRouter(deps).onTextMessageReceived(customMention("timezone?"));
     expect(deps.setChannelTimezone!.execute).toHaveBeenCalledWith(expect.not.objectContaining({ timezone: expect.anything() }));
   });
+
+  it.each(["timezone differences?", "timezone of the customer is different", "time zone +01:00"])(
+    "lets '%s' continue to normal routing", async (text) => {
+      const deps = tzDeps();
+      await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+      expect(deps.setChannelTimezone!.execute).not.toHaveBeenCalled();
+      expect(deps.answerQuestion.execute).toHaveBeenCalled();
+    });
 
   it("never changes the timezone from chat that does not mention the bot", async () => {
     const deps = tzDeps();
