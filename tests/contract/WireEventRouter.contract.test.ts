@@ -1180,6 +1180,23 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
   });
 
+  it("sends an unmentioned correction of a resolve offer with a comment to the answer path", async () => {
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue({ kind: "resolve", issueKey: "DS-8", comment: "Works again." }), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      processingQueue: { enqueue: vi.fn() },
+      pipeline: {},
+    } as unknown as Partial<WireEventRouterDeps>);
+    (deps.answerQuestion.execute as ReturnType<typeof vi.fn>).mockResolvedValue("Shall I resolve **DS-8** …?");
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("say it works on both trucks"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
+      pendingOffer: { kind: "resolve", issueKey: "DS-8", comment: "Works again." }, amendOnly: true,
+    }));
+  });
+
   it("leaves an unmentioned message after a dropped resolve offer to normal routing", async () => {
     const deps = makeDeps({
       pendingOffers: {

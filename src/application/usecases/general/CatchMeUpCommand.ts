@@ -77,5 +77,6 @@ function formatSummary(
   const from = periodStart.toISOString().slice(0, 16).replace("T", " ");
   const to = periodEnd.toISOString().slice(0, 16).replace("T", " ");
   const sentimentNote = sentiment && sentiment !== "routine" ? ` _(${sentiment})_` : "";
-  return `**Catch-up: ${from} → ${to}**${sentimentNote}\n\n${summary}`;
+  // Summaries cover UTC periods; the label keeps the times unambiguous in any channel timezone.
+  return `**Catch-up: ${from} → ${to} UTC**${sentimentNote}\n\n${summary}`;
 }

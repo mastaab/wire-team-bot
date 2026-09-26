@@ -765,7 +765,8 @@ export class WireEventRouter extends WireEventsHandler {
     // A message that displaced the requester's support or reply offer is about that offer, even
     // when the offer came from passive help and is not in the conversation buffer, so a
     // correction ("the description should mention X") reaches the answer path to be revised.
-    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply";
+    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply"
+      || (droppedOffer?.kind === "resolve" && !!droppedOffer.comment);
 
     // ── @Wire Team Bot mention or follow-up — answer question ────────────────────────
     const amendOnly = amendsOffer && !botMentionedEarly && !isFollowUp;
