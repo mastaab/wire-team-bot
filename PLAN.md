@@ -1619,14 +1619,15 @@ This work lives on the `demo/jira` branch. It is a customer demo, not part of th
 
 ### Demo story
 
-A team works in an encrypted Wire channel and raises its problems with the Jira Service Management desk without leaving the conversation.
+A truck manufacturer offers the bot as premium support with its trucks. Drivers talk in an encrypted Wire channel; the bot turns their questions, fault reports and part orders into requests for the manufacturer's service desk, and nothing leaves Wire without a driver's yes. The demo runs with `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types mapped and the service scope set.
 
-1. **Raise:** `@Wire Team Bot support: My VPN drops every ten minutes` (or in plain language, "my VPN keeps dropping, can you raise it with the service desk?", confirmed with yes) raises DS-6 with the summary, the description and the requester's name, and replies with the link. Both SLA clocks start.
-2. **Follow:** `status of DS-6` or "any news on my VPN issue?" shows the live status, SLAs and the latest replies from the desk; `support requests` and `my support requests` list the open ones.
-3. **Reply:** `@Wire Team Bot reply to DS-6: It happens on the office Wi-Fi only.` sends a customer-facing reply, or the bot offers to send one.
-4. **Resolve:** `@Wire Team Bot resolve DS-6` (or "the VPN works again, please close my request", confirmed with yes) resolves the request and reports the SLA outcome.
+1. **Fault:** a driver writes, without mentioning the bot, "the brake warning light on truck 12 came on this morning". The bot offers "Shall I report this to the service desk?" with the full text; on yes it raises the request (request type "Submit a request or incident") and replies with the link. Both SLA clocks start.
+2. **Part order:** "we need a new left mirror for truck 7". The bot asks for what is missing ("To order it I need the quantity and the delivery location. What are they?"), the driver answers, and the bot offers "Shall I order this part?" with `Vehicle`, `Part`, `Quantity` and `Deliver to` lines; yes raises a "Replacement part" request.
+3. **Question:** "how do I reset the AdBlue warning after a refill?" gets "Shall I ask the service desk?"; yes raises an "Ask a question" request.
+4. **Follow and add:** "has anyone heard back about the brake light?" gets the live status and the desk's replies; "it only happens when the trailer is attached" gets "Shall I add this to DS-N …?".
+5. **Resolve:** `@Wire Team Bot resolve DS-N` or "the brake light is fine now, please close it" (confirmed) resolves the request and reports the SLA outcome.
 
-The message for security-minded customers: the conversation stays in Wire; only what someone explicitly raises or replies is sent to the service desk, never the surrounding messages.
+The message for security-minded customers: the conversation stays in Wire; only what a driver confirms is sent to the service desk. For defence customers, see the security note under "Truck premium support".
 
 ### Jira environment (verified 2026-09-25)
 

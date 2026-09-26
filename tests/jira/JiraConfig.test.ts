@@ -45,6 +45,20 @@ describe("resolveJiraConfig", () => {
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL: "off" })!.shareWithModel).toBe(false);
   });
 
+  it("maps request kinds to request types and rejects malformed mappings", () => {
+    expect(resolveJiraConfig(full)!.requestTypes).toEqual({});
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "question=11809, part=11810,fault=11808" })!.requestTypes)
+      .toEqual({ question: "11809", part: "11810", fault: "11808" });
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "parts=11810" })).toThrow(/question=11809/);
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_REQUEST_TYPES: "part=abc" })).toThrow(/question=11809/);
+  });
+
+  it("reads the service scope when set and bounds its length", () => {
+    expect(resolveJiraConfig(full)!.serviceScope).toBeUndefined();
+    expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE: " truck faults and parts " })!.serviceScope).toBe("truck faults and parts");
+    expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE: "x".repeat(501) })).toThrow(/500/);
+  });
+
   it("keeps passive service-desk help off unless explicitly switched on", () => {
     expect(resolveJiraConfig(full)!.passive).toBe(false);
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_PASSIVE: "On" })!.passive).toBe(true);
