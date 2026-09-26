@@ -319,8 +319,9 @@ export class AnswerQuestion {
   /**
    * After the model's answer was sent: each support request of this conversation it names
    * (checked by the scope helper, so another channel's key is ignored) gets the answer as its
-   * last message, and the replies passed to the model count as shown, so the watch does not
-   * announce them again. Bookkeeping failures are logged and never change the answer.
+   * last message, and the replies of the live tickets the answer names count as shown, so the
+   * watch does not announce them again. Replies of a ticket the answer leaves out stay unseen:
+   * the model may not have repeated them. Bookkeeping failures are logged and never change the answer.
    */
   private async rememberAnswer(
     jira: AnswerQuestionJira, input: AnswerQuestionInput, text: string, sent: SentMessageRef | undefined, live: readonly LiveTicket[],
@@ -337,7 +338,8 @@ export class AnswerQuestion {
         if (request) await rememberLastMessage(jira.requests, request.key, sent, "AnswerQuestion", this.logger);
       }
     }
-    for (const ticket of live) {
+    const named = namedKeys(text, jira.tracker.projectKey);
+    for (const ticket of live.filter((t) => named.includes(t.key.toUpperCase()))) {
       await markRepliesSeen(jira.requests, ticket.key, ticket.replies, "AnswerQuestion", this.logger);
     }
   }

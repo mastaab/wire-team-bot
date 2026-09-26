@@ -1184,15 +1184,24 @@ describe("AnswerQuestion with Jira: watch markers", () => {
     expect(repo.setLastMessage).not.toHaveBeenCalled();
   });
 
-  it("marks the newest reply passed to the model as seen after the answer was sent, whoever wrote it", async () => {
+  it("marks the newest reply of a ticket the answer names as seen after the answer was sent, whoever wrote it", async () => {
     const { repo, wire, run } = setup({
-      requests: [makeRequest("DS-6")], shareWithModel: true, modelAnswer: "The desk asked you to try again.",
+      requests: [makeRequest("DS-6")], shareWithModel: true, modelAnswer: "On ds-6 the desk asked you to try again.",
       tracker: { listCustomerReplies: vi.fn(async () => replies) },
     });
     await run("Any news on my VPN issue?");
     expect(repo.advanceLastSeenReplyAt).toHaveBeenCalledTimes(1);
     expect(repo.advanceLastSeenReplyAt).toHaveBeenCalledWith("DS-6", new Date("2026-09-24T11:00:00Z"));
     expect(wire.sendPlainText.mock.invocationCallOrder[0]).toBeLessThan(repo.advanceLastSeenReplyAt.mock.invocationCallOrder[0]!);
+  });
+
+  it("leaves the replies unseen when the answer does not name the ticket, so the watch still announces them", async () => {
+    const { repo, run } = setup({
+      requests: [makeRequest("DS-6")], shareWithModel: true, modelAnswer: "The desk asked you to try again.",
+      tracker: { listCustomerReplies: vi.fn(async () => replies) },
+    });
+    await run("Any news on my VPN issue?");
+    expect(repo.advanceLastSeenReplyAt).not.toHaveBeenCalled();
   });
 
   it("does not advance the marker without replies, with sharing off, or when the replies could not be read", async () => {
