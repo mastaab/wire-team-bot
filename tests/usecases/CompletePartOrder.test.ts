@@ -39,6 +39,35 @@ function setup(extracted: PartDetails = { deliverTo: "depot north" }) {
 }
 
 describe("CompletePartOrder", () => {
+  it.each(["unknown", "Not stated", "N/A", "null"])("ignores the placeholder %j as a value", async (placeholder) => {
+    const pending: OfferCommand = { ...DRAFT, part: { ...DRAFT.part, deliverTo: "depot north" } };
+    const { sent, offers, useCase } = setup({ deliverTo: placeholder });
+
+    await expect(useCase.execute(input({ pending, text: `deliver to ${placeholder}` }))).resolves.toBe(false);
+
+    expect(sent).toEqual([]);
+    expect(offers.put).not.toHaveBeenCalled();
+  });
+
+  it("drops a vehicle, part or delivery location that does not appear in the message, keeping the quantity", async () => {
+    const { offers, useCase } = setup({ vehicle: "truck 12", deliverTo: "depot west", quantity: "2" });
+
+    await expect(useCase.execute(input({ text: "two please" }))).resolves.toBe(true);
+
+    expect(offers.put.mock.calls[0]![0].command.part).toEqual({ ...DRAFT.part, quantity: "2" });
+  });
+
+  it("shows the details so far when a change leaves the order incomplete", async () => {
+    const pending: OfferCommand = { ...DRAFT, part: { vehicle: "truck 7", part: "left mirror" } };
+    const { sent, useCase } = setup({ vehicle: "truck 9" });
+
+    await expect(useCase.execute(input({ pending, text: "sorry, it's truck 9" }))).resolves.toBe(true);
+
+    expect(sent[0]).toBe(
+      "To order it I need the quantity and the delivery location. What are they?\nSo far:\n> Vehicle: truck 9\n> Part: left mirror",
+    );
+  });
+
   it("corrects a value in a complete part order and shows the updated offer", async () => {
     const complete: OfferCommand = { ...DRAFT, part: { ...DRAFT.part, deliverTo: "depot south" } };
     const { offers, sent, useCase } = setup({ quantity: "3" });
@@ -113,7 +142,7 @@ describe("CompletePartOrder", () => {
     const pending: OfferCommand = { ...DRAFT, part: { part: "left mirror" } };
     const { wire, sent, offers, useCase } = setup({ vehicle: "truck 7" });
 
-    await expect(useCase.execute(input({ pending }))).resolves.toBe(true);
+    await expect(useCase.execute(input({ pending, text: "it's for truck 7" }))).resolves.toBe(true);
 
     expect(sent).toEqual([formatMissingPartsQuestion(["quantity", "deliverTo"])]);
     expect(sent[0]).toBe("To order it I need the quantity and the delivery location. What are they?");

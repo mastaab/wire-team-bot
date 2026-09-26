@@ -118,7 +118,7 @@ export class OpenAISupportTriageAdapter implements SupportTriagePort {
   }
 
   async extractPartDetails(message: string): Promise<PartDetails> {
-    const parsed = await this.ask("extractPartDetails", PART_DETAILS_PROMPT, `Message: ${JSON.stringify(message)}`, 120);
+    const parsed = await this.ask("extractPartDetails", PART_DETAILS_PROMPT, `Message: ${JSON.stringify(message)}`, 300);
     return toPartDetails(parsed) ?? {};
   }
 

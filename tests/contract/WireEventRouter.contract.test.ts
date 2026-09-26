@@ -1281,6 +1281,36 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ pendingOffer: pending, amendOnly: true }));
   });
 
+  it("does not treat a message to the bot as an answer to a part-order draft", async () => {
+    const pending = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7" } };
+    const completePartOrder = { execute: vi.fn().mockResolvedValue(true) };
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue(pending), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      completePartOrder,
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("pause"));
+    expect(completePartOrder.execute).not.toHaveBeenCalled();
+  });
+
+  it("records a bot entry after completing a part-order draft", async () => {
+    const pending = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7" } };
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue(pending), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      completePartOrder: { execute: vi.fn().mockResolvedValue(true) },
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("two, to depot north"));
+    const pushed = vi.mocked(deps.messageBuffer.push).mock.calls.map(([, message]) => message);
+    expect(pushed.map((m) => m.text)).toEqual(["two, to depot north", "(Updated the part order draft.)"]);
+  });
+
   it("does not try to complete an offer that is not a part order", async () => {
     const completePartOrder = { execute: vi.fn() };
     const deps = offerDeps(true, false);

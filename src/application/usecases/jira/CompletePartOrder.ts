@@ -42,7 +42,7 @@ export class CompletePartOrder {
 
     let extracted: PartDetails;
     try {
-      extracted = boundedDetails(await this.triage.extractPartDetails(input.text));
+      extracted = statedDetails(boundedDetails(await this.triage.extractPartDetails(input.text)), input.text);
     } catch (err) {
       this.logger?.warn("CompletePartOrder: extractPartDetails failed", { err: errorName(err) });
       return false;
@@ -59,8 +59,10 @@ export class CompletePartOrder {
     // A message that restates what the draft already holds is not an answer; leave it to normal routing.
     if (PART_DETAIL_FIELDS.every(({ key }) => (command.part?.[key] ?? "") === (pending.part?.[key] ?? ""))) return false;
     const missing = missingPartDetails(command);
+    // A changed earlier value is shown with the question, so no overwrite goes unseen.
+    const changed = PART_DETAIL_FIELDS.some(({ key }) => pending.part?.[key] && command.part?.[key] !== pending.part[key]);
     const question = missing.length > 0
-      ? formatMissingPartsQuestion(missing)
+      ? (changed ? `${formatMissingPartsQuestion(missing)}\n${formatPartSoFar(command.part)}` : formatMissingPartsQuestion(missing))
       : formatSupportQuestion(command.summary, command.description, "part", command.part);
     try {
       await this.wireOutbound.sendPlainText(input.conversationId, question, { replyToMessageId: input.replyToMessageId });
@@ -85,15 +87,41 @@ export class CompletePartOrder {
  * The essentials the model reported, each collapsed to one line. A value that is empty, not
  * text or longer than `PART_DETAIL_MAX` is left out, so it never replaces an earlier value.
  */
+/** Words a small model may write instead of JSON null; never a real value. */
+const PLACEHOLDERS = new Set(["null", "none", "unknown", "not stated", "not given", "not specified", "n/a", "na", "-", "?", "tbd"]);
+
 function boundedDetails(details: PartDetails | null | undefined): PartDetails {
   const bounded: PartDetails = {};
   if (!details || typeof details !== "object") return bounded;
   for (const { key } of PART_DETAIL_FIELDS) {
     const raw: unknown = details[key];
     const value = typeof raw === "string" ? raw.replace(/\s+/g, " ").trim() : "";
-    if (value && value.length <= PART_DETAIL_MAX) bounded[key] = value;
+    if (value && value.length <= PART_DETAIL_MAX && !PLACEHOLDERS.has(value.toLowerCase())) bounded[key] = value;
   }
   return bounded;
+}
+
+/**
+ * Keeps vehicle, part and delivery location only when a word of the value appears in the
+ * message, so a value the model took from elsewhere or made up is dropped. A quantity may be
+ * written differently ("two" as 2), so it is kept as extracted.
+ */
+function statedDetails(details: PartDetails, message: string): PartDetails {
+  const words = new Set(message.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  const stated: PartDetails = {};
+  for (const { key } of PART_DETAIL_FIELDS) {
+    const value = details[key];
+    if (!value) continue;
+    const valueWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+    if (key === "quantity" || valueWords.some((word) => words.has(word))) stated[key] = value;
+  }
+  return stated;
+}
+
+/** The essentials known so far, one quoted line each, for a question that follows a change. */
+function formatPartSoFar(part: PartDetails | undefined): string {
+  const lines = PART_DETAIL_FIELDS.filter(({ key }) => part?.[key]).map(({ key, label }) => `> ${label}: ${part![key]}`);
+  return ["So far:", ...lines].join("\n");
 }
 
 function errorName(err: unknown): string {

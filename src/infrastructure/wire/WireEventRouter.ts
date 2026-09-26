@@ -374,7 +374,8 @@ export class WireEventRouter extends WireEventsHandler {
       if (!droppedOffer) pendingOffers.forgetDropped(convId, sender);
       // A part-order draft: an answer ("two, deliver to depot north") or a correction ("actually
       // three") is merged in code, without relying on the answer model to return a revised offer.
-      if (droppedOffer && this.deps.completePartOrder && isPartOrder(droppedOffer)) {
+      // A message to the bot (a command or a question) is not an answer to the draft.
+      if (droppedOffer && this.deps.completePartOrder && isPartOrder(droppedOffer) && !isBotAddressed) {
         const completed = await this.deps.completePartOrder.execute({
           text: commandText, conversationId: convId, requesterId: sender, pending: droppedOffer, replyToMessageId: wireMessage.id,
         });
@@ -382,6 +383,10 @@ export class WireEventRouter extends WireEventsHandler {
           const now = new Date();
           this.deps.messageBuffer.push(convId, {
             messageId: wireMessage.id, senderId: sender, senderName: senderDisplayName ?? "", text, timestamp: now,
+          });
+          this.deps.messageBuffer.push(convId, {
+            messageId: `bot-${now.getTime()}`, senderId: this.deps.botUserId, senderName: "Wire Team Bot",
+            text: "(Updated the part order draft.)", timestamp: now,
           });
           return;
         }
