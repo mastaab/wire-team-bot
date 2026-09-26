@@ -20,6 +20,7 @@ const COUNT_CAP = 100;
  * Reports the current channel status in Wire Team Bot voice:
  * - Channel state (active / paused / secure)
  * - Time active since joining
+ * - The channel's timezone
  * - Open actions, pending reminders and active decisions in this conversation
  * - Open support requests, when the service desk integration is configured
  * - Number of knowledge graph entities (written only by passive extraction)
@@ -70,6 +71,8 @@ export class StatusCommand {
         lines.push(`Active for: ${hours} hour${hours !== 1 ? "s" : ""}`);
       }
     }
+
+    if (cfg?.timezone) lines.push(`Timezone: ${cfg.timezone}`);
 
     lines.push(
       `Open actions: ${formatCount(actions, true)}`,

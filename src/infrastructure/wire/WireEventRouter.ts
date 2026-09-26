@@ -23,6 +23,7 @@ import type { AnswerQuestion } from "../../application/usecases/general/AnswerQu
 import type { StatusCommand } from "../../application/usecases/general/StatusCommand";
 import type { CatchMeUpCommand } from "../../application/usecases/general/CatchMeUpCommand";
 import type { RaiseSupportRequest } from "../../application/usecases/jira/RaiseSupportRequest";
+import type { SetChannelTimezone } from "../../application/usecases/general/SetChannelTimezone";
 import type { ListSupportRequests } from "../../application/usecases/jira/ListSupportRequests";
 import type { ResolveSupportRequest } from "../../application/usecases/jira/ResolveSupportRequest";
 import type { GetIssueStatus } from "../../application/usecases/jira/GetIssueStatus";
@@ -90,6 +91,10 @@ export interface WireEventRouterDeps {
   /** Phase 4: optional — handles "catch me up" / "what did I miss" queries. */
   catchMeUpCommand?: CatchMeUpCommand;
   /** Customer demo: present only when the Jira integration is configured. */
+  /** Sets or shows the channel's timezone (`@bot timezone Europe/Berlin`). */
+  setChannelTimezone?: SetChannelTimezone;
+  /** Timezone for channels the bot newly joins; UTC when absent. */
+  defaultTimezone?: string;
   raiseSupportRequest?: RaiseSupportRequest;
   listSupportRequests?: ListSupportRequests;
   resolveSupportRequest?: ResolveSupportRequest;
@@ -388,6 +393,17 @@ export class WireEventRouter extends WireEventsHandler {
         return;
       }
 
+      // @Wire Team Bot timezone [Europe/Berlin]
+      const timezoneMatch = commandText.match(/^(?:set\s+(?:the\s+)?)?time\s*zone(?:\s+(?:to\s+)?([^\s].*?))?[.!?]?\s*$/i);
+      if (timezoneMatch && this.deps.setChannelTimezone) {
+        await this.deps.setChannelTimezone.execute({
+          conversationId: convId, channelId, actorId: sender,
+          ...(timezoneMatch[1] ? { timezone: timezoneMatch[1].trim() } : {}),
+          replyToMessageId: wireMessage.id,
+        });
+        return;
+      }
+
       // @Wire Team Bot status
       if (/^(?:channel\s+)?status[?.!]?$/i.test(commandLowered) && this.deps.statusCommand) {
         await this.deps.statusCommand.execute({
@@ -472,11 +488,14 @@ export class WireEventRouter extends WireEventsHandler {
     }
 
     const resolveMatch = jiraProjectKey && isBotAddressed
-      ? commandText.match(new RegExp(`^(?:resolve|close)\\s+(${jiraProjectKey}-\\d+)[.!]?\\s*$`, "i"))
+      ? commandText.match(new RegExp(`^(?:resolve|close)\\s+(${jiraProjectKey}-\\d+)(?:\\s*:\\s*([\\s\\S]+)|[.!]?\\s*)$`, "i"))
       : null;
     if (resolveMatch && this.deps.resolveSupportRequest) {
+      // `resolve DS-6: <comment>` adds a closing comment before resolving.
+      const comment = resolveMatch[2]?.trim();
       await this.deps.resolveSupportRequest.execute({
-        issueKey: resolveMatch[1]!.toUpperCase(), conversationId: convId, actorId: sender, replyToMessageId: wireMessage.id,
+        issueKey: resolveMatch[1]!.toUpperCase(), conversationId: convId, actorId: sender,
+        ...(comment ? { comment } : {}), replyToMessageId: wireMessage.id,
       });
       return;
     }
@@ -851,7 +870,7 @@ export class WireEventRouter extends WireEventsHandler {
       const existing = await this.deps.channelConfig.get(channelId);
       if (!existing) {
         await this.deps.channelConfig.upsert({ channelId, organisationId: convId.domain,
-          state: "paused", secureRanges: [], timezone: "UTC", locale: "en" });
+          state: "paused", secureRanges: [], timezone: this.deps.defaultTimezone ?? "UTC", locale: "en" });
       }
       await this.deps.channelConfig.setState(channelId, newState, actorId, now);
       if (newState === "secure") await this.deps.channelConfig.openSecureRange(channelId, now);
@@ -898,7 +917,7 @@ export class WireEventRouter extends WireEventsHandler {
       const existing = await this.deps.channelConfig.get(channelId);
       const base = existing ?? {
         channelId, organisationId: convId.domain, state: "active" as const,
-        secureRanges: [], timezone: "UTC", locale: "en",
+        secureRanges: [], timezone: this.deps.defaultTimezone ?? "UTC", locale: "en",
       };
       const updated = { ...base, contextUpdatedAt: new Date(), contextUpdatedBy: sender.id };
 
@@ -1091,7 +1110,7 @@ export class WireEventRouter extends WireEventsHandler {
         tags: existing?.tags ?? [],
         stakeholders: existing?.stakeholders ?? [],
         relatedChannels: existing?.relatedChannels ?? [],
-        timezone: existing?.timezone ?? "UTC",
+        timezone: existing?.timezone ?? this.deps.defaultTimezone ?? "UTC",
         locale: existing?.locale ?? "en",
         joinedAt: existing?.joinedAt ?? now,
         isPersonalMode,

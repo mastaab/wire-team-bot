@@ -59,6 +59,7 @@ describe("combined-command guard", () => {
     ["support: VPN drops\nit fails when I resolve DNS names", "DS"],
     ["support: Printer broken and my actions page is blank", "DS"],
     ["support: VPN drops\nACT-3 done", "DS"],
+    ["resolve DS-6: fixed\nACT-3 done", "DS"],
   ])("leaves Jira-like text alone when it is not a configured command: %s (project %s)", (text, project) => {
     expect(hasMultipleCommands(text, [], botId, project)).toBe(false);
   });

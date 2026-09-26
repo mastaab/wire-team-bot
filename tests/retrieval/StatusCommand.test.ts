@@ -178,4 +178,11 @@ describe("StatusCommand", () => {
     await makeCommand(deps).execute({ conversationId: convId, channelId, replyToMessageId: "msg-1" });
     expect(sentMessage(deps)).not.toContain("support requests");
   });
+
+  it("shows the channel's timezone when it is configured", async () => {
+    const cfg: ChannelConfig = { channelId, organisationId: "wire.com", state: "active", secureRanges: [], timezone: "Europe/Berlin", locale: "en" };
+    const deps = makeDeps(cfg, []);
+    await makeCommand(deps).execute({ conversationId: convId, channelId, replyToMessageId: "msg-1" });
+    expect(sentMessage(deps)).toContain("Timezone: Europe/Berlin");
+  });
 });

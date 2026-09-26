@@ -81,6 +81,7 @@ import { ListMyReminders } from "../application/usecases/reminders/ListMyReminde
 import { CancelReminder } from "../application/usecases/reminders/CancelReminder";
 import { SnoozeReminder } from "../application/usecases/reminders/SnoozeReminder";
 import { AnswerQuestion } from "../application/usecases/general/AnswerQuestion";
+import { SetChannelTimezone } from "../application/usecases/general/SetChannelTimezone";
 import { StatusCommand } from "../application/usecases/general/StatusCommand";
 import { GenerateSummary } from "../application/usecases/general/GenerateSummary";
 import { CatchMeUpCommand } from "../application/usecases/general/CatchMeUpCommand";
@@ -304,6 +305,8 @@ async function main() {
     snoozeReminder:         new SnoozeReminder(remindersRepo, dateTimeService, scheduler, wireOutbound, auditLogRepo),
     answerQuestion,
     statusCommand,
+    setChannelTimezone: new SetChannelTimezone(channelConfigRepo, auditLogRepo, wireOutbound, config.app.defaultTimezone),
+    defaultTimezone: config.app.defaultTimezone,
     catchMeUpCommand:       catchMeUp,
     raiseSupportRequest,
     listSupportRequests,

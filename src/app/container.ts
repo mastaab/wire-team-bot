@@ -61,6 +61,7 @@ import { InMemoryProcessingQueue } from "../infrastructure/queue/InMemoryProcess
 import { ProcessingPipeline } from "../infrastructure/pipeline/ProcessingPipeline";
 import type { MessageJob } from "../infrastructure/pipeline/ProcessingPipeline";
 import { AnswerQuestion } from "../application/usecases/general/AnswerQuestion";
+import { SetChannelTimezone } from "../application/usecases/general/SetChannelTimezone";
 import { StatusCommand } from "../application/usecases/general/StatusCommand";
 import { GenerateSummary } from "../application/usecases/general/GenerateSummary";
 import { CatchMeUpCommand } from "../application/usecases/general/CatchMeUpCommand";
@@ -306,6 +307,8 @@ export function createContainer(config: Config, logger: Logger): Container {
     snoozeReminder,
     answerQuestion,
     statusCommand,
+    setChannelTimezone: new SetChannelTimezone(channelConfigRepo, auditLogRepo, wireOutbound, config.app.defaultTimezone),
+    defaultTimezone: config.app.defaultTimezone,
     catchMeUpCommand,
     raiseSupportRequest,
     listSupportRequests,

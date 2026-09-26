@@ -962,6 +962,18 @@ describe("WireEventRouter contract: Jira demo commands", () => {
     expect(deps.resolveSupportRequest!.execute).toHaveBeenCalledWith({ issueKey, conversationId: convId, actorId: sender, replyToMessageId: "msg-1" });
   });
 
+  it.each([
+    ["resolve DS-6: The mirror was fitted, thanks.", "The mirror was fitted, thanks."],
+    ["close ds-6 : Works again\nACT-0005 done", "Works again\nACT-0005 done"],
+  ])("'%s' → resolveSupportRequest with a closing comment, never running commands inside it", async (text, comment) => {
+    const deps = jiraDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect(deps.resolveSupportRequest!.execute).toHaveBeenCalledWith({
+      issueKey: "DS-6", conversationId: convId, actorId: sender, comment, replyToMessageId: "msg-1",
+    });
+    expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
+  });
+
   it.each([["resolve WPB-6", true], ["resolve DS-6", false]])("does not resolve '%s' (mentioned: %s) outside the addressed, configured-project form", async (text, mentioned) => {
     const deps = jiraDeps();
     await new WireEventRouter(deps).onTextMessageReceived(mentioned ? customMention(text) : makeMessage(text));
@@ -1237,5 +1249,32 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.replyToServiceDesk!.execute).not.toHaveBeenCalled();
     expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId,
       "Please send one command per message. I have not run any commands from this message.", { replyToMessageId: message.id });
+  });
+});
+
+describe("WireEventRouter contract: channel timezone", () => {
+  const tzDeps = () => makeDeps({ setChannelTimezone: { execute: vi.fn().mockResolvedValue(undefined) } } as unknown as Partial<WireEventRouterDeps>);
+
+  it.each([
+    ["timezone Europe/Berlin", "Europe/Berlin"],
+    ["set the timezone to america/new_york", "america/new_york"],
+    ["time zone UTC.", "UTC"],
+  ])("'%s' → setChannelTimezone(%s) when the bot is mentioned", async (text, timezone) => {
+    const deps = tzDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect(deps.setChannelTimezone!.execute).toHaveBeenCalledWith(expect.objectContaining({ conversationId: convId, actorId: sender, timezone }));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  it("shows the current timezone for a bare 'timezone'", async () => {
+    const deps = tzDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("timezone?"));
+    expect(deps.setChannelTimezone!.execute).toHaveBeenCalledWith(expect.not.objectContaining({ timezone: expect.anything() }));
+  });
+
+  it("never changes the timezone from chat that does not mention the bot", async () => {
+    const deps = tzDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("timezone Europe/Berlin"));
+    expect(deps.setChannelTimezone!.execute).not.toHaveBeenCalled();
   });
 });

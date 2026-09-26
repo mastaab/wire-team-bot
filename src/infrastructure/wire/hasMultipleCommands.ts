@@ -45,8 +45,9 @@ export function hasMultipleCommands(text: string, mentions: readonly Mention[], 
     .filter(Boolean);
   const jira = jiraProjectKey && /^[A-Z][A-Z0-9]+$/.test(jiraProjectKey) ? jiraCommandStart(jiraProjectKey) : null;
   const isCommand = (part: string): boolean => COMMAND_START.test(part) || (jira?.test(part) ?? false);
-  // Everything after `support:` is the problem description, which may mention "my actions"
-  // or "status" in passing; it is sent to the service desk as text and never run.
-  if (jira && parts.length > 0 && /^support\s*:/i.test(parts[0])) return false;
+  // Everything after `support:` or `resolve DS-N:` is text for the service desk (a problem
+  // description or a closing comment), which may mention "my actions" or "status" in passing;
+  // it is sent as text and never run.
+  if (jira && parts.length > 0 && (/^support\s*:/i.test(parts[0]) || new RegExp(`^(?:resolve|close)\\s+${jiraProjectKey}-\\d+\\s*:`, "i").test(parts[0]))) return false;
   return parts.length > 1 && isCommand(parts[0]) && parts.slice(1).some(isCommand);
 }

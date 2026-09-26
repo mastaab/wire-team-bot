@@ -215,6 +215,7 @@ Set its endpoint and model using the keys in the template.
 | Variable | Default | Description |
 |---|---|---|
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `WIRE_TEAM_BOT_DEFAULT_TIMEZONE` | `UTC` | IANA timezone for channels the bot newly joins, e.g. `Europe/Berlin`; an unknown name stops startup. Existing channels keep theirs; change one with `@Wire Team Bot timezone <name>` |
 | `MESSAGE_BUFFER_SIZE` | `50` | Recent messages kept per conversation for Q&A context (max 500). Does not affect the Tier 2 extraction window, which is always 30. |
 | `SECRET_MODE_INACTIVITY_MS` | `1800000` | Milliseconds of inactivity in SECURE mode before Wire Team Bot prompts the team to resume (minimum 60 000) |
 
@@ -251,9 +252,7 @@ Record ID prefixes are case-insensitive: `act-0008`, `Act-0008` and `ACT-0008` r
 same action. Keep the hyphen and digits unchanged. Replies retain canonical uppercase IDs.
 The same rule applies to `DEC-` and `REM-` command references.
 
-Reminder creation, snooze and list replies show the conversation’s configured timezone with
-an explicit label (for example, `UTC` or `BST`). UTC is the default; the bot cannot infer the
-Wire client’s local timezone. Display formatting does not change the scheduled instant.
+Each channel has a timezone that decides how deadlines and reminder times ("by Friday", "at 3pm") are read and how times are shown, always with an explicit label (for example `UTC` or `CEST`). The bot cannot infer the Wire client's local timezone: new channels get `WIRE_TEAM_BOT_DEFAULT_TIMEZONE` (default `UTC`), and any member can change it with `@Wire Team Bot timezone Europe/Berlin` (audited); `@Wire Team Bot timezone` shows the current one and `status` lists it. Changing the timezone does not move stored deadlines or reminders, only how they are read and shown.
 
 | Task | Example |
 |---|---|
