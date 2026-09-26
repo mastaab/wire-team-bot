@@ -41,6 +41,12 @@ export interface LLMConfig {
   /** Embedding provider; defaults to the chat provider unless overridden. */
   embed: EmbeddingConfig;
   timeoutMs: number;
+  /**
+   * Sent as `reasoning_effort` on every chat request when set (WIRE_TEAM_BOT_LLM_REASONING_EFFORT).
+   * Local thinking models such as Qwen 3.5 under Ollama need `none`, or they spend the whole
+   * token budget on reasoning and return empty content. Unset leaves requests unchanged.
+   */
+  reasoningEffort?: ReasoningEffort;
   /** Complexity score above which the respond slot escalates to complexSynthesis. */
   complexityThreshold: number;
   /** Minimum LLM extraction confidence to persist a result. */
@@ -284,6 +290,18 @@ function envEmbeddingsMode(name: string): EmbeddingsMode {
   throw new Error(`${name} must be one of: on, off, auto`);
 }
 
+export type ReasoningEffort = "none" | "low" | "medium" | "high";
+
+/** The reasoning effort setting as a partial config; an unknown value fails at startup. */
+export function optionalReasoningEffort(raw: string | undefined): { reasoningEffort?: ReasoningEffort } {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return {};
+  if (value !== "none" && value !== "low" && value !== "medium" && value !== "high") {
+    throw new Error("WIRE_TEAM_BOT_LLM_REASONING_EFFORT must be none, low, medium or high");
+  }
+  return { reasoningEffort: value };
+}
+
 function loadLLMConfig(): LLMConfig {
   const baseUrl = envStr("WIRE_TEAM_BOT_LLM_BASE_URL", "http://localhost:11434/v1").replace(/\/+$/, "");
   const apiKey = envStr("WIRE_TEAM_BOT_LLM_API_KEY", "");
@@ -303,6 +321,7 @@ function loadLLMConfig(): LLMConfig {
     apiKey,
     embed,
     timeoutMs: envInt("WIRE_TEAM_BOT_LLM_TIMEOUT_MS", 60_000),
+    ...optionalReasoningEffort(process.env.WIRE_TEAM_BOT_LLM_REASONING_EFFORT),
     complexityThreshold: envFloat("WIRE_TEAM_BOT_COMPLEXITY_THRESHOLD", 0.7),
     extractConfidenceMin: envFloat("WIRE_TEAM_BOT_EXTRACT_CONFIDENCE_MIN", 0.6),
     entityDedupThreshold: envFloat("WIRE_TEAM_BOT_ENTITY_DEDUP_THRESHOLD", 0.92),

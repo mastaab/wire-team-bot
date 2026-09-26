@@ -55,3 +55,14 @@ it("does not loop when a remembered model rejects a request again", async () => 
   await expect(factory.chatCompletion("extract",[],{temperature:0})).rejects.toThrow("LLM request failed (400)");
   expect(fetch).toHaveBeenCalledTimes(3);
 });
+
+it("sends reasoning_effort only when it is configured", async () => {
+  const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: "{}" } }], model: "m" }), { status: 200 });
+  const fetch = vi.fn().mockImplementation(async () => ok());
+  vi.stubGlobal("fetch", fetch);
+  const quiet = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  await new LLMClientFactory({ ...config, reasoningEffort: "none" } as never, quiet as never).chatCompletion("extract", [], {});
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ reasoning_effort: "none" });
+  await new LLMClientFactory(config as never, quiet as never).chatCompletion("extract", [], {});
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).not.toHaveProperty("reasoning_effort");
+});

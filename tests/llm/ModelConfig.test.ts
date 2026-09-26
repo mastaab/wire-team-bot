@@ -1,5 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { loadConfig } from "../../src/app/config";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadConfig, optionalReasoningEffort } from "../../src/app/config";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -25,4 +25,13 @@ it("loads model settings and fallbacks from the canonical environment prefix", (
   for (const [key, suffix] of Object.entries(slots)) {
     expect(config.slots[key as keyof typeof slots]).toEqual({ model: `primary-${suffix}`, fallback: `fallback-${suffix}` });
   }
+});
+
+describe("WIRE_TEAM_BOT_LLM_REASONING_EFFORT", () => {
+  it("is absent by default, accepts the four levels in any case and rejects others", () => {
+    expect(optionalReasoningEffort(undefined)).toEqual({});
+    expect(optionalReasoningEffort(" None ")).toEqual({ reasoningEffort: "none" });
+    expect(optionalReasoningEffort("high")).toEqual({ reasoningEffort: "high" });
+    expect(() => optionalReasoningEffort("off")).toThrow(/none, low, medium or high/);
+  });
 });

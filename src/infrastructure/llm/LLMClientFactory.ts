@@ -115,7 +115,10 @@ export class LLMClientFactory {
     try {
       const res = await fetch(this.url, {
         method: "POST", headers: this.headers,
-        body: JSON.stringify({ model, messages, ...apiOptions }), signal: controller.signal,
+        body: JSON.stringify({
+          model, messages, ...apiOptions,
+          ...(this.config.reasoningEffort ? { reasoning_effort: this.config.reasoningEffort } : {}),
+        }), signal: controller.signal,
       });
       if (res.status === 503 || res.status === 529) throw new LLMServiceUnavailableError(model, res.status);
       if (!res.ok) {

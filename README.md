@@ -210,6 +210,8 @@ Find its container using `docker compose -f docker-compose.staging.yml ps`, then
 configured model with `docker exec <embedding-container-name> ollama pull <model-name>`.
 Set its endpoint and model using the keys in the template.
 
+Local thinking models (for example Qwen 3.5 served by Ollama) spend their whole token budget on hidden reasoning and return empty answers unless reasoning is switched off. Set `WIRE_TEAM_BOT_LLM_REASONING_EFFORT=none` for them; the bot then sends `reasoning_effort` with every chat request. Leave it unset for providers that do not need it, such as the Claude API. All chat slots share one endpoint, so pointing `WIRE_TEAM_BOT_LLM_BASE_URL` at a local server runs every model task locally.
+
 ### Application
 
 | Variable | Default | Description |
