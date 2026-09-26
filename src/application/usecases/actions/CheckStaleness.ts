@@ -4,6 +4,7 @@ import type { Action } from "../../../domain/entities/Action";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
+import { formatDateInZone } from "../../services/formatTimeInZone";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function resolveOwner(a: Action): string {
@@ -75,13 +76,16 @@ export class CheckStaleness {
       const convId = channelActions[0]!.conversationId;
 
       for (const action of channelActions) {
+        let timezone: string;
         try {
-          const state = await this.channelConfig.get(`${convId.id}@${convId.domain}`);
-          if (state?.state !== "active") continue;
+          const config = await this.channelConfig.get(`${convId.id}@${convId.domain}`);
+          if (config?.state !== "active") continue;
+          timezone = config.timezone ?? "UTC";
         } catch { continue; }
         const owner = resolveOwner(action);
+        // The deadline's calendar date in the channel's timezone.
         const deadlineStr = action.deadline
-          ? action.deadline.toISOString().slice(0, 10)
+          ? formatDateInZone(action.deadline, timezone)
           : null;
 
         const daysLate = action.deadline

@@ -1,11 +1,14 @@
 import type { Action } from "../../../domain/entities/Action";
 import type { ActionRepository } from "../../../domain/repositories/ActionRepository";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
+import { formatDateInZone } from "../../services/formatTimeInZone";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 
 export interface ListOverdueActionsInput {
   conversationId: QualifiedId;
   replyToMessageId?: string;
+  /** The channel's IANA timezone, in which deadline dates are shown; UTC when absent. */
+  timezone?: string;
 }
 
 export class ListOverdueActions {
@@ -56,7 +59,7 @@ export class ListOverdueActions {
         lines.push(`**${name}**`);
         for (const a of actions) {
           lines.push(
-            `- **${a.id}** \`${a.status}\` — ${a.description}${a.deadline ? ` _(due ${a.deadline.toISOString().slice(0, 10)})_` : ""}`,
+            `- **${a.id}** \`${a.status}\` — ${a.description}${a.deadline ? ` _(due ${formatDateInZone(a.deadline, input.timezone ?? "UTC")})_` : ""}`,
           );
         }
       }
