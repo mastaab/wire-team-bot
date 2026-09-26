@@ -114,11 +114,11 @@ export function createContainer(config: Config, logger: Logger): Container {
   // Passive service-desk help: the classifier offers its two service-desk categories only
   // when WIRE_TEAM_BOT_JIRA_PASSIVE is on, so classification is otherwise unchanged.
   const passiveOn = !!issueTracker && (config.jira?.passive ?? false);
-  const classifier = new OpenAIClassifierAdapter(llmFactory, logger, { serviceDeskCategories: passiveOn });
+  const classifier = new OpenAIClassifierAdapter(llmFactory, logger, { serviceDeskCategories: passiveOn, serviceScope: config.jira?.serviceScope });
   // Shared with the router and ConfirmOffer, so a passive offer can be confirmed.
   const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const supportHelp = passiveOn && supportRequestsRepo && getIssueStatus && pendingOffers
-    ? new OfferSupportFromConversation(supportRequestsRepo, new OpenAISupportTriageAdapter(llmFactory, logger), getIssueStatus, pendingOffers, wireOutbound, logger)
+    ? new OfferSupportFromConversation(supportRequestsRepo, new OpenAISupportTriageAdapter(llmFactory, logger, { serviceScope: config.jira?.serviceScope }), getIssueStatus, pendingOffers, wireOutbound, logger)
     : undefined;
   const extraction = new OpenAIExtractionAdapter(llmFactory, logger);
   const embeddingService = createEmbeddingService(config.llm.bot, logger);

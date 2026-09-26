@@ -232,11 +232,11 @@ async function main() {
   const getIssueStatus = issueTracker && supportRequestsRepo ? new GetIssueStatus(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   const passiveOn = !!issueTracker && (config.jira?.passive ?? false);
   const supportHelp = passiveOn && supportRequestsRepo && getIssueStatus && pendingOffers
-    ? new OfferSupportFromConversation(supportRequestsRepo, new OpenAISupportTriageAdapter(llmFactory, logger), getIssueStatus, pendingOffers, wireOutbound, logger)
+    ? new OfferSupportFromConversation(supportRequestsRepo, new OpenAISupportTriageAdapter(llmFactory, logger, { serviceScope: config.jira?.serviceScope }), getIssueStatus, pendingOffers, wireOutbound, logger)
     : undefined;
 
   // Pipeline
-  const classifier       = new OpenAIClassifierAdapter(llmFactory, logger, { serviceDeskCategories: passiveOn });
+  const classifier       = new OpenAIClassifierAdapter(llmFactory, logger, { serviceDeskCategories: passiveOn, serviceScope: config.jira?.serviceScope });
   const extraction       = new OpenAIExtractionAdapter(llmFactory, logger);
   const embeddingService = createEmbeddingService(config.llm.bot, logger);
   const pipeline         = new ProcessingPipeline({
