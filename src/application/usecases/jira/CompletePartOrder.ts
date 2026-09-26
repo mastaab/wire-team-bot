@@ -83,13 +83,14 @@ export class CompletePartOrder {
   }
 }
 
-/**
- * The essentials the model reported, each collapsed to one line. A value that is empty, not
- * text or longer than `PART_DETAIL_MAX` is left out, so it never replaces an earlier value.
- */
 /** Words a small model may write instead of JSON null; never a real value. */
 const PLACEHOLDERS = new Set(["null", "none", "unknown", "not stated", "not given", "not specified", "n/a", "na", "-", "?", "tbd"]);
 
+/**
+ * The essentials the model reported, each collapsed to one line. A value that is empty, not
+ * text, longer than `PART_DETAIL_MAX` or a placeholder is left out, so it never replaces an
+ * earlier value.
+ */
 function boundedDetails(details: PartDetails | null | undefined): PartDetails {
   const bounded: PartDetails = {};
   if (!details || typeof details !== "object") return bounded;
