@@ -143,7 +143,7 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
   async createIssue(request: CreateIssueRequest): Promise<CreatedIssue> {
     const created = await this.request<{ issueKey?: unknown }>("POST", "/rest/servicedeskapi/request", {
       serviceDeskId: this.config.serviceDeskId,
-      requestTypeId: this.config.requestTypeId,
+      requestTypeId: request.requestTypeId ?? this.config.requestTypeId,
       requestFieldValues: {
         summary: truncateSummary(request.summary),
         description: request.description,

@@ -1,3 +1,4 @@
+import type { PartDetails, SupportRequestKind } from "../../domain/entities/SupportRequest";
 /**
  * Port for passive service-desk help: the model reads one unaddressed message and either
  * drafts a support request from it or maps a status question to an open request. It only
@@ -13,6 +14,10 @@ export interface OpenRequestRef {
 }
 
 export interface SupportDraft {
+  /** What the message asks for; decides the request type. */
+  requestKind: SupportRequestKind;
+  /** For a part order: only the essentials stated in this message, never invented. */
+  part?: PartDetails;
   /** One line in the speaker's words. */
   summary: string;
   /** Only the problem stated in the message, never the surrounding conversation. */

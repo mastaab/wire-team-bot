@@ -4,6 +4,9 @@
  * Set WIRE_TEAM_BOT_LLM_BASE_URL to a local Ollama endpoint to keep all inference on-premises.
  */
 
+import { SUPPORT_REQUEST_KINDS } from "../domain/entities/SupportRequest";
+import type { SupportRequestKind } from "../domain/entities/SupportRequest";
+
 /**
  * Per-slot model config for the seven-slot LLM architecture.
  * Each slot has a primary model and a fallback; all share one provider endpoint.
@@ -107,6 +110,10 @@ export interface JiraConfig {
    * open requests, offering to raise (confirmed with yes) or answering the status. Off by default.
    */
   passive: boolean;
+  /** Request type per kind; a kind without an entry uses `requestTypeId`. */
+  requestTypes: Partial<Record<SupportRequestKind, string>>;
+  /** What the service desk handles, in plain words, for the model prompts; generic wording when absent. */
+  serviceScope?: string;
 }
 
 const JIRA_REQUIRED_KEYS = [
@@ -151,6 +158,9 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
   if (share !== "on" && share !== "off") throw new Error("WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL must be on or off");
   const passive = (value("WIRE_TEAM_BOT_JIRA_PASSIVE") ?? "off").toLowerCase();
   if (passive !== "on" && passive !== "off") throw new Error("WIRE_TEAM_BOT_JIRA_PASSIVE must be on or off");
+  const requestTypes = parseRequestTypes(value("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES"));
+  const serviceScope = value("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE");
+  if (serviceScope && serviceScope.length > 500) throw new Error("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE must be at most 500 characters");
 
   return {
     baseUrl: httpsUrl("WIRE_TEAM_BOT_JIRA_BASE_URL"),
@@ -163,7 +173,23 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
     timeoutMs: Number.isFinite(timeout) ? Math.max(1000, timeout) : 15_000,
     shareWithModel: share === "on",
     passive: passive === "on",
+    requestTypes,
+    ...(serviceScope ? { serviceScope } : {}),
   };
+}
+
+/** `question=11809,part=11810,fault=11808`; unknown kinds or non-numeric IDs fail at startup. */
+function parseRequestTypes(raw: string | undefined): Partial<Record<SupportRequestKind, string>> {
+  const types: Partial<Record<SupportRequestKind, string>> = {};
+  if (!raw) return types;
+  for (const entry of raw.split(",").map((e) => e.trim()).filter(Boolean)) {
+    const [kind, id] = entry.split("=").map((part) => part?.trim() ?? "");
+    if (!(SUPPORT_REQUEST_KINDS as readonly string[]).includes(kind ?? "") || !/^\d+$/.test(id ?? "")) {
+      throw new Error("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES must look like question=11809,part=11810,fault=11808");
+    }
+    types[kind as SupportRequestKind] = id;
+  }
+  return types;
 }
 
 function getEnv(name: string): string {

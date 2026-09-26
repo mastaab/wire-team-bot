@@ -1,4 +1,5 @@
-import type { SupportRequest, SupportRequestStatusCategory } from "../../../domain/entities/SupportRequest";
+import { SUPPORT_REQUEST_KINDS } from "../../../domain/entities/SupportRequest";
+import type { SupportRequest, SupportRequestKind, SupportRequestStatusCategory } from "../../../domain/entities/SupportRequest";
 import type {
   SupportRequestListOptions,
   SupportRequestRepository,
@@ -26,6 +27,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
         requesterDom: request.requesterId.domain,
         requesterName: request.requesterName,
         summary: request.summary,
+        kind: request.kind,
         statusCategory: request.statusCategory,
         createdAt: request.createdAt,
         updatedAt: request.updatedAt,
@@ -83,6 +85,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     requesterDom: string;
     requesterName: string;
     summary: string;
+    kind: string;
     statusCategory: string;
     createdAt: Date;
     updatedAt: Date;
@@ -95,6 +98,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
       requesterId: { id: row.requesterId, domain: row.requesterDom },
       requesterName: row.requesterName,
       summary: row.summary,
+      kind: kindFromRow(row.kind),
       statusCategory: statusCategoryFromRow(row.statusCategory),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -102,4 +106,9 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
       version: row.version,
     };
   }
+}
+
+/** A stored kind the code does not know reads as a fault, the general request type. */
+function kindFromRow(value: string): SupportRequestKind {
+  return (SUPPORT_REQUEST_KINDS as readonly string[]).includes(value) ? (value as SupportRequestKind) : "fault";
 }

@@ -263,6 +263,7 @@ model SupportRequest {
   requesterName   String   @map("requester_name")
   summary         String
   statusCategory  String   @map("status_category") // todo | in_progress | done
+  kind            String   @default("fault") // question | part | fault
   createdAt       DateTime @map("created_at")
   updatedAt       DateTime @map("updated_at")
   deleted         Boolean  @default(false)

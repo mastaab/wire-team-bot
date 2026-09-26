@@ -1915,7 +1915,7 @@ Committed by the main session before the parallel build. Builders code against t
 - **Listing and status:** `support requests` shows the kind ("Part order DS-12 …").
 
 **Design.**
-- Configuration: `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES` as `question=11809,part=<id>,fault=11808`; kinds without an entry use `WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID`, so existing deployments are unchanged. `IssueTrackerPort.createIssue` takes an optional request type ID.
+- Configuration: `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES` as `question=11809,part=11810,fault=11808`; kinds without an entry use `WIRE_TEAM_BOT_JIRA_REQUEST_TYPE_ID`, so existing deployments are unchanged. `IssueTrackerPort.createIssue` takes an optional request type ID.
 - `SupportRequest` gains `kind` (migration adding a column with default `fault`).
 - The `support` offer command gains `requestKind` and, for parts, `part: { vehicle?, part?, quantity?, deliverTo? }`. A part draft with missing essentials is stored as a pending offer that cannot be confirmed, only amended.
 - `SupportTriagePort.draftRequest` returns the kind and, for parts, the essentials found in the message (never invented).
@@ -1923,7 +1923,7 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Security note for the customer (not built).** The demo sends every message in an active channel to the Claude API for classification, and tickets live in Jira Cloud. For defence or military customers that is likely unacceptable. Production would need a local model endpoint (the configuration already accepts OpenAI-compatible endpoints) and Jira Data Center or another tracker hosted by the customer. This belongs in the customer conversation, next to the Wire encryption story.
 
-**Needs from the operator.** Create the "Replacement part" request type in DS (the service account needs no new scopes) and send its ID. Until then, part orders use `11808`.
+**Jira set-up (done 2026-09-26).** The operator created the "Replacement part" request type in DS: request type `11810`, its own work type `11810`, in the same portal group as the others, form with Summary (required) and Description, and the same statuses as the incident type (To Do, In Progress, Pending, Done), verified with the bot's token.
 
 **Evidence required.** Unit tests; real-model CLI checks with truck messages (questions, faults, scheduled service, part orders with and without essentials), offers answered no; a live staging journey with one question, one fault and one part order confirmed with yes (Jira writes, with approval).
 

@@ -1,4 +1,5 @@
 import type { OfferCommand } from "../ports/PendingOfferPort";
+import type { PartDetails, SupportRequestKind } from "../../domain/entities/SupportRequest";
 import { JIRA_KEY_PATTERN, isKeyInProject } from "../../domain/ids/jiraLink";
 import { SUPPORT_SUMMARY_MAX } from "../../domain/entities/SupportRequest";
 
@@ -124,10 +125,40 @@ export function offerCommandLine(command: OfferCommand, projectKey?: string): st
  * already bounded both and collapsed the summary to one line. The question ends with "?" so
  * the router treats a non-exact answer as a follow-up.
  */
-export function formatSupportQuestion(summary: string, description: string): string {
+export function formatSupportQuestion(summary: string, description: string, requestKind: SupportRequestKind = "fault", part?: PartDetails): string {
   const lines = [`> **${summary}**`];
+  if (requestKind === "part") {
+    for (const { key, label } of PART_DETAIL_FIELDS) {
+      const value = part?.[key]?.trim();
+      if (value) lines.push(`> ${label}: ${collapseLine(value)}`);
+    }
+  }
   if (collapseLine(description).toLowerCase() !== summary.toLowerCase()) lines.push(...quoteLines(description));
-  return `Shall I raise this with the service desk?\n${lines.join("\n")}\n\n(yes or no)?`;
+  return `${SUPPORT_QUESTION_LEAD[requestKind]}\n${lines.join("\n")}\n\n(yes or no)?`;
+}
+
+/** The opening of the support confirmation, per kind. */
+const SUPPORT_QUESTION_LEAD: Record<SupportRequestKind, string> = {
+  question: "Shall I ask the service desk?",
+  part: "Shall I order this part?",
+  fault: "Shall I report this to the service desk?",
+};
+
+/**
+ * The question for a part order that still lacks essentials. It names what is missing and ends
+ * with "?", so the driver's answer comes back as a follow-up that amends the pending draft.
+ */
+export function formatMissingPartsQuestion(missing: ReadonlyArray<keyof PartDetails>): string {
+  const asks = PART_DETAIL_FIELDS.filter(({ key }) => missing.includes(key)).map(({ ask }) => ask);
+  const list = asks.length <= 1 ? asks.join("") : `${asks.slice(0, -1).join(", ")} and ${asks[asks.length - 1]}`;
+  return `To order it I need ${list}. What ${asks.length === 1 ? "is it" : "are they"}?`;
+}
+
+/** The reply to a yes while a part order still lacks essentials. */
+export function formatStillMissingReply(missing: ReadonlyArray<keyof PartDetails>): string {
+  const asks = PART_DETAIL_FIELDS.filter(({ key }) => missing.includes(key)).map(({ ask }) => ask);
+  const list = asks.length <= 1 ? asks.join("") : `${asks.slice(0, -1).join(", ")} and ${asks[asks.length - 1]}`;
+  return `I haven't ordered anything yet: I still need ${list}.`;
 }
 
 /**
@@ -137,6 +168,20 @@ export function formatSupportQuestion(summary: string, description: string): str
  */
 export function formatReplyQuestion(key: string, summary: string, body: string): string {
   return `Shall I add this to **${key}** "${collapseLine(summary)}"?\n${quoteLines(body).join("\n")}\n\n(yes or no)?`;
+}
+
+/** The part-order essentials, in the order they are asked for and shown. */
+export const PART_DETAIL_FIELDS: ReadonlyArray<{ key: keyof PartDetails; label: string; ask: string }> = [
+  { key: "vehicle", label: "Vehicle", ask: "the vehicle (fleet or chassis number)" },
+  { key: "part", label: "Part", ask: "the part (name or number)" },
+  { key: "quantity", label: "Quantity", ask: "the quantity" },
+  { key: "deliverTo", label: "Deliver to", ask: "the delivery location" },
+];
+
+/** The part-order essentials still missing; empty for other kinds and for a complete order. */
+export function missingPartDetails(command: OfferCommand): Array<keyof PartDetails> {
+  if (command.kind !== "support" || command.requestKind !== "part") return [];
+  return PART_DETAIL_FIELDS.filter(({ key }) => !command.part?.[key]?.trim()).map(({ key }) => key);
 }
 
 /** Every quoted line is non-empty: an empty "> " line ends the quote in Markdown. */

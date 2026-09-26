@@ -3,6 +3,27 @@ import type { QualifiedId } from "../ids/QualifiedId";
 /** Language-independent status bucket, as reported by the tracker. */
 export type SupportRequestStatusCategory = "todo" | "in_progress" | "done";
 
+/**
+ * What the request is about, which decides the tracker's request type: a question about the
+ * vehicle, a replacement part order, or a fault (faults, breakdowns, damage, service needs).
+ */
+export type SupportRequestKind = "question" | "part" | "fault";
+
+export const SUPPORT_REQUEST_KINDS: readonly SupportRequestKind[] = ["question", "part", "fault"];
+
+/** The essentials of a part order, each as the driver gave it; absent when not yet known. */
+export interface PartDetails {
+  /** Fleet number or chassis number/VIN. */
+  vehicle?: string;
+  /** Part name or number. */
+  part?: string;
+  quantity?: string;
+  deliverTo?: string;
+}
+
+/** Longest value of a single part detail. */
+export const PART_DETAIL_MAX = 200;
+
 /** Longest summary kept on the record and sent as the ticket title. */
 export const SUPPORT_SUMMARY_MAX = 120;
 
@@ -24,6 +45,7 @@ export interface SupportRequest {
   requesterName: string;
   /** One line: what the requester said the problem is. */
   summary: string;
+  kind: SupportRequestKind;
   /** Last known category, refreshed whenever the bot reads the ticket. The live value comes from the tracker. */
   statusCategory: SupportRequestStatusCategory;
   createdAt: Date;

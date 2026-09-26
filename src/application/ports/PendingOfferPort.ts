@@ -1,3 +1,4 @@
+import type { PartDetails, SupportRequestKind } from "../../domain/entities/SupportRequest";
 import type { QualifiedId } from "../../domain/ids/QualifiedId";
 
 /**
@@ -6,8 +7,12 @@ import type { QualifiedId } from "../../domain/ids/QualifiedId";
  */
 
 export type OfferCommand =
-  /** Raise a new support request: `summary` becomes the ticket title, `description` its body. */
-  | { kind: "support"; summary: string; description: string }
+  /**
+   * Raise a new support request: `summary` becomes the ticket title, `description` its body,
+   * `requestKind` picks the request type. A part order carries its essentials in `part`; while
+   * any is missing (see `missingPartDetails`) the offer can be amended but not confirmed.
+   */
+  | { kind: "support"; requestKind: SupportRequestKind; summary: string; description: string; part?: PartDetails }
   | { kind: "reply"; issueKey: string; body: string }
   | { kind: "resolve"; issueKey: string };
 
