@@ -3,14 +3,17 @@ import { OfferSupportFromConversation, PASSIVE_CONFIDENCE_MIN } from "../../src/
 import type { OfferSupportInput } from "../../src/application/usecases/jira/OfferSupportFromConversation";
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
 import { formatIssueStatus } from "../../src/application/usecases/jira/formatIssue";
-import { OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatReplyQuestion, formatSupportQuestion } from "../../src/application/services/offers";
-import { SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
+import {
+  OFFER_DESCRIPTION_MAX, OFFER_TTL_MS, REPLY_BODY_MAX, formatMissingPartsQuestion, formatReplyQuestion, formatSupportQuestion,
+} from "../../src/application/services/offers";
+import { PART_DETAIL_MAX, SUPPORT_SUMMARY_MAX } from "../../src/domain/entities/SupportRequest";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import type { SupportDraft } from "../../src/application/ports/SupportTriagePort";
 import { alice, bob, convId, created, loggedText, makeAudit, makeLogger, makeRequest, makeRequests, makeSnapshot, makeTracker, makeWire } from "./supportRequestFakes";
 
 const MESSAGE = "PRIVATE_MESSAGE_MARKER the printer on floor 3 jams on every job";
 const DRAFT: SupportDraft = {
+  requestKind: "fault",
   summary: "Printer on floor 3 jams on every job",
   description: "The printer on floor 3 jams on every job.",
   duplicateOf: null,
@@ -54,12 +57,12 @@ function setup(records: SupportRequest[] = [makeRequest()], draft: SupportDraft 
 describe("formatSupportQuestion", () => {
   it("quotes the summary in bold and the description line by line", () => {
     expect(formatSupportQuestion("VPN drops", "It drops every ten minutes.\n\nSince Monday."))
-      .toBe("Shall I raise this with the service desk?\n> **VPN drops**\n> It drops every ten minutes.\n> Since Monday.\n\n(yes or no)?");
+      .toBe("Shall I report this to the service desk?\n> **VPN drops**\n> It drops every ten minutes.\n> Since Monday.\n\n(yes or no)?");
   });
 
   it("leaves out a description that only repeats the summary", () => {
     expect(formatSupportQuestion("VPN drops", "  vpn   drops "))
-      .toBe("Shall I raise this with the service desk?\n> **VPN drops**\n\n(yes or no)?");
+      .toBe("Shall I report this to the service desk?\n> **VPN drops**\n\n(yes or no)?");
   });
 });
 
@@ -147,7 +150,7 @@ describe("OfferSupportFromConversation", () => {
 
       expect(triage.draftRequest).toHaveBeenCalledWith(MESSAGE, [{ key: "DS-6", summary: "VPN drops every ten minutes", raisedBySpeakerRecently: false }]);
       expect(sent).toEqual([formatSupportQuestion(DRAFT.summary, DRAFT.description)]);
-      expect(sent[0]).toBe("Shall I raise this with the service desk?\n> **Printer on floor 3 jams on every job**\n> The printer on floor 3 jams on every job.\n\n(yes or no)?");
+      expect(sent[0]).toBe("Shall I report this to the service desk?\n> **Printer on floor 3 jams on every job**\n> The printer on floor 3 jams on every job.\n\n(yes or no)?");
       expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
       expect(offers.put).toHaveBeenCalledTimes(1);
       const offer = offers.put.mock.calls[0]![0];
@@ -162,20 +165,20 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("collapses whitespace in the summary and trims the description", async () => {
-      const { offers, sent, useCase } = setup(undefined, { summary: "  Printer\n jams  ", description: "\n Printer jams on every job. \n", duplicateOf: null, addition: null });
+      const { offers, sent, useCase } = setup(undefined, { requestKind: "fault", summary: "  Printer\n jams  ", description: "\n Printer jams on every job. \n", duplicateOf: null, addition: null });
 
       await useCase.execute(input());
 
-      expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "support", summary: "Printer jams", description: "Printer jams on every job." });
+      expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "support", requestKind: "fault", summary: "Printer jams", description: "Printer jams on every job." });
       expect(sent[0]).toContain("> **Printer jams**\n> Printer jams on every job.");
     });
 
     it("shows only the summary when the description repeats it", async () => {
-      const { sent, useCase } = setup(undefined, { summary: "Printer jams", description: "printer jams", duplicateOf: null, addition: null });
+      const { sent, useCase } = setup(undefined, { requestKind: "fault", summary: "Printer jams", description: "printer jams", duplicateOf: null, addition: null });
 
       await useCase.execute(input());
 
-      expect(sent).toEqual(["Shall I raise this with the service desk?\n> **Printer jams**\n\n(yes or no)?"]);
+      expect(sent).toEqual(["Shall I report this to the service desk?\n> **Printer jams**\n\n(yes or no)?"]);
     });
 
     it("passes only open requests of this conversation in the tracker's project, at most 20", async () => {
@@ -360,12 +363,147 @@ describe("OfferSupportFromConversation", () => {
     });
 
     it("accepts a draft exactly at the bounds", async () => {
-      const draft = { summary: "x".repeat(SUPPORT_SUMMARY_MAX), description: "y".repeat(OFFER_DESCRIPTION_MAX), duplicateOf: null, addition: null };
+      const draft: SupportDraft = { requestKind: "fault", summary: "x".repeat(SUPPORT_SUMMARY_MAX), description: "y".repeat(OFFER_DESCRIPTION_MAX), duplicateOf: null, addition: null };
       const { offers, useCase } = setup(undefined, draft);
 
       await useCase.execute(input());
 
       expect(offers.put).toHaveBeenCalledTimes(1);
+    });
+
+    describe("request kinds and part orders", () => {
+      const PART_DRAFT: SupportDraft = {
+        requestKind: "part",
+        part: { vehicle: "truck 17", part: "left mirror glass", quantity: "2", deliverTo: "Depot North" },
+        summary: "Left mirror glass for truck 17",
+        description: "I need two left mirror glasses for truck 17, delivered to Depot North.",
+        duplicateOf: null,
+        addition: null,
+      };
+
+      it.each<[SupportDraft["requestKind"], string]>([
+        ["question", "Shall I ask the service desk?"],
+        ["fault", "Shall I report this to the service desk?"],
+      ])("offers a %s with its own question and stores the kind", async (requestKind, lead) => {
+        const draft = { ...DRAFT, requestKind, part: { vehicle: "truck 17" } };
+        const { offers, sent, useCase } = setup(undefined, draft);
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([`${lead}\n> **${DRAFT.summary}**\n> ${DRAFT.description}\n\n(yes or no)?`]);
+        expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "support", requestKind, summary: DRAFT.summary, description: DRAFT.description });
+      });
+
+      it("offers a scheduled service as a fault", async () => {
+        const draft: SupportDraft = { ...DRAFT, requestKind: "fault", summary: "Truck 17 is due for its 60,000 km service", description: "Truck 17 is due for its 60,000 km service next week." };
+        const { offers, sent, useCase } = setup(undefined, draft);
+
+        await useCase.execute(input());
+
+        expect(sent[0]).toMatch(/^Shall I report this to the service desk\?\n/);
+        expect(offers.put.mock.calls[0]![0].command.requestKind).toBe("fault");
+      });
+
+      it("treats an unknown kind as a fault", async () => {
+        const { offers, sent, useCase } = setup(undefined, { ...DRAFT, requestKind: "incident" as SupportDraft["requestKind"] });
+
+        await useCase.execute(input());
+
+        expect(sent[0]).toMatch(/^Shall I report this to the service desk\?\n/);
+        expect(offers.put.mock.calls[0]![0].command.requestKind).toBe("fault");
+      });
+
+      it("offers a complete part order with the detail lines above the description", async () => {
+        const { offers, wire, sent, useCase } = setup(undefined, PART_DRAFT);
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([
+          "Shall I order this part?\n> **Left mirror glass for truck 17**\n> Vehicle: truck 17\n> Part: left mirror glass\n> Quantity: 2\n> Deliver to: Depot North\n> I need two left mirror glasses for truck 17, delivered to Depot North.\n\n(yes or no)?",
+        ]);
+        expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+        expect(offers.put.mock.calls[0]![0].command).toEqual({
+          kind: "support", requestKind: "part", summary: PART_DRAFT.summary, description: PART_DRAFT.description, part: PART_DRAFT.part,
+        });
+      });
+
+      it("collapses whitespace in the part details", async () => {
+        const { offers, useCase } = setup(undefined, { ...PART_DRAFT, part: { vehicle: " truck\n 17 ", part: "left  mirror glass", quantity: " 2 ", deliverTo: "Depot\tNorth" } });
+
+        await useCase.execute(input());
+
+        expect(offers.put.mock.calls[0]![0].command.part).toEqual(PART_DRAFT.part);
+      });
+
+      it("asks for exactly the missing details and stores the incomplete order for the speaker", async () => {
+        const { offers, wire, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { part: "left mirror glass", quantity: "2" } });
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([formatMissingPartsQuestion(["vehicle", "deliverTo"])]);
+        expect(sent[0]).toBe("To order it I need the vehicle (fleet or chassis number) and the delivery location. What are they?");
+        expect(wire.sendPlainText).toHaveBeenCalledWith(convId, sent[0], { replyToMessageId: "msg-9" });
+        expect(offers.put).toHaveBeenCalledTimes(1);
+        const offer = offers.put.mock.calls[0]![0];
+        expect(offer).toMatchObject({
+          command: { kind: "support", requestKind: "part", summary: PART_DRAFT.summary, description: PART_DRAFT.description, part: { part: "left mirror glass", quantity: "2" } },
+          conversationId: convId,
+          requesterId: alice,
+        });
+        expect(offer.command.part).toEqual({ part: "left mirror glass", quantity: "2" });
+        expect(offer.expiresAt.getTime() - offer.createdAt.getTime()).toBe(OFFER_TTL_MS);
+        expect(wire.sendPlainText.mock.invocationCallOrder[0]).toBeLessThan(offers.put.mock.invocationCallOrder[0]!);
+      });
+
+      it("asks for every detail when the part order states none", async () => {
+        const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: undefined });
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([formatMissingPartsQuestion(["vehicle", "part", "quantity", "deliverTo"])]);
+        expect(offers.put.mock.calls[0]![0].command).toEqual({
+          kind: "support", requestKind: "part", summary: PART_DRAFT.summary, description: PART_DRAFT.description, part: {},
+        });
+      });
+
+      it("treats an empty or over-long detail as missing", async () => {
+        const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { ...PART_DRAFT.part, vehicle: "v".repeat(PART_DETAIL_MAX + 1), quantity: "  " } });
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([formatMissingPartsQuestion(["vehicle", "quantity"])]);
+        expect(offers.put.mock.calls[0]![0].command.part).toEqual({ part: "left mirror glass", deliverTo: "Depot North" });
+      });
+
+      it("accepts a detail exactly at the limit", async () => {
+        const vehicle = "v".repeat(PART_DETAIL_MAX);
+        const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { ...PART_DRAFT.part, vehicle } });
+
+        await useCase.execute(input());
+
+        expect(sent[0]).toMatch(/^Shall I order this part\?\n/);
+        expect(offers.put.mock.calls[0]![0].command.part.vehicle).toBe(vehicle);
+      });
+
+      it("does not store the incomplete order when the channel is paused while the question is being sent", async () => {
+        const controller = new AbortController();
+        const { wire, offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { part: "left mirror glass" } });
+        wire.sendPlainText.mockImplementation(async (_conv: unknown, text: string) => { sent.push(text); controller.abort(); });
+
+        await useCase.execute(input({ signal: controller.signal }));
+
+        expect(sent).toHaveLength(1);
+        expect(offers.put).not.toHaveBeenCalled();
+      });
+
+      it("still offers an addition for a part draft that names an open request", async () => {
+        const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: {}, duplicateOf: "DS-6", addition: "It happened again." });
+
+        await useCase.execute(input());
+
+        expect(sent).toEqual([formatReplyQuestion("DS-6", "VPN drops every ten minutes", "It happened again.")]);
+        expect(offers.put.mock.calls[0]![0].command).toEqual({ kind: "reply", issueKey: "DS-6", body: "It happened again." });
+      });
     });
 
     it("never offers while the speaker has a live offer", async () => {
@@ -446,7 +584,7 @@ describe("OfferSupportFromConversation", () => {
 
     it("never logs the message, the draft, the addition or the summaries", async () => {
       const records = [makeRequest({ summary: "PRIVATE_SUMMARY_MARKER" })];
-      const draft = { summary: "PRIVATE_DRAFT_MARKER", description: "PRIVATE_DESCRIPTION_MARKER", duplicateOf: null, addition: null };
+      const draft: SupportDraft = { requestKind: "fault", summary: "PRIVATE_DRAFT_MARKER", description: "PRIVATE_DESCRIPTION_MARKER", duplicateOf: null, addition: null };
       const addition = "PRIVATE_ADDITION_MARKER";
       for (const d of [
         draft,
