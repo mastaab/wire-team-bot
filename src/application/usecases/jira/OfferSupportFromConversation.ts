@@ -67,7 +67,11 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     if (!(input.confidence >= PASSIVE_CONFIDENCE_MIN)) return;
     const wantsStatus = input.categories.includes("request_status");
     const wantsOffer = input.categories.includes("service_request");
-    if (!wantsStatus && !wantsOffer) return;
+    // The classifier often labels news about a reported problem ("it only happens on the new
+    // laptops") as an update or blocker only. Such a message may add to an open request, but it
+    // never leads to an offer to raise a new one.
+    const mayAdd = !wantsOffer && (input.categories.includes("update") || input.categories.includes("blocker"));
+    if (!wantsStatus && !wantsOffer && !mayAdd) return;
 
     const open = await this.openRequests(input.conversationId, input.senderId);
     if (!open) return;
@@ -79,7 +83,8 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
         return;
       }
     }
-    if (wantsOffer) await this.offerSupport(input, open);
+    if (wantsOffer) await this.offerSupport(input, open, false);
+    else if (mayAdd && open.length > 0) await this.offerSupport(input, open, true);
   }
 
   /**
@@ -135,7 +140,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
     }
   }
 
-  private async offerSupport(input: OfferSupportInput, open: readonly OpenRequestRef[]): Promise<void> {
+  private async offerSupport(input: OfferSupportInput, open: readonly OpenRequestRef[], additionOnly: boolean): Promise<void> {
     // One live offer per speaker: a new one would silently replace what they may be about to confirm.
     if (this.offers.has(input.conversationId, input.senderId)) return;
 
@@ -159,6 +164,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       await this.offer(input, formatReplyQuestion(covering.key, covering.summary, body), { kind: "reply", issueKey: covering.key, body });
       return;
     }
+    if (additionOnly) return;
     const command = toSupportCommand(draft);
     if (!command) {
       this.logger?.debug("OfferSupportFromConversation: draft outside the offer bounds");

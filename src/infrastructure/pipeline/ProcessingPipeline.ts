@@ -14,7 +14,7 @@ import type { AuditLogRepository } from "../../domain/repositories/AuditLogRepos
  * All errors are caught and logged; the pipeline never throws.
  */
 
-import type { ClassifierPort, ChannelContext, ClassifyResult } from "../../application/ports/ClassifierPort";
+import type { ClassifierPort, ChannelContext, ClassifyResult, MessageCategory } from "../../application/ports/ClassifierPort";
 import type { ExtractionPort, KnownAction } from "../../application/ports/ExtractionPort";
 import type { EmbeddingService } from "../../application/ports/EmbeddingPort";
 import type { EntityRepository } from "../../domain/repositories/EntityRepository";
@@ -83,7 +83,9 @@ export class ProcessingPipeline {
   ): Promise<void> {
     const supportHelp = this.deps.supportHelp;
     if (!supportHelp) return;
-    if (!result.categories.includes("service_request") && !result.categories.includes("request_status")) return;
+    // Updates and blockers too: they may add information to an open request (see the use case).
+    const relevant: MessageCategory[] = ["service_request", "request_status", "update", "blocker"];
+    if (!result.categories.some((category) => relevant.includes(category))) return;
     try {
       await supportHelp.execute({
         text: job.text,

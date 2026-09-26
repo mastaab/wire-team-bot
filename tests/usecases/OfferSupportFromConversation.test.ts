@@ -83,13 +83,45 @@ describe("OfferSupportFromConversation", () => {
       expect(sent).toHaveLength(1);
     });
 
-    it("does nothing without a service-desk category", async () => {
+    it("does nothing without a service-desk, update or blocker category", async () => {
       const { triage, sent, useCase } = setup();
 
-      await useCase.execute(input({ categories: ["blocker", "question"] }));
+      await useCase.execute(input({ categories: ["discussion", "question"] }));
 
       expect(triage.draftRequest).not.toHaveBeenCalled();
       expect(triage.matchStatusQuestion).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
+    });
+  });
+
+  describe("update or blocker", () => {
+    it.each([["update"], ["blocker"]])("offers to add new information to an open request for a %s", async (category) => {
+      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: "DS-6", addition: "It only happens on the new ThinkPads." });
+
+      await useCase.execute(input({ categories: [category] }));
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain("Shall I add this to **DS-6**");
+      expect(offers.put).toHaveBeenCalledWith(expect.objectContaining({
+        command: { kind: "reply", issueKey: "DS-6", body: "It only happens on the new ThinkPads." },
+      }));
+    });
+
+    it("never offers to raise a new request from an update", async () => {
+      const { offers, sent, useCase } = setup(undefined, { ...DRAFT, duplicateOf: null, addition: null });
+
+      await useCase.execute(input({ categories: ["update"] }));
+
+      expect(sent).toEqual([]);
+      expect(offers.put).not.toHaveBeenCalled();
+    });
+
+    it("makes no model call for an update when the conversation has no open request", async () => {
+      const { triage, sent, useCase } = setup([]);
+
+      await useCase.execute(input({ categories: ["update"] }));
+
+      expect(triage.draftRequest).not.toHaveBeenCalled();
       expect(sent).toEqual([]);
     });
   });

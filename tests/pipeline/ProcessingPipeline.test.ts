@@ -539,11 +539,18 @@ describe("passive service-desk help", () => {
     expect(supportHelp.execute.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.extraction.extract).mock.invocationCallOrder[0]!);
   });
 
-  it("is not called without a service-desk category", async () => {
+  it("is not called without a service-desk, update or blocker category", async () => {
     const supportHelp = { execute: vi.fn() };
-    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...lowSignalResult, categories: ["question", "blocker"] }) } });
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...lowSignalResult, categories: ["question", "discussion"] }) } });
     await new ProcessingPipeline(deps).process(baseJob());
     expect(supportHelp.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([["update"], ["blocker"]])("is called for a %s, which may add to an open request", async (category) => {
+    const supportHelp = { execute: vi.fn().mockResolvedValue(undefined) };
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...lowSignalResult, categories: [category] }) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(supportHelp.execute).toHaveBeenCalledWith(expect.objectContaining({ categories: [category] }));
   });
 
   it("keeps the pipeline unchanged when the use case is not wired", async () => {
