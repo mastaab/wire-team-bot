@@ -33,6 +33,10 @@ const SUMMARY_MAX_LENGTH = 255;
 const MAX_TRANSITION_HOPS = 3;
 const COMMENT_PAGE_SIZE = 100;
 const MAX_COMMENT_PAGES = 5;
+/** Keys per JQL search. */
+const SEARCH_BATCH_SIZE = 50;
+/** Upper bound on result pages per batch, in case Jira keeps returning a page token. */
+const MAX_SEARCH_PAGES = 5;
 
 interface JiraStatus {
   id?: string;
@@ -74,6 +78,17 @@ interface JiraComment {
   created?: { epochMillis?: number; iso8601?: string };
 }
 
+interface JiraSearchIssue {
+  key?: string;
+  fields?: { status?: JiraStatus; updated?: unknown };
+}
+
+interface JiraSearchPage {
+  issues?: JiraSearchIssue[];
+  nextPageToken?: unknown;
+  isLast?: boolean;
+}
+
 interface JiraResponse<T> {
   status: number;
   data: T | null;
@@ -106,6 +121,16 @@ function toSla(entry: JiraSla): SlaSummary | null {
     elapsed: last.elapsedTime?.friendly,
     goal: last.goalDuration?.friendly,
   };
+}
+
+/**
+ * Parses a Jira timestamp such as "2026-09-26T21:24:35.123+0200". A colon is put into the
+ * offset first, since Jira omits it and not every parser accepts that form.
+ */
+function parseJiraTime(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const millis = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  return Number.isFinite(millis) ? new Date(millis) : null;
 }
 
 /** Jira rejects summaries over 255 characters; cut long ones visibly rather than silently. */
@@ -215,8 +240,41 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
     return snapshot;
   }
 
-  async listChangedSince(_keys: readonly string[], _since?: Date): Promise<IssueChange[]> {
-    throw new Error("JiraServiceManagementAdapter.listChangedSince is not implemented yet");
+  async listChangedSince(keys: readonly string[], since?: Date): Promise<IssueChange[]> {
+    for (const key of keys) this.assertInProject(key);
+    const unique = [...new Set(keys)];
+    if (unique.length === 0) return [];
+    // JQL dates are read in the account's timezone, so bound the search relatively, in whole
+    // minutes rounded up plus a one-minute margin, and compare the exact time below.
+    const bound = since
+      ? ` AND updated >= "-${Math.max(1, Math.ceil((Date.now() - since.getTime()) / 60_000) + 1)}m"`
+      : "";
+    const changes: IssueChange[] = [];
+    for (let start = 0; start < unique.length; start += SEARCH_BATCH_SIZE) {
+      const batch = unique.slice(start, start + SEARCH_BATCH_SIZE);
+      const jql = `project = ${this.projectKey} AND key in (${batch.join(", ")})${bound}`;
+      let nextPageToken: string | undefined;
+      for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+        const res = await this.request<JiraSearchPage>("POST", "/rest/api/3/search/jql", {
+          jql,
+          fields: ["status", "updated"],
+          maxResults: SEARCH_BATCH_SIZE,
+          ...(nextPageToken ? { nextPageToken } : {}),
+        });
+        for (const issue of res.data?.issues ?? []) {
+          const key = issue.key;
+          if (typeof key !== "string" || !isKeyInProject(key, this.projectKey)) continue;
+          const updated = parseJiraTime(issue.fields?.updated);
+          if (!updated) continue;
+          if (since && updated.getTime() <= since.getTime()) continue;
+          changes.push({ key, statusCategory: toCategory(issue.fields?.status?.statusCategory?.key), updated });
+        }
+        const token = res.data?.nextPageToken;
+        nextPageToken = typeof token === "string" && token ? token : undefined;
+        if (!nextPageToken || res.data?.isLast === true) break;
+      }
+    }
+    return changes;
   }
 
   async listCustomerReplies(key: string, limit: number): Promise<IssueReply[]> {

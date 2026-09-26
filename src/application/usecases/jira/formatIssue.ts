@@ -46,12 +46,28 @@ export function formatIssueStatus(snapshot: IssueSnapshot, replies?: string): st
   ].join("\n");
 }
 
+/** The heading above a replies block, for one reply and for several. */
+export interface RepliesHeading {
+  one: string;
+  many: string;
+}
+
+/** The heading of a `status of` answer. */
+export const LATEST_REPLIES_HEADING: RepliesHeading = {
+  one: "Latest reply on the ticket:",
+  many: "Latest replies on the ticket:",
+};
+
 /**
  * Customer-facing replies, oldest first, each with author and time in the conversation's
  * timezone and its text quoted. Long replies are cut visibly; the ticket has the full text.
  * Replies the bot sent from Wire are credited to the team, not the bot's tracker account.
  */
-export function formatReplies(replies: readonly IssueReply[], timeZone: string): string {
+export function formatReplies(
+  replies: readonly IssueReply[],
+  timeZone: string,
+  heading: RepliesHeading = LATEST_REPLIES_HEADING,
+): string {
   if (replies.length === 0) return "No replies from the service desk yet.";
   const blocks = replies.map((reply) => {
     // The bot's own replies carry a "Sent from Wire" footer; the label already says so.
@@ -64,7 +80,7 @@ export function formatReplies(replies: readonly IssueReply[], timeZone: string):
     return `**${author}**, ${formatTimeInZone(reply.created, timeZone, "dayMonth")}\n${quoted}`;
   });
   // Blank lines between blocks, so a following author line is not pulled into the quote above.
-  return [replies.length === 1 ? "Latest reply on the ticket:" : "Latest replies on the ticket:", ...blocks].join("\n\n");
+  return [replies.length === 1 ? heading.one : heading.many, ...blocks].join("\n\n");
 }
 
 export function formatResolution(snapshot: IssueSnapshot): string {

@@ -470,3 +470,105 @@ describe("JiraServiceManagementAdapter own account lookup", () => {
   });
 });
 
+describe("JiraServiceManagementAdapter.listChangedSince", () => {
+  const SEARCH = "POST /rest/api/3/search/jql";
+  const NOW = new Date("2026-09-26T12:00:00Z");
+  const found = (key: string, category: string, updated: string, name = "Localised name") =>
+    ({ key, fields: { status: { id: "1", name, statusCategory: { key: category } }, updated } });
+  const bodies = (fetch: ReturnType<typeof stubJira>) =>
+    fetch.mock.calls.map(([, init]) => JSON.parse(init.body as string) as { jql: string; fields: string[]; maxResults: number; nextPageToken?: string });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("asks for all given keys without a time bound, reading status and update time only", async () => {
+    const fetch = stubJira({ [SEARCH]: [json({ isLast: true, issues: [
+      found("DS-1", "new", "2026-09-26T13:59:00.000+0200", "Offen"),
+      found("DS-2", "indeterminate", "2026-09-26T11:00:00.000+0000", "In Arbeit"),
+      found("DS-3", "done", "2026-09-26T10:00:00.000Z", "Erledigt"),
+    ] })] });
+    const changes = await adapter().listChangedSince(["DS-1", "DS-2", "DS-3"]);
+    expect(changes).toEqual([
+      { key: "DS-1", statusCategory: "todo", updated: new Date("2026-09-26T11:59:00Z") },
+      { key: "DS-2", statusCategory: "in_progress", updated: new Date("2026-09-26T11:00:00Z") },
+      { key: "DS-3", statusCategory: "done", updated: new Date("2026-09-26T10:00:00Z") },
+    ]);
+    expect(bodies(fetch)).toEqual([{ jql: "project = DS AND key in (DS-1, DS-2, DS-3)", fields: ["status", "updated"], maxResults: 50 }]);
+    expect((fetch.mock.calls[0][1].headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
+  it("bounds the search in minutes rounded up with a margin and drops issues not updated after since", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const since = new Date("2026-09-26T11:57:30Z");
+    const fetch = stubJira({ [SEARCH]: [json({ issues: [
+      found("DS-1", "indeterminate", "2026-09-26T11:57:30.000+0000"),
+      found("DS-2", "indeterminate", "2026-09-26T11:57:31.000+0000"),
+      found("DS-3", "indeterminate", "2026-09-26T11:56:59.000+0000"),
+    ] })] });
+    const changes = await adapter().listChangedSince(["DS-1", "DS-2", "DS-3"], since);
+    expect(changes.map((c) => c.key)).toEqual(["DS-2"]);
+    expect(bodies(fetch)[0].jql).toBe('project = DS AND key in (DS-1, DS-2, DS-3) AND updated >= "-4m"');
+  });
+
+  it("uses at least one minute when since is not in the past", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const fetch = stubJira({ [SEARCH]: [json({ issues: [] })] });
+    await adapter().listChangedSince(["DS-1"], new Date("2026-09-26T12:05:00Z"));
+    expect(bodies(fetch)[0].jql).toBe('project = DS AND key in (DS-1) AND updated >= "-1m"');
+  });
+
+  it("sends at most 50 keys per search and removes duplicates", async () => {
+    const keys = Array.from({ length: 120 }, (_, i) => `DS-${i + 1}`);
+    const fetch = stubJira({ [SEARCH]: [json({ issues: [] })] });
+    await adapter().listChangedSince([...keys, "DS-1"]);
+    const sent = bodies(fetch).map((b) => b.jql.match(/key in \(([^)]*)\)/)![1].split(", "));
+    expect(sent.map((k) => k.length)).toEqual([50, 50, 20]);
+    expect(sent.flat()).toEqual(keys);
+  });
+
+  it("follows the page token until the last page", async () => {
+    const fetch = stubJira({ [SEARCH]: [
+      json({ nextPageToken: "page-2", issues: [found("DS-1", "new", "2026-09-26T10:00:00.000+0000")] }),
+      json({ isLast: true, issues: [found("DS-2", "done", "2026-09-26T10:00:00.000+0000")] }),
+    ] });
+    const changes = await adapter().listChangedSince(["DS-1", "DS-2"]);
+    expect(changes.map((c) => c.key)).toEqual(["DS-1", "DS-2"]);
+    expect(bodies(fetch).map((b) => b.nextPageToken)).toEqual([undefined, "page-2"]);
+  });
+
+  it("stops after five pages even if Jira keeps returning a token", async () => {
+    const fetch = stubJira({ [SEARCH]: [json({ nextPageToken: "again", issues: [] })] });
+    await adapter().listChangedSince(["DS-1"]);
+    expect(fetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("skips issues without a usable key or update time", async () => {
+    stubJira({ [SEARCH]: [json({ issues: [
+      found("OPS-1", "new", "2026-09-26T10:00:00.000+0000"),
+      { key: "DS-2", fields: { status: { statusCategory: { key: "new" } } } },
+      found("DS-3", "new", "not a date"),
+      { fields: { updated: "2026-09-26T10:00:00.000+0000" } },
+      found("DS-4", "new", "2026-09-26T10:00:00.000+0000"),
+    ] })] });
+    expect((await adapter().listChangedSince(["DS-2", "DS-3", "DS-4"])).map((c) => c.key)).toEqual(["DS-4"]);
+  });
+
+  it("rejects keys outside the project before any request, and makes none for no keys", async () => {
+    const fetch = stubJira({});
+    await expect(adapter().listChangedSince(["DS-1", "OPS-1"])).rejects.toThrow("outside the configured project");
+    await expect(adapter().listChangedSince(["DS-1) OR project = OPS"])).rejects.toThrow("outside the configured project");
+    expect(await adapter().listChangedSince([])).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces failures as tracker errors without the body", async () => {
+    const log = logger();
+    stubJira({ [SEARCH]: [json({ errorMessages: [MARKER] }, 400)] });
+    const error = await adapter(log).listChangedSince(["DS-1"]).catch((e: Error) => e);
+    expect((error as Error).message).toBe("Jira request failed (400)");
+    expect((error as Error).name).toBe("IssueTrackerError");
+    expect(JSON.stringify([error, log.warn.mock.calls, log.error.mock.calls])).not.toContain(MARKER);
+  });
+});
+
