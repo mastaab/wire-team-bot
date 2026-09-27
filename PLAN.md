@@ -2074,6 +2074,8 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Pitfalls learned.**
 - Subagent worktrees start from `main`: brief every subagent to reset or fast-forward to the contract commit, symlink `node_modules`, and remove the symlink before finishing.
+- A message sent while the bot restarts may never be processed: on 2026-09-27 a question sent in the seconds between stopping and reconnecting got no answer, and the SDK logged one (redacted) error on reconnect. Do not restart the bot during a demo.
+- The answer model explains commands only as its prompt describes them; a command named without a description gets guessed (secure mode was once described as switching off encryption). Describe every command the prompt names.
 - Jira localises status names from `Accept-Language`; match statuses by category only.
 - The agent-level token receives internal notes; only comments flagged `public: true` may reach Wire or the model.
 - SLA clocks stop a few seconds after the transition; poll the SLA endpoint only.
