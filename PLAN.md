@@ -1731,6 +1731,7 @@ Built by three parallel subagents (answer side, action side, adapter) on the mai
 
 - **Per-channel timezone: built 2026-09-26** (`@Wire Team Bot timezone <name>`, `WIRE_TEAM_BOT_DEFAULT_TIMEZONE`, zone labels on displayed times; see "Resolve with a closing comment, and the channel timezone").
 - **Applied manually for the demo (2026-09-25):** the staging channel's `channel_config.timezone` was set to `Europe/Berlin` with a one-row SQL update and the bot restarted. The CLI test channel stays `UTC`. Revert with the same update to `'UTC'`.
+- **Typing indicator while the model works: waiting for the SDK.** The operator wants the bot to show "typing" in the channel during model calls (useful with the slow local model). `@wireapp/wire-apps-js-sdk` 0.1.0, the latest release (checked 2026-09-27; `main` has no such change either), only receives typing events and has no call to send one; the backend endpoint is reachable only through the SDK's internal client, so it is not built. Build it once the SDK offers a send call, for addressed questions and support commands. A ⏳ reaction on the question while the bot works was offered as an interim alternative and deferred.
 
 ### Out of scope for the demo
 
