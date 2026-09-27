@@ -228,7 +228,8 @@ export function createContainer(config: Config, logger: Logger): Container {
   // Announces changes made in Jira; started once the Wire client is ready (see getWireClient).
   const watchSupportRequests = issueTracker && supportRequestsRepo && config.jira?.watchSeconds
     ? new WatchSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, channelConfigRepo, logger, undefined,
-      { conversations: conversationConfigRepo, writes: supportRequestWrites })
+      // The CLI's test conversations (domain "cli.local") have no Wire group to post to, as for reminders.
+      { conversations: conversationConfigRepo, writes: supportRequestWrites, skipConversation: (c) => c.domain === "cli.local" })
     : undefined;
   const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
     ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)

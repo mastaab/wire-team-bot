@@ -1,3 +1,4 @@
+import type { QualifiedId } from "../../../domain/ids/QualifiedId";
 import type { ChannelConfigRepository } from "../../../domain/repositories/ChannelConfigRepository";
 import type { ConversationConfigRepository } from "../../../domain/repositories/ConversationConfigRepository";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
@@ -34,11 +35,20 @@ const REPLIES_SHOWN = 3;
  */
 const SINCE_OVERLAP_MS = 2 * 60 * 1000;
 
+/**
+ * Failed attempts (a failed send or read) after which a request's pending update is given up,
+ * so a conversation the bot cannot post to is not retried for ever. About five minutes at the
+ * demo interval; a paused or secure channel does not count as a failure.
+ */
+const MAX_FAILED_ATTEMPTS = 10;
+
 export interface WatchGuards {
   /** The older secret-mode flag, which counts as secure for a channel without a channel config. */
   conversations?: ConversationConfigRepository;
   /** Shared with `ResolveSupportRequest`; a request being resolved from Wire is skipped. */
   writes?: SupportRequestWrites;
+  /** Conversations never posted to, such as the CLI's test conversations; their requests are not watched. */
+  skipConversation?: (conversationId: QualifiedId) => boolean;
 }
 
 const NEW_REPLIES_HEADING: RepliesHeading = {
@@ -61,6 +71,8 @@ export class WatchSupportRequests {
    * state stays current until Jira reports the issue as changed again, which replaces it.
    */
   private readonly pending = new Map<string, IssueChange>();
+  /** Consecutive failed attempts per pending key. */
+  private readonly failures = new Map<string, number>();
 
   constructor(
     private readonly requests: SupportRequestRepository,
@@ -77,7 +89,8 @@ export class WatchSupportRequests {
     let watched: SupportRequest[];
     try {
       watched = (await this.requests.listWatched(new Date(this.now().getTime() - RESOLVED_WATCH_MS)))
-        .filter((request) => isKeyInProject(request.key, this.tracker.projectKey));
+        .filter((request) => isKeyInProject(request.key, this.tracker.projectKey)
+          && !this.guards.skipConversation?.(request.conversationId));
     } catch (err) {
       this.logger?.warn("WatchSupportRequests: listWatched failed", trackerErrorFields(err));
       return this.result(0);
@@ -86,7 +99,10 @@ export class WatchSupportRequests {
     const byKey = new Map(watched.map((request) => [request.key, request]));
     // Pending keys no longer watched (deleted, or resolved long ago) are dropped.
     for (const key of [...this.pending.keys()]) {
-      if (!byKey.has(key)) this.pending.delete(key);
+      if (!byKey.has(key)) {
+        this.pending.delete(key);
+        this.failures.delete(key);
+      }
     }
 
     const checkTime = this.now();
@@ -121,14 +137,32 @@ export class WatchSupportRequests {
           this.pending.set(key, change);
           continue;
         }
+        if (outcome === "failed") {
+          this.failed(key, change);
+          continue;
+        }
         this.pending.delete(key);
+        this.failures.delete(key);
         if (outcome === "announced") announced++;
       } catch (err) {
         this.logger?.warn("WatchSupportRequests: request check failed", { key, ...trackerErrorFields(err) });
-        this.pending.set(key, change);
+        this.failed(key, change);
       }
     }
     return this.result(announced);
+  }
+
+  /** Keeps the key for the next check, or gives it up after too many failed attempts. */
+  private failed(key: string, change: IssueChange): void {
+    const attempts = (this.failures.get(key) ?? 0) + 1;
+    if (attempts >= MAX_FAILED_ATTEMPTS) {
+      this.logger?.warn("WatchSupportRequests: giving up on the update after repeated failures", { key, attempts });
+      this.pending.delete(key);
+      this.failures.delete(key);
+      return;
+    }
+    this.failures.set(key, attempts);
+    this.pending.set(key, change);
   }
 
   private askFrom(): Date | undefined {
@@ -140,7 +174,7 @@ export class WatchSupportRequests {
   }
 
   /** Posts the update for one request when there is one and stores the new markers. */
-  private async examine(listed: SupportRequest, change: IssueChange): Promise<"announced" | "silent" | "pending"> {
+  private async examine(listed: SupportRequest, change: IssueChange): Promise<"announced" | "silent" | "pending" | "failed"> {
     if (this.guards.writes?.has(listed.key)) return "pending";
     // Re-read: a resolve, `status of` or answer during this check may have moved the markers.
     const request = await this.requests.findByKey(listed.key);
@@ -190,7 +224,7 @@ export class WatchSupportRequests {
         );
       } catch (err) {
         this.logger?.warn("WatchSupportRequests: send failed", { key: request.key, ...trackerErrorFields(err) });
-        return "pending";
+        return "failed";
       }
       if (ref) {
         try {

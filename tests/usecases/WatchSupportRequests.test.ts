@@ -547,3 +547,44 @@ describe("WatchSupportRequests: review guards", () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe("WatchSupportRequests: conversations it cannot post to", () => {
+  it("does not watch requests of a skipped conversation", async () => {
+    const cli = { id: "cli-conv", domain: "cli.local" };
+    const { watcher, tracker, sent } = setup([watched(), watched({ key: "DS-7", conversationId: cli })], {
+      guards: { skipConversation: (c) => c.domain === "cli.local" },
+    });
+    tracker.listChangedSince.mockResolvedValue([change("DS-6", "in_progress", T0), change("DS-7", "done", T0)]);
+    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    expect(tracker.listChangedSince).toHaveBeenCalledWith(["DS-6"], undefined);
+    expect(sent).toEqual(["**DS-6** VPN drops every ten minutes\nNow in progress."]);
+  });
+
+  it("gives up after ten failed sends, logging once, and counts no paused checks", async () => {
+    const channels = makeChannels();
+    const { watcher, tracker, wire, logger } = setup([watched()], { channels });
+    wire.sendPlainText.mockRejectedValue(new Error("WireApiException"));
+    tracker.listChangedSince.mockResolvedValueOnce([change("DS-6", "in_progress", T0)]).mockResolvedValue([]);
+    for (let i = 0; i < 9; i++) expect((await watcher.check()).pending).toBe(1);
+    // Paused checks in between do not count as failures.
+    setState(channels, "paused");
+    expect((await watcher.check()).pending).toBe(1);
+    setState(channels, "active");
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(10);
+    const givingUp = logger.warn.mock.calls.filter(([msg]) => String(msg).includes("giving up"));
+    expect(givingUp).toEqual([[expect.any(String), { key: "DS-6", attempts: 10 }]]);
+    await watcher.check();
+    expect(wire.sendPlainText).toHaveBeenCalledTimes(10);
+  });
+
+  it("resets the failure count after a successful send", async () => {
+    const { watcher, tracker, wire, sent } = setup([watched()]);
+    tracker.listChangedSince.mockResolvedValueOnce([change("DS-6", "in_progress", T0)]).mockResolvedValue([]);
+    wire.sendPlainText.mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"));
+    await watcher.check();
+    await watcher.check();
+    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    expect(sent).toHaveLength(1);
+  });
+});
