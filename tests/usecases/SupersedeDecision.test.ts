@@ -68,7 +68,7 @@ describe("SupersedeDecision", () => {
     expect(sent[0]).toContain("supersedes DEC-0001");
   });
 
-  it("returns null when old decision not found", async () => {
+  it("returns null and says so when the old decision is not in this conversation", async () => {
     const decisionsRepo: DecisionRepository = {
       nextId: vi.fn(),
       create: vi.fn(),
@@ -95,6 +95,6 @@ describe("SupersedeDecision", () => {
     });
 
     expect(result).toBeNull();
-    expect(wireOutbound.sendPlainText).not.toHaveBeenCalled();
+    expect(wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, "I'm afraid **DEC-9999** isn't a decision in this conversation.", expect.anything());
   });
 });

@@ -4,6 +4,7 @@ import type { DecisionRepository } from "../../../domain/repositories/DecisionRe
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { recordNotInConversation } from "../../services/notInConversation";
 
 export interface SupersedeDecisionInput {
   newSummary: string;
@@ -25,6 +26,7 @@ export class SupersedeDecision {
   async execute(input: SupersedeDecisionInput): Promise<Decision | null> {
     const oldDecision = await this.decisions.findById(input.supersedesDecisionId);
     if (!oldDecision || oldDecision.deleted || !sameQualifiedId(oldDecision.conversationId, input.conversationId)) {
+      await this.wireOutbound.sendPlainText(input.conversationId, recordNotInConversation(input.supersedesDecisionId, "decision"), { replyToMessageId: input.replyToMessageId });
       return null;
     }
 

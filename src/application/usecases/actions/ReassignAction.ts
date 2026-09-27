@@ -5,6 +5,7 @@ import type { UserResolutionService } from "../../../domain/services/UserResolut
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { recordNotInConversation } from "../../services/notInConversation";
 
 export interface ReassignActionInput {
   actionId: string;
@@ -26,6 +27,7 @@ export class ReassignAction {
   async execute(input: ReassignActionInput): Promise<Action | null> {
     const action = await this.actions.findById(input.actionId);
     if (!action || action.deleted || !sameQualifiedId(action.conversationId, input.conversationId)) {
+      await this.wireOutbound.sendPlainText(input.conversationId, recordNotInConversation(input.actionId, "action"), { replyToMessageId: input.replyToMessageId });
       return null;
     }
 

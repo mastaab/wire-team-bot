@@ -4,6 +4,7 @@ import type { ActionRepository } from "../../../domain/repositories/ActionReposi
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { recordNotInConversation } from "../../services/notInConversation";
 
 export type ActionStatusUpdate = "open" | "in_progress" | "done" | "cancelled" | "overdue";
 
@@ -25,7 +26,10 @@ export class UpdateActionStatus {
 
   async execute(input: UpdateActionStatusInput): Promise<Action | null> {
     const action = await this.actions.findById(input.actionId);
-    if (!action || action.deleted || !sameQualifiedId(action.conversationId, input.conversationId)) return null;
+    if (!action || action.deleted || !sameQualifiedId(action.conversationId, input.conversationId)) {
+      await this.wireOutbound.sendPlainText(input.conversationId, recordNotInConversation(input.actionId, "action"), { replyToMessageId: input.replyToMessageId });
+      return null;
+    }
 
     const updated: Action = {
       ...action,

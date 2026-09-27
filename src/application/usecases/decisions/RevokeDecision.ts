@@ -4,6 +4,7 @@ import type { DecisionRepository } from "../../../domain/repositories/DecisionRe
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { AuditLogRepository } from "../../../domain/repositories/AuditLogRepository";
 import type { QualifiedId } from "../../../domain/ids/QualifiedId";
+import { recordNotInConversation } from "../../services/notInConversation";
 
 export interface RevokeDecisionInput {
   decisionId: string;
@@ -23,6 +24,7 @@ export class RevokeDecision {
   async execute(input: RevokeDecisionInput): Promise<Decision | null> {
     const decision = await this.decisions.findById(input.decisionId);
     if (!decision || decision.deleted || !sameQualifiedId(decision.conversationId, input.conversationId)) {
+      await this.wireOutbound.sendPlainText(input.conversationId, recordNotInConversation(input.decisionId, "decision"), { replyToMessageId: input.replyToMessageId });
       return null;
     }
 

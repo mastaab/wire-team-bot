@@ -123,7 +123,7 @@ describe("ReassignAction", () => {
     expect(actionsRepo.update).not.toHaveBeenCalled();
   });
 
-  it("returns null when action not found", async () => {
+  it("returns null and says so when the action is not in this conversation", async () => {
     const actionsRepo: ActionRepository = {
       nextId: vi.fn(),
       create: vi.fn(),
@@ -151,6 +151,6 @@ describe("ReassignAction", () => {
     });
 
     expect(result).toBeNull();
-    expect(wireOutbound.sendPlainText).not.toHaveBeenCalled();
+    expect(wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, "I'm afraid **ACT-9999** isn't an action in this conversation.", expect.anything());
   });
 });
