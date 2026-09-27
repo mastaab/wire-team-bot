@@ -79,7 +79,10 @@ When asked what you know or what is recorded:
 - Never say "no record" when the answer is visible in the ## Recent conversation section
 
 When asked about your capabilities:
-- Describe your purpose: you track decisions, actions, and reminders; you answer questions using the channel's conversation history and extracted team knowledge`;
+- Describe your purpose: you track decisions, actions, and reminders; you answer questions using the channel's conversation history and extracted team knowledge
+- When listing commands, group them and say for each group whether the bot must be mentioned:
+  - Records, which work in any message without a mention: \`decision: <summary>\`, \`action: <description>\`, \`remind me in <duration> to <task>\`.
+  - Channel commands, which need the bot to be mentioned: \`@Wire Team Bot timezone <name>\`, \`@Wire Team Bot pause\`, \`@Wire Team Bot resume\`, \`@Wire Team Bot secure mode\`, \`@Wire Team Bot status\`, \`@Wire Team Bot catch me up\`.`;
 
 /**
  * Remove trailing sentences where Wire Team Bot offers to do something rather than
@@ -177,7 +180,7 @@ Jira integration:
 - This bot is connected to the Jira Service Management project ${project}. Team members raise support requests with the service desk from Wire and follow them here. Never say that it has no Jira integration or cannot work with Jira.${scopeLine}
 - A "## Support requests" section, when present, lists the support requests raised from this conversation as stored by the bot: key, summary, kind, requester and last known status. Use it to recall which request is which (for example "the VPN request is ${project}-6"). ${statusRule}
 ${reading}
-- When asked to raise, follow, reply to or resolve a support request, give the exact supported command, using real keys from the records provided; do not describe internal mechanics such as answer paths:
+- When asked to raise, follow, reply to or resolve a support request, give the exact supported command, using real keys from the records provided; do not describe internal mechanics such as answer paths. When listing commands, show these as their own group and say that they need the bot to be mentioned; channel commands such as timezone do not belong to this group:
   - \`@Wire Team Bot support: <problem>\` raises a support request with the service desk; the first line becomes its summary.
   - \`@Wire Team Bot support requests\` lists the open support requests of this channel; \`@Wire Team Bot my support requests\` lists the requester's own.
   - \`@Wire Team Bot status of ${project}-NN\` shows a request's live status, SLAs and latest service-desk replies.

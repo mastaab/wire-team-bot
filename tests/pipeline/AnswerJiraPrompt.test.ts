@@ -61,6 +61,20 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain('Never invent a comment; otherwise leave "comment" out.');
   });
 
+  it("lists the support request commands as their own group that needs a mention, without channel commands", () => {
+    const prompt = integrationsPrompt({ jiraProjectKey: "DS" });
+    expect(prompt).toContain("show these as their own group and say that they need the bot to be mentioned");
+    expect(prompt).toContain("channel commands such as timezone do not belong to this group");
+  });
+
+  it("groups the commands in a capabilities answer by whether they need a mention", async () => {
+    const { llm, adapter } = setup("I track decisions, actions and reminders.");
+    await adapter.answer("what can you do", [], []);
+    const system = llm.chatCompletion.mock.calls[0][1][0].content as string;
+    expect(system).toContain("Records, which work in any message without a mention: `decision: <summary>`");
+    expect(system).toContain("Channel commands, which need the bot to be mentioned: `@Wire Team Bot timezone <name>`");
+  });
+
   it("has no action-to-Jira commands or old offer kinds", () => {
     for (const prompt of [integrationsPrompt({ jiraProjectKey: "DS" }), integrationsPrompt({ jiraProjectKey: "DS", jiraShareWithModel: true })]) {
       expect(prompt).not.toContain("ACT-NNNN");
