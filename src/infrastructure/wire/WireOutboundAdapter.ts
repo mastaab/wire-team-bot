@@ -4,6 +4,7 @@ import type {
   OutboundTextOptions,
   CompositePromptOptions,
   CompositeButton as PromptButton,
+  OutboundMention,
   SentMessageRef,
   UserProfile,
 } from "../../application/ports/WireOutboundPort";
@@ -11,6 +12,10 @@ import type { Logger } from "../../application/ports/Logger";
 import { TextMessage, CompositeMessage, CompositeButton, Reaction } from "@wireapp/wire-apps-js-sdk";
 import type { WireMessage, WireUser } from "@wireapp/wire-apps-js-sdk";
 import type { WireReplyContext } from "./WireReplyContext";
+import { renameBot, usableBotName } from "./renameBot";
+
+/** How long the bot's own display name is reused before it is looked up again. */
+const BOT_NAME_TTL_MS = 5 * 60 * 1000;
 
 /**
  * The subset of WireApplicationManager the outbound adapter needs.
@@ -48,7 +53,35 @@ async function streamToUint8Array(stream: NodeJS.ReadableStream): Promise<Uint8A
 /**
  * Implements WireOutboundPort using @wireapp/wire-apps-js-sdk.
  */
-export function createWireOutboundAdapter(handlerRef: HandlerManagerRef, logger: Logger, replyContext?: WireReplyContext): WireOutboundPort {
+export function createWireOutboundAdapter(
+  handlerRef: HandlerManagerRef,
+  logger: Logger,
+  replyContext?: WireReplyContext,
+  /** The bot's own user; its current Wire display name replaces the built-in name in texts. */
+  botUserId?: QualifiedId,
+  now: () => number = Date.now,
+): WireOutboundPort {
+  let botName: { name: string | undefined; at: number } | undefined;
+  /** The bot's display name, looked up at most every few minutes; undefined keeps the built-in name. */
+  const currentBotName = async (manager: ManagerHandle): Promise<string | undefined> => {
+    if (!botUserId) return undefined;
+    if (botName && now() - botName.at < BOT_NAME_TTL_MS) return botName.name;
+    let name: string | undefined;
+    try {
+      const [profile] = await manager.getUsers([botUserId]);
+      name = usableBotName(profile?.name);
+    } catch (err) {
+      logger.warn("Bot display name lookup failed", { err: err instanceof Error ? err.name : "UnknownError" });
+      name = botName?.name;
+    }
+    botName = { name, at: now() };
+    return name;
+  };
+  const renamed = async (manager: ManagerHandle, text: string, mentions?: OutboundMention[]) => {
+    const name = await currentBotName(manager);
+    return name ? renameBot(text, name, mentions) : { text, mentions: mentions ?? [] };
+  };
+
   return {
     async getUserProfile(userId: QualifiedId): Promise<UserProfile | null> {
       const h = handlerRef.current;
@@ -78,8 +111,9 @@ export function createWireOutboundAdapter(handlerRef: HandlerManagerRef, logger:
       const storedQuote = !options?.replyToMessageId && options?.quote
         ? { quotedMessageId: options.quote.messageId, quotedMessageSha256: Uint8Array.from(Buffer.from(options.quote.sha256, "hex")) }
         : undefined;
+      const out = await renamed(h.manager, text, options?.mentions);
       const message: TextMessage = {
-        ...TextMessage.create({ conversationId, text, mentions: options?.mentions }),
+        ...TextMessage.create({ conversationId, text: out.text, mentions: out.mentions.length > 0 ? out.mentions : undefined }),
         ...(handlerQuote ?? storedQuote),
       };
       const messageId = await h.manager.sendMessage(message);
@@ -95,12 +129,13 @@ export function createWireOutboundAdapter(handlerRef: HandlerManagerRef, logger:
       const h = handlerRef.current;
       if (!h?.manager) return;
       logger.debug("sendCompositePrompt", { conversationId: conversationId.id, textLength: text.length, buttons: buttons.map((b) => b.id) });
+      const out = await renamed(h.manager, text);
       await h.manager.sendMessage(
         CompositeMessage.create({
           conversationId,
           itemList: [
             {
-              ...TextMessage.create({ conversationId, text }),
+              ...TextMessage.create({ conversationId, text: out.text }),
               ...replyContext?.get(conversationId, options?.replyToMessageId),
             },
             ...buttons.map((b) => CompositeButton.create({ id: b.id, text: b.label })),

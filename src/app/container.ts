@@ -88,7 +88,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   const handlerRef: HandlerManagerRef = { current: null };
 
   const replyContext = new WireReplyContext();
-  const wireOutbound = createWireOutboundAdapter(handlerRef, logger, replyContext);
+  const wireOutbound = createWireOutboundAdapter(handlerRef, logger, replyContext, { id: config.wire.appId, domain: config.wire.appDomain });
 
   const decisionsRepo = new PrismaDecisionRepository();
   const actionsRepo = new PrismaActionRepository();

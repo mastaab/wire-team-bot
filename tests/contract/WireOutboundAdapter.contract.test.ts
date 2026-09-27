@@ -58,6 +58,40 @@ describe("WireOutboundAdapter contract", () => {
     expect((sendMessage.mock.calls[1]![0] as TextMessage).quotedMessageId).toBe(source.id);
   });
 
+  it("uses the bot's Wire display name in texts, looked up once for several minutes", async () => {
+    const sendMessage = vi.fn().mockResolvedValue("sent-3");
+    const getUsers = vi.fn().mockResolvedValue([{ id: { id: "bot", domain: "wire.com" }, name: "STCO-Support-Demo" }]);
+    let clock = 0;
+    const adapter = createWireOutboundAdapter(
+      { current: { manager: { sendMessage, sendAsset: vi.fn(), getUsers } } }, mockLogger, undefined, { id: "bot", domain: "wire.com" }, () => clock,
+    );
+    const ref = await adapter.sendPlainText(convId, "Send `@Wire Team Bot status of DS-6`.");
+    await adapter.sendCompositePrompt(convId, "Ask @Wire Team Bot", []);
+    const sent = sendMessage.mock.calls[0]![0] as TextMessage;
+    expect(sent.text).toBe("Send `@STCO-Support-Demo status of DS-6`.");
+    expect((sendMessage.mock.calls[1]![0] as { items: Array<{ text?: string }> }).items[0]!.text).toBe("Ask @STCO-Support-Demo");
+    expect(getUsers).toHaveBeenCalledTimes(1);
+    expect(getUsers).toHaveBeenCalledWith([{ id: "bot", domain: "wire.com" }]);
+    // The quote hash covers the text as sent.
+    const expected = TextMessage.createReply({ originalMessage: { ...sent, id: "sent-3" }, text: "" }).quotedMessageSha256!;
+    expect(ref!.sha256).toBe(Buffer.from(expected).toString("hex"));
+    // A rename is picked up after the cache expires.
+    getUsers.mockResolvedValue([{ id: { id: "bot", domain: "wire.com" }, name: "Truck Desk" }]);
+    clock = 5 * 60 * 1000;
+    await adapter.sendPlainText(convId, "@Wire Team Bot pause");
+    expect((sendMessage.mock.calls[2]![0] as TextMessage).text).toBe("@Truck Desk pause");
+  });
+
+  it("keeps the built-in name when the display name cannot be read", async () => {
+    const sendMessage = vi.fn().mockResolvedValue("sent-4");
+    const getUsers = vi.fn().mockRejectedValue(new Error("offline"));
+    const adapter = createWireOutboundAdapter(
+      { current: { manager: { sendMessage, sendAsset: vi.fn(), getUsers } } }, mockLogger, undefined, { id: "bot", domain: "wire.com" },
+    );
+    await adapter.sendPlainText(convId, "@Wire Team Bot pause");
+    expect((sendMessage.mock.calls[0]![0] as TextMessage).text).toBe("@Wire Team Bot pause");
+  });
+
   it("sendPlainText returns undefined without a connection", async () => {
     const adapter = createWireOutboundAdapter({ current: null }, mockLogger);
     expect(await adapter.sendPlainText(convId, "Hello")).toBeUndefined();
