@@ -75,6 +75,18 @@ describe("integrationsPrompt", () => {
     expect(system).toContain("Channel commands, which need the bot to be mentioned: `@Wire Team Bot timezone <name>`");
   });
 
+  it("describes what each channel command does, so the model does not guess from the name", async () => {
+    const { llm, adapter } = setup("Secure mode keeps the conversation off the record.");
+    await adapter.answer("what is secure mode?", [], []);
+    const system = llm.chatCompletion.mock.calls[0][1][0].content as string;
+    expect(system).toContain("explain a command only from this list, in your own words about yourself, and never guess from its name");
+    expect(system).toContain("without replying at all, even when mentioned (unlike pause)");
+    expect(system).toContain("It does not change Wire's encryption: Wire messages are always end-to-end encrypted, in every mode.");
+    for (const command of ["timezone <name>:", "pause:", "secure mode:", "resume:", "status:", "catch me up:"]) {
+      expect(system).toContain(`  - ${command}`);
+    }
+  });
+
   it("has no action-to-Jira commands or old offer kinds", () => {
     for (const prompt of [integrationsPrompt({ jiraProjectKey: "DS" }), integrationsPrompt({ jiraProjectKey: "DS", jiraShareWithModel: true })]) {
       expect(prompt).not.toContain("ACT-NNNN");
