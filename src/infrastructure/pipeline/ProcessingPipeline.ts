@@ -31,6 +31,7 @@ import type { LLMClientFactory } from "../llm/LLMClientFactory";
 import type { Decision } from "../../domain/entities/Decision";
 import type { Action } from "../../domain/entities/Action";
 import type { OfferSupportFromConversationPort } from "../../application/usecases/jira/OfferSupportFromConversation";
+import { withTyping } from "../../application/services/typing";
 
 export interface MessageJob {
   messageId: string;
@@ -90,18 +91,23 @@ export class ProcessingPipeline {
     // open request (see the use case).
     const relevant: MessageCategory[] = ["service_request", "request_status", "update", "blocker", "action", "decision"];
     if (!result.categories.some((category) => relevant.includes(category))) return false;
+    // A recognised service-desk matter usually gets an offer or a status answer, so the sender
+    // sees the app typing while the model drafts it. Updates, blockers, actions and decisions are
+    // checked against open requests too, but rarely answered, so they show nothing.
+    const likelyAnswered = result.categories.some((category) => category === "service_request" || category === "request_status");
+    const help = () => supportHelp.execute({
+      text: job.text,
+      messageId: job.messageId,
+      conversationId: job.conversationId,
+      senderId: job.senderId,
+      senderName: job.senderName || undefined,
+      categories: result.categories,
+      confidence: result.confidence,
+      timezone,
+      signal,
+    });
     try {
-      return await supportHelp.execute({
-        text: job.text,
-        messageId: job.messageId,
-        conversationId: job.conversationId,
-        senderId: job.senderId,
-        senderName: job.senderName || undefined,
-        categories: result.categories,
-        confidence: result.confidence,
-        timezone,
-        signal,
-      });
+      return likelyAnswered ? await withTyping(this.deps.wireOutbound, job.conversationId, help, this.deps.logger) : await help();
     } catch (err) {
       log.warn("Pipeline: passive service-desk help failed", { err: (err instanceof Error ? err.name : "UnknownError") });
       return false;

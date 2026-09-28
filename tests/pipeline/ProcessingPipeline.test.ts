@@ -95,6 +95,7 @@ function makeDeps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
       sendCompositePrompt: vi.fn().mockResolvedValue(undefined),
       sendReaction: vi.fn().mockResolvedValue(undefined),
       sendFile: vi.fn().mockResolvedValue(undefined),
+      setTyping: vi.fn().mockResolvedValue(undefined),
     },
     llm: {
       chatCompletion: vi.fn().mockResolvedValue({ content: "no", model: "m", usedFallback: false }),
@@ -528,6 +529,25 @@ describe("passive service-desk help", () => {
     });
     expect(deps.signalRepo.create).toHaveBeenCalledOnce();
     expect(deps.extraction.extract).not.toHaveBeenCalled();
+  });
+
+  it("shows the app typing while it drafts help for a recognised service-desk matter", async () => {
+    const supportHelp = { execute: vi.fn(async () => true) };
+    const deps = makeDeps({ supportHelp, channelConfig: activeChannel(), classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
+    supportHelp.execute.mockImplementation(async () => {
+      expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls).toEqual([[convId, true]]);
+      return true;
+    });
+    await new ProcessingPipeline(deps).process(baseJob());
+    await vi.waitFor(() => expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls.at(-1)).toEqual([convId, false]));
+  });
+
+  it("shows nothing for an action or update that is only checked against open requests", async () => {
+    const supportHelp = { execute: vi.fn().mockResolvedValue(false) };
+    const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...highSignalResult, categories: ["action", "update"] }) } });
+    await new ProcessingPipeline(deps).process(baseJob());
+    expect(supportHelp.execute).toHaveBeenCalled();
+    expect(deps.wireOutbound.setTyping).not.toHaveBeenCalled();
   });
 
   it("runs before extraction for a high-signal message with a service-desk category", async () => {

@@ -1269,6 +1269,35 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
     expect(deps.processingQueue!.enqueue).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-1" }));
   });
 
+  it("shows the app typing while it completes a part order the requester is answering", async () => {
+    const pending = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7", part: "left mirror" } };
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue(pending), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(false) },
+      completePartOrder: { execute: vi.fn().mockResolvedValue(true) },
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("two, deliver to depot north"));
+    await vi.waitFor(() => expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls).toEqual([[convId, true], [convId, false]]));
+  });
+
+  it.each([["yes", true], ["no", false], ["actually three", false]])("shows typing for the confirmation %j only when it is a yes", async (text, typing) => {
+    const deps = makeDeps({
+      pendingOffers: {
+        has: vi.fn().mockReturnValue(true), put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+        drop: vi.fn().mockReturnValue(null), recentlyDropped: vi.fn().mockReturnValue(null),
+      },
+      confirmOffer: { execute: vi.fn().mockResolvedValue(true) },
+    } as unknown as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    await new Promise((r) => setTimeout(r, 0));
+    const calls = vi.mocked(deps.wireOutbound.setTyping).mock.calls;
+    if (typing) await vi.waitFor(() => expect(calls).toEqual([[convId, true], [convId, false]]));
+    else expect(calls).toEqual([]);
+  });
+
   it("completes a pending part order in code before the answer path", async () => {
     const pending = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7", part: "left mirror" } };
     const deps = makeDeps({

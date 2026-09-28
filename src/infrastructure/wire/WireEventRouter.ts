@@ -55,6 +55,7 @@ import type { CreatedConversations } from "./CreatedConversations";
 import { ATTACHMENT_MAX_BYTES, attachableKind } from "../../application/services/attachments";
 import { withTyping } from "../../application/services/typing";
 import type { WireReplyContext } from "./WireReplyContext";
+import { classifyConfirmation } from "../../application/usecases/jira/ConfirmOffer";
 
 const CONTEXT_WINDOW = 10;
 const NAME_TTL_MS = 24 * 60 * 60 * 1000; // re-fetch display names after 24 h to catch renames
@@ -371,10 +372,12 @@ export class WireEventRouter extends WireEventsHandler {
     const pendingOffers = this.deps.pendingOffers;
     if (this.deps.confirmOffer && pendingOffers
         && (pendingOffers.has(convId, sender) || pendingOffers.recentlyDropped(convId, sender))) {
-      const handled = await this.deps.confirmOffer.execute({
+      const confirm = () => this.deps.confirmOffer!.execute({
         text: commandText, conversationId: convId, requesterId: sender,
         requesterName: senderDisplayName, replyToMessageId: wireMessage.id,
       });
+      // A yes raises, replies to or resolves a ticket in Jira, which the requester waits for.
+      const handled = classifyConfirmation(commandText) === "yes" ? await this.typing(convId, confirm) : await confirm();
       if (handled) {
         // Record the answer so the answer model sees the offer as closed, not pending, and a bot
         // entry after it, so the offer's "(yes or no)?" no longer counts as the bot's latest
@@ -397,9 +400,11 @@ export class WireEventRouter extends WireEventsHandler {
       // three") is merged in code, without relying on the answer model to return a revised offer.
       // A message to the bot (a command or a question) is not an answer to the draft.
       if (droppedOffer && this.deps.completePartOrder && isPartOrder(droppedOffer) && !isBotAddressed) {
-        const completed = await this.deps.completePartOrder.execute({
-          text: commandText, conversationId: convId, requesterId: sender, pending: droppedOffer, replyToMessageId: wireMessage.id,
-        });
+        // The bot asked for the missing details, so the requester is waiting for its answer.
+        const draft = droppedOffer;
+        const completed = await this.typing(convId, () => this.deps.completePartOrder!.execute({
+          text: commandText, conversationId: convId, requesterId: sender, pending: draft, replyToMessageId: wireMessage.id,
+        }));
         if (completed) {
           const now = new Date();
           this.deps.messageBuffer.push(convId, {
