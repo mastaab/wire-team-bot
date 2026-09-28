@@ -106,12 +106,21 @@ it.each([
   expect(deps.createActionFromExplicit.execute).not.toHaveBeenCalled();
 });
 
-it.each(["pause", "secure mode"])("does not create addressed natural assignments while %s", async state => {
+it("does not create addressed natural assignments while secure", async () => {
   const deps = makeDeps();
   const router = new WireEventRouter(deps);
-  await router.onTextMessageReceived(customMention(state));
+  await router.onTextMessageReceived(customMention("secure mode"));
   await router.onTextMessageReceived(customMention("@Adam (Test) needs to prepare the slide deck by Friday."));
   expect(deps.createActionFromExplicit.execute).not.toHaveBeenCalled();
+});
+
+it("creates an addressed natural assignment while paused, since it mentions the bot", async () => {
+  const deps = makeDeps();
+  const router = new WireEventRouter(deps);
+  await router.onTextMessageReceived(customMention("pause"));
+  await router.onTextMessageReceived(customMention("@Adam (Test) needs to prepare the slide deck by Friday."));
+  expect(deps.createActionFromExplicit.execute).toHaveBeenCalledWith(expect.objectContaining({ description: "prepare the slide deck", deadlineText: "Friday" }));
+  expect(deps.messageBuffer.push).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -1471,5 +1480,234 @@ describe("WireEventRouter contract: channel timezone", () => {
     const deps = tzDeps();
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("timezone Europe/Berlin"));
     expect(deps.setChannelTimezone!.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("WireEventRouter contract: pause means mentions only", () => {
+  const other: QualifiedId = { id: "user-2", domain: "wire.com" };
+  const fromOther = (text: string) => ({ ...makeMessage(text, "msg-2"), sender: other });
+  const faultOffer = { kind: "support", requestKind: "fault", summary: "VPN drops", description: "VPN drops" };
+  const partDraft = { kind: "support", requestKind: "part", summary: "Mirror", description: "Need a mirror.", part: { vehicle: "truck 7" } };
+
+  /** A channel whose stored state is paused; `offer` is the pending offer of `sender` only. */
+  const pausedDeps = (offer: unknown = null, opts: { handled?: boolean; recent?: unknown } = {}) => makeDeps({
+    channelConfig: {
+      get: vi.fn().mockResolvedValue({ state: "paused", secureRanges: [], timezone: "UTC", locale: "en", organisationId: "wire.com", channelId: "conv-1@wire.com" }),
+      upsert: vi.fn(), setState: vi.fn(), setTimezone: vi.fn(), openSecureRange: vi.fn(), closeSecureRange: vi.fn(), listByState: vi.fn().mockResolvedValue([]),
+    },
+    processingQueue: { enqueue: vi.fn(), cancelChannel: vi.fn() },
+    pipeline: {},
+    pendingOffers: {
+      has: vi.fn((_c: QualifiedId, requester: QualifiedId) => offer !== null && requester.id === sender.id),
+      put: vi.fn(), take: vi.fn(), clearConversation: vi.fn(), forgetDropped: vi.fn(),
+      drop: vi.fn((_c: QualifiedId, requester: QualifiedId) => (requester.id === sender.id ? offer : null)),
+      recentlyDropped: vi.fn((_c: QualifiedId, requester: QualifiedId) => (requester.id === sender.id ? opts.recent ?? null : null)),
+    },
+    confirmOffer: { execute: vi.fn().mockResolvedValue(opts.handled ?? false) },
+    completePartOrder: { execute: vi.fn().mockResolvedValue(true) },
+    raiseSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
+    listSupportRequests: { execute: vi.fn().mockResolvedValue(undefined) },
+    resolveSupportRequest: { execute: vi.fn().mockResolvedValue(null) },
+    replyToServiceDesk: { execute: vi.fn().mockResolvedValue(undefined) },
+    getIssueStatus: { execute: vi.fn().mockResolvedValue(null), projectKey: "DS" },
+    statusCommand: { execute: vi.fn().mockResolvedValue(undefined) },
+    setChannelTimezone: { execute: vi.fn().mockResolvedValue(undefined) },
+    catchMeUpCommand: { execute: vi.fn().mockResolvedValue(undefined) },
+  } as unknown as Partial<WireEventRouterDeps>);
+
+  const expectNothingKept = (deps: WireEventRouterDeps) => {
+    expect(deps.messageBuffer.push).not.toHaveBeenCalled();
+    expect(deps.slidingWindow.push).not.toHaveBeenCalled();
+    expect(deps.processingQueue!.enqueue).not.toHaveBeenCalled();
+  };
+
+  it("ignores ordinary chat: no capture, no reactions, no offers, no reply", async () => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("my VPN keeps dropping, I'll send the report tomorrow"));
+    expectNothingKept(deps);
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["decision: use Postgres", "logDecision"],
+    ["action: review the checklist", "createActionFromExplicit"],
+    ["remind me in 2 hours to check the build", "createReminder"],
+    ["ACT-0001 done", "updateActionStatus"],
+    ["my actions", "listMyActions"],
+  ] as const)("does not run the unmentioned command '%s'", async (text, useCase) => {
+    const deps = pausedDeps();
+    vi.mocked(deps.dateTimeService.parse).mockReturnValue({ value: new Date() } as never);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps[useCase].execute).not.toHaveBeenCalled();
+    expectNothingKept(deps);
+  });
+
+  it("does not count the bot's name typed without a real mention", async () => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("@Wire Team Bot decision: use Postgres"));
+    expect(deps.logDecision.execute).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalled();
+  });
+
+  it("answers a mentioned question without conversation context and keeps nothing", async () => {
+    const deps = pausedDeps();
+    vi.mocked(deps.answerQuestion.execute).mockResolvedValue("We decided on Postgres.");
+    vi.mocked(deps.messageBuffer.getLastN).mockReturnValue([
+      { messageId: "old", senderId: other, senderName: "Bob", text: "EXCLUDED_MARKER", timestamp: new Date() },
+    ]);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("what did we decide about the database?"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
+      question: "what did we decide about the database?", conversationContext: [], requester: expect.objectContaining({ id: sender.id }),
+    }));
+    expect(JSON.stringify(vi.mocked(deps.answerQuestion.execute).mock.calls)).not.toContain("EXCLUDED_MARKER");
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalledWith(convId, expect.stringContaining("standing by"), expect.anything());
+    expectNothingKept(deps);
+  });
+
+  it("carries out a mentioned record command", async () => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("decision: use Postgres"));
+    expect(deps.logDecision.execute).toHaveBeenCalledWith(expect.objectContaining({ summary: "use Postgres" }));
+    expectNothingKept(deps);
+  });
+
+  it.each([
+    ["support: My VPN drops", "raiseSupportRequest"],
+    ["status of DS-4", "getIssueStatus"],
+    ["reply to DS-4: thanks", "replyToServiceDesk"],
+    ["resolve DS-4", "resolveSupportRequest"],
+    ["support requests", "listSupportRequests"],
+  ] as const)("carries out the mentioned support command '%s'", async (text, useCase) => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect((deps[useCase] as { execute: ReturnType<typeof vi.fn> }).execute).toHaveBeenCalledOnce();
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    expectNothingKept(deps);
+  });
+
+  it.each([
+    ["status", "statusCommand"],
+    ["timezone Europe/Berlin", "setChannelTimezone"],
+    ["catch me up", "catchMeUpCommand"],
+  ] as const)("carries out the mentioned channel command '%s'", async (text, useCase) => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect((deps[useCase] as { execute: ReturnType<typeof vi.fn> }).execute).toHaveBeenCalledOnce();
+    expectNothingKept(deps);
+  });
+
+  it("saves a mentioned channel purpose and keeps the paused state", async () => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("context: truck support"));
+    expect(deps.channelConfig.upsert).toHaveBeenCalledWith(expect.objectContaining({ purpose: "truck support", state: "paused" }));
+  });
+
+  it.each([
+    ["resume", "active"],
+    ["secure mode", "secure"],
+  ])("changes state on a mentioned '%s'", async (text, state) => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention(text));
+    expect(deps.channelConfig.setState).toHaveBeenCalledWith("conv-1@wire.com", state, sender.id, expect.any(Date));
+  });
+
+  it("says it is already paused on a mentioned 'pause'", async () => {
+    const deps = pausedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("pause"));
+    expect(deps.channelConfig.setState).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, expect.stringContaining("already paused"), expect.anything());
+  });
+
+  it("confirms the pause with the mentions-only behaviour", async () => {
+    const deps = makeDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("pause"));
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, expect.stringContaining("still respond when mentioned"), expect.anything());
+  });
+
+  it("does not take an unmentioned message as a follow-up to the bot's question", async () => {
+    const deps = pausedDeps();
+    vi.mocked(deps.messageBuffer.getLastN).mockReturnValue([
+      { messageId: "bot-1", senderId: deps.botUserId, senderName: "Wire Team Bot", text: "Which truck is it?", timestamp: new Date() },
+    ]);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("truck 7"));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    expectNothingKept(deps);
+  });
+
+  // Decision 1: answers to the bot's own offer or part-order question need no mention.
+  it.each(["yes", "no"])("hands the requester's unmentioned '%s' to the pending offer without buffering", async (text) => {
+    const deps = pausedDeps(faultOffer, { handled: true });
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
+    expect(deps.confirmOffer!.execute).toHaveBeenCalledWith(expect.objectContaining({ text, requesterId: sender }));
+    expectNothingKept(deps);
+  });
+
+  it("answers the requester's unmentioned yes after the offer was dropped recently", async () => {
+    const deps = pausedDeps(null, { handled: true, recent: faultOffer });
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("yes"));
+    expect(deps.confirmOffer!.execute).toHaveBeenCalled();
+  });
+
+  it("does not let another member answer the requester's offer", async () => {
+    const deps = pausedDeps(faultOffer, { handled: true });
+    await new WireEventRouter(deps).onTextMessageReceived(fromOther("yes"));
+    expect(deps.confirmOffer!.execute).not.toHaveBeenCalled();
+    expectNothingKept(deps);
+  });
+
+  it("merges the requester's unmentioned details into a part-order draft without buffering", async () => {
+    const deps = pausedDeps(partDraft);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("two, to depot north"));
+    expect(deps.completePartOrder!.execute).toHaveBeenCalledWith(expect.objectContaining({ text: "two, to depot north", pending: partDraft }));
+    expectNothingKept(deps);
+  });
+
+  it("sends the requester's unmentioned correction to the answer path without context", async () => {
+    const deps = pausedDeps(faultOffer);
+    vi.mocked(deps.answerQuestion.execute).mockResolvedValue("Shall I raise this with the service desk?");
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("the description should mention the office Wi-Fi"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({
+      pendingOffer: faultOffer, amendOnly: true, conversationContext: [],
+    }));
+    expectNothingKept(deps);
+  });
+
+  it("does not capture the requester's unmentioned chat that did not revise the offer", async () => {
+    const deps = pausedDeps(faultOffer);
+    vi.mocked(deps.answerQuestion.execute).mockResolvedValue("");
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("lunch at noon?"));
+    expectNothingKept(deps);
+  });
+
+  it("does not run an unmentioned command from the requester that displaced the offer", async () => {
+    const deps = pausedDeps(faultOffer);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("ACT-0001 done"));
+    expect(deps.pendingOffers!.drop).toHaveBeenCalledWith(convId, sender);
+    expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("WireEventRouter contract: local fail-closed block", () => {
+  it("answers nothing but resume and secure mode after the state could not be read", async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.channelConfig.get).mockRejectedValue(new Error("DB down"));
+    const router = new WireEventRouter(deps);
+    await router.onTextMessageReceived(customMention("what did we decide?"));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, expect.stringContaining("standing by"), expect.anything());
+    expect(deps.messageBuffer.push).not.toHaveBeenCalled();
+  });
+
+  it("does not answer mentions after a failed secure mode write", async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.channelConfig.setState).mockRejectedValue(new Error("DB down"));
+    const router = new WireEventRouter(deps);
+    await router.onTextMessageReceived(customMention("secure mode"));
+    await router.onTextMessageReceived(customMention("decision: EXCLUDED_MARKER"));
+    await router.onTextMessageReceived(customMention("what did we decide?"));
+    expect(deps.logDecision.execute).not.toHaveBeenCalled();
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
   });
 });

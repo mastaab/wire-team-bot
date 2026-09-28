@@ -157,7 +157,12 @@ interface AssetPreview {
 }
 
 export class WireEventRouter extends WireEventsHandler {
-  private readonly channelStateCache = new Map<string, "active" | "paused" | "secure">();
+  /**
+   * The channel state as this process applies it. `blocked` is local only: processing stopped
+   * because the durable state could not be read or written (fail-closed), or a state change is
+   * in progress. Unlike `paused`, it handles nothing but mentioned `resume` and `secure mode`.
+   */
+  private readonly channelStateCache = new Map<string, "active" | "paused" | "secure" | "blocked">();
   /** True when the channel is a 1:1 DM (one non-bot member). Enables personal-mode retrieval scope. */
   private readonly personalModeCache = new Map<string, boolean>();
   private readonly lastActivityByConv = new Map<string, number>();
@@ -280,7 +285,7 @@ export class WireEventRouter extends WireEventsHandler {
       }
     } catch (err) {
       log.warn("Failed to hydrate channel state", { err: (err instanceof Error ? err.name : "UnknownError") });
-      this.channelStateCache.set(channelId, "paused");
+      this.channelStateCache.set(channelId, "blocked");
     }
   }
 
@@ -324,11 +329,10 @@ export class WireEventRouter extends WireEventsHandler {
       name: m.name,
     }));
 
-    // ── PAUSED ────────────────────────────────────────────────────────────────
-    if (channelState === "paused") {
-      const botMentioned = wireMessage.mentions?.some((m) => sameQualifiedId(m.userId, this.deps.botUserId)) ?? false;
-      if (!botMentioned) {
-        log.debug("Channel paused — message discarded");
+    // ── BLOCKED (local fail-closed) ───────────────────────────────────────────
+    if (channelState === "blocked") {
+      if (!botMentionedEarly) {
+        log.debug("Channel blocked — message discarded");
         return;
       }
       if (this.matchesResumeCommand(commandLowered)) {
@@ -345,6 +349,34 @@ export class WireEventRouter extends WireEventsHandler {
         { replyToMessageId: wireMessage.id },
       );
       return;
+    }
+
+    // ── PAUSED ────────────────────────────────────────────────────────────────
+    // Pause means mentions only: a message that mentions the bot is handled as usual, but
+    // nothing is buffered, captured or enqueued. Without a mention, only the requester's answer
+    // to an offer or part-order question the bot asked during the pause gets through (entering
+    // pause cleared every earlier offer). A name prefix without a real mention does not count.
+    const mentionsOnly = channelState === "paused";
+    if (mentionsOnly) {
+      if (botMentionedEarly) {
+        if (this.matchesResumeCommand(commandLowered)) {
+          await this.setChannelState(convId, channelId, "active", sender.id, wireMessage.id, log);
+          return;
+        }
+        if (this.matchesSecureCommand(commandLowered)) {
+          await this.setChannelState(convId, channelId, "secure", sender.id, wireMessage.id, log);
+          return;
+        }
+        if (this.matchesPauseCommand(commandLowered)) {
+          await this.deps.wireOutbound.sendPlainText(convId,
+            "I am already paused: I only respond when mentioned. Mention me with _\"resume\"_ to bring me back.",
+            { replyToMessageId: wireMessage.id });
+          return;
+        }
+      } else if (!(this.deps.pendingOffers?.has(convId, sender) || this.deps.pendingOffers?.recentlyDropped(convId, sender))) {
+        log.debug("Channel paused — message discarded");
+        return;
+      }
     }
 
     // ── SECURE ────────────────────────────────────────────────────────────────
@@ -379,6 +411,8 @@ export class WireEventRouter extends WireEventsHandler {
       // A yes raises, replies to or resolves a ticket in Jira, which the requester waits for.
       const handled = classifyConfirmation(commandText) === "yes" ? await this.typing(convId, confirm) : await confirm();
       if (handled) {
+        // Nothing is buffered in a paused channel.
+        if (mentionsOnly) return;
         // Record the answer so the answer model sees the offer as closed, not pending, and a bot
         // entry after it, so the offer's "(yes or no)?" no longer counts as the bot's latest
         // question: otherwise the requester's next message would be taken as a follow-up.
@@ -406,6 +440,7 @@ export class WireEventRouter extends WireEventsHandler {
           text: commandText, conversationId: convId, requesterId: sender, pending: draft, replyToMessageId: wireMessage.id,
         }));
         if (completed) {
+          if (mentionsOnly) return;
           const now = new Date();
           this.deps.messageBuffer.push(convId, {
             messageId: wireMessage.id, senderId: sender, senderName: senderDisplayName ?? "", text, timestamp: now,
@@ -417,6 +452,26 @@ export class WireEventRouter extends WireEventsHandler {
           return;
         }
       }
+    }
+
+    // A message that displaced the requester's offer is about that offer, even when the offer
+    // came from passive help and is not in the conversation buffer, so a correction ("the
+    // description should mention X", "also add the comment 'thanks'") reaches the answer path
+    // to be revised.
+    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply" || droppedOffer?.kind === "resolve";
+
+    // Paused and not mentioned: the message reached this point only because the requester had an
+    // offer. A correction to it may still revise the offer; nothing else is handled or captured.
+    if (mentionsOnly && !botMentionedEarly) {
+      if (amendsOffer) {
+        await this.answerInChannel({
+          wireMessage, text, commandText, convId, sender, channelId, senderDisplayName, members,
+          droppedOffer, amendOnly: true, isFollowUp: false, mentionsOnly, log,
+        });
+      } else {
+        log.debug("Channel paused — message discarded");
+      }
+      return;
     }
 
     if (hasMultipleCommands(text, wireMessage.mentions ?? [], this.deps.botUserId, this.deps.getIssueStatus?.projectKey)) {
@@ -492,20 +547,22 @@ export class WireEventRouter extends WireEventsHandler {
       }
     }
 
-    this.deps.messageBuffer.push(convId, {
-      messageId: wireMessage.id,
-      senderId: sender,
-      senderName: senderDisplayName ?? "",
-      text,
-      timestamp: new Date(),
-    });
-    this.deps.slidingWindow.push(channelId, {
-      messageId: wireMessage.id,
-      authorId: sender.id,
-      authorName: senderDisplayName,
-      text,
-      timestamp: new Date(),
-    });
+    if (!mentionsOnly) {
+      this.deps.messageBuffer.push(convId, {
+        messageId: wireMessage.id,
+        senderId: sender,
+        senderName: senderDisplayName ?? "",
+        text,
+        timestamp: new Date(),
+      });
+      this.deps.slidingWindow.push(channelId, {
+        messageId: wireMessage.id,
+        authorId: sender.id,
+        authorName: senderDisplayName,
+        text,
+        timestamp: new Date(),
+      });
+    }
 
     // ── Fast-path: ID-based mutations ─────────────────────────────────────────
     // Match prefixes without case sensitivity; persistence uses canonical uppercase IDs.
@@ -815,7 +872,7 @@ export class WireEventRouter extends WireEventsHandler {
     // with a question mark, treat the next human message as a follow-up even
     // without an explicit @mention.
     const isFollowUp = (() => {
-      if (botMentionedEarly) return false;
+      if (botMentionedEarly || mentionsOnly) return false;
       const recent = this.deps.messageBuffer.getLastN(convId, 3);
       // Find the last message Wire Team Bot sent, ignoring the current one (not yet buffered)
       const lastBot = [...recent].reverse().find(m => sameQualifiedId(m.senderId, this.deps.botUserId));
@@ -826,50 +883,11 @@ export class WireEventRouter extends WireEventsHandler {
       return lastSentence.trimEnd().endsWith("?");
     })();
 
-    // A message that displaced the requester's offer is about that offer, even when the offer
-    // came from passive help and is not in the conversation buffer, so a correction ("the
-    // description should mention X", "also add the comment 'thanks'") reaches the answer path
-    // to be revised.
-    const amendsOffer = droppedOffer?.kind === "support" || droppedOffer?.kind === "reply" || droppedOffer?.kind === "resolve";
-
     // ── @Wire Team Bot mention or follow-up — answer question ────────────────────────
-    const amendOnly = amendsOffer && !botMentionedEarly && !isFollowUp;
     if (botMentionedEarly || isFollowUp || amendsOffer) {
-      log.info("Message: dispatched to answerQuestion", { isFollowUp, amendsOffer });
-      const config = await this.deps.conversationConfig.get(convId);
-      const recentContext = this.deps.messageBuffer.getLastN(convId, CONTEXT_WINDOW).slice(0, -1).map((m) =>
-        m.senderName ? `${m.senderName}: ${m.text}` : m.text,
-      );
-      const orgId = this.deps.orgId ?? convId.domain;
-      const isPersonal = this.personalModeCache.get(channelId) ?? false;
-      const answer = await this.typing(convId, () => this.deps.answerQuestion.execute({
-        question: commandText,
-        requester: { id: sender.id, domain: sender.domain, name: senderDisplayName },
-        conversationContext: recentContext,
-        conversationId: convId,
-        replyToMessageId: wireMessage.id,
-        members,
-        conversationPurpose: config?.purpose,
-        channelId,
-        orgId,
-        userId: isPersonal ? sender.id : undefined,
-        ...(droppedOffer ? { pendingOffer: droppedOffer } : {}),
-        ...(amendOnly ? { amendOnly: true } : {}),
-        timezone: config?.timezone ?? this.deps.defaultTimezone,
-      }));
-      // Not a revision: the message was ordinary conversation, so it continues to capture.
-      if (amendOnly && !answer) {
-        this.enqueueForPipeline(wireMessage, text, convId, sender, channelId, senderDisplayName, log);
-        return;
-      }
-      // Push Wire Team Bot' response into both buffers so follow-up messages have context.
-      const botMsgId = `bot-${Date.now()}`;
-      this.deps.messageBuffer.push(convId, {
-        messageId: botMsgId,
-        senderId: this.deps.botUserId,
-        senderName: "Wire Team Bot",
-        text: answer,
-        timestamp: new Date(),
+      await this.answerInChannel({
+        wireMessage, text, commandText, convId, sender, channelId, senderDisplayName, members,
+        droppedOffer, amendOnly: amendsOffer && !botMentionedEarly && !isFollowUp, isFollowUp, mentionsOnly, log,
       });
       return;
     }
@@ -878,6 +896,67 @@ export class WireEventRouter extends WireEventsHandler {
     // synchronously by the command handlers below.  Re-processing them through
     // the extraction pipeline creates duplicate entities in the database.
     this.enqueueForPipeline(wireMessage, text, convId, sender, channelId, senderDisplayName, log);
+  }
+
+  /**
+   * The answer path: a mentioned question, a follow-up to the bot's question, or a message that
+   * displaced the requester's offer (`amendOnly` when it did not address the bot). In a paused
+   * channel (`mentionsOnly`) the answer gets no conversation context and nothing is buffered or
+   * captured.
+   */
+  private async answerInChannel(input: {
+    wireMessage: TextMessage;
+    text: string;
+    commandText: string;
+    convId: QualifiedId;
+    sender: QualifiedId;
+    channelId: string;
+    senderDisplayName: string | undefined;
+    members: Array<{ id: string; domain: string; name?: string }>;
+    droppedOffer: OfferCommand | undefined;
+    amendOnly: boolean;
+    isFollowUp: boolean;
+    mentionsOnly: boolean;
+    log: Logger;
+  }): Promise<void> {
+    const { wireMessage, text, commandText, convId, sender, channelId, senderDisplayName, droppedOffer, amendOnly, mentionsOnly, log } = input;
+    log.info("Message: dispatched to answerQuestion", { isFollowUp: input.isFollowUp, amendOnly, mentionsOnly });
+    const config = await this.deps.conversationConfig.get(convId);
+    const recentContext = mentionsOnly ? [] : this.deps.messageBuffer.getLastN(convId, CONTEXT_WINDOW).slice(0, -1).map((m) =>
+      m.senderName ? `${m.senderName}: ${m.text}` : m.text,
+    );
+    const orgId = this.deps.orgId ?? convId.domain;
+    const isPersonal = this.personalModeCache.get(channelId) ?? false;
+    const answer = await this.typing(convId, () => this.deps.answerQuestion.execute({
+      question: commandText,
+      requester: { id: sender.id, domain: sender.domain, name: senderDisplayName },
+      conversationContext: recentContext,
+      conversationId: convId,
+      replyToMessageId: wireMessage.id,
+      members: input.members,
+      conversationPurpose: config?.purpose,
+      channelId,
+      orgId,
+      userId: isPersonal ? sender.id : undefined,
+      ...(droppedOffer ? { pendingOffer: droppedOffer } : {}),
+      ...(amendOnly ? { amendOnly: true } : {}),
+      timezone: config?.timezone ?? this.deps.defaultTimezone,
+    }));
+    if (mentionsOnly) return;
+    // Not a revision: the message was ordinary conversation, so it continues to capture.
+    if (amendOnly && !answer) {
+      this.enqueueForPipeline(wireMessage, text, convId, sender, channelId, senderDisplayName, log);
+      return;
+    }
+    // Push Wire Team Bot' response into both buffers so follow-up messages have context.
+    const botMsgId = `bot-${Date.now()}`;
+    this.deps.messageBuffer.push(convId, {
+      messageId: botMsgId,
+      senderId: this.deps.botUserId,
+      senderName: "Wire Team Bot",
+      text: answer,
+      timestamp: new Date(),
+    });
   }
 
   private enqueueForPipeline(
@@ -927,7 +1006,7 @@ export class WireEventRouter extends WireEventsHandler {
     const now = new Date();
     const prevState = this.channelStateCache.get(channelId) ?? "active";
     // Stop locally first. Resume only after the durable state write succeeds.
-    this.channelStateCache.set(channelId, "paused");
+    this.channelStateCache.set(channelId, "blocked");
     this.deps.messageBuffer.clear(convId);
     this.deps.pendingOffers?.clearConversation(convId);
     this.deps.slidingWindow.flush(channelId);
@@ -959,7 +1038,7 @@ export class WireEventRouter extends WireEventsHandler {
     } else if (newState === "paused") {
       this.deps.scheduler.cancel(`secret-inactivity-${channelId}`);
       await this.deps.wireOutbound.sendPlainText(convId,
-        "Understood. I shall step out. Do let me know when you require my attention again.",
+        "Understood. I shall step out and stop listening to the conversation, but I shall still respond when mentioned. Mention me with _\"resume\"_ when you require my full attention again.",
         { replyToMessageId });
     } else {
       this.deps.scheduler.cancel(`secret-inactivity-${channelId}`);

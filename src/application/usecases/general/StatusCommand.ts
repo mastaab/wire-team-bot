@@ -55,7 +55,7 @@ export class StatusCommand {
     const state = cfg?.state ?? "active";
     const stateLabel: Record<string, string> = {
       active: "active — I am at your service",
-      paused: "paused — I am standing by",
+      paused: "paused — I only respond when mentioned",
       secure: "secure — I am not listening",
     };
 

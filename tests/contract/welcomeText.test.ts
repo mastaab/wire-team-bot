@@ -15,7 +15,7 @@ describe("welcomeText", () => {
     expect(text).toContain("`status of DS-N`");
     expect(text).toContain("Replies and status changes from the service desk appear here.");
     expect(text).toContain("Use decision: or action: to record work.");
-    expect(text).toContain("pause, secure mode, or resume");
+    expect(text).toContain("pause (I then respond only when mentioned), secure mode (I ignore everything), or resume");
   });
 
   it("asks for a mention and gives the direct command without passive help, and leaves out updates without the watch", () => {

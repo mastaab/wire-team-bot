@@ -54,9 +54,10 @@ and deployment, not this repository.
 
 The application's extract-and-forget design keeps raw surrounding conversation in bounded
 in-memory buffers and persists structured records, source references, summaries and audits.
-Those records can contain sensitive information. PAUSED/SECURE controls stop new message
-processing and clear transient buffers; they do not erase existing records or retract requests
-already sent to a provider. The SDK also keeps local crypto/session state. See
+Those records can contain sensitive information. SECURE stops new message processing; PAUSED
+stops it except for messages that mention the bot (and the requester's answer to an offer made
+during the pause), which are handled without buffering or capture. Both clear transient buffers;
+they do not erase existing records or retract requests already sent to a provider. The SDK also keeps local crypto/session state. See
 [PLAN.md](PLAN.md#3-current-delivery-state) for safeguards, observed evidence and remaining
 privacy-validation limits; this is not a blanket guarantee about every storage layer or provider.
 
@@ -277,7 +278,10 @@ Each channel has a timezone that decides how deadlines and reminder times ("by F
 Use an actual Wire mention for addressed commands, especially when resuming from PAUSED or
 SECURE. Q&A and summaries require a model endpoint. Passive extraction runs in ACTIVE channels.
 In SECURE, incoming messages—including `status`—are ignored except a bot-mentioned `resume`.
-In PAUSED, other bot-mentioned commands receive a standing-by reply.
+In PAUSED, the bot keeps no conversation context, captures nothing and ignores unmentioned
+commands, but a message that actually mentions it is handled as in ACTIVE (questions are
+answered from stored records only). The requester's unmentioned yes, no, correction or missing
+details still answer an offer the bot made during the pause. Service-desk updates wait for `resume`.
 
 Direct command confirmations and answers use Wire’s native reply to identify the source message.
 Scheduled notifications remain standalone; self-deleting sources cannot be quoted by Wire.

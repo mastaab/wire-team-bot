@@ -9,7 +9,7 @@ export interface SupportWelcome {
 }
 
 const TEAM_PART =
-  "Use decision: or action: to record work. I react 📝 when I save an action from the conversation and ✅ when I save a completion; use my actions to check details. Mention me with pause, secure mode, or resume to control listening. To save the channel purpose, mention me with: context: <brief purpose>.";
+  "Use decision: or action: to record work. I react 📝 when I save an action from the conversation and ✅ when I save a completion; use my actions to check details. Mention me with pause (I then respond only when mentioned), secure mode (I ignore everything), or resume to control listening. To save the channel purpose, mention me with: context: <brief purpose>.";
 
 /**
  * The message the bot sends when it is added to a channel without a saved purpose. With the
