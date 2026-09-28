@@ -2116,7 +2116,7 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Evidence required.** Unit tests with mocked ports; a live staging check: the desk assigns a mapped agent in Jira, the group appears for requester and agent with the bot's message and both as admins, the bot is gone from it, the original channel gets the notice as a reply, and a later desk reply still arrives in the original channel.
 
-**Feasibility probe (operator-approved, 2026-09-28, bot stopped for the run).** Both staging test handles (driver and agent) resolved through `searchUsers`; `createGroupConversation("DS-25 test", …)` succeeded; a message was sent; the group has three members: the app as admin, driver and agent as members. The test group still exists and the bot is a member of it. Role changes and leaving were not probed.
+**Feasibility probe (operator-approved, 2026-09-28, bot stopped for the run).** Both staging test handles (driver and agent) resolved through `searchUsers`; `createGroupConversation("DS-25 test", …)` succeeded; a message was sent; the group has three members: the app as admin, driver and agent as members. Second probe (operator-approved, same day, bot stopped): in "DS-25 test" both members were made admins (`updateConversationMemberRole`, roles then app, driver and agent all `wire_admin`) and the app left (`leaveConversation`; afterwards the app no longer lists the group). After the restart the bot knew two conversations and the SDK logged three redacted warnings on reconnect, most likely the queued role and leave events of the group it had left. Every step the feature needs has now been shown to work with the app's credentials on staging.
 
 ### Handover for the next session (2026-09-26, evening)
 
