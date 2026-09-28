@@ -1621,7 +1621,7 @@ This work lives on the `demo/jira` branch. It is a customer demo, not part of th
 
 A truck manufacturer offers the bot as premium support with its trucks. Drivers talk in an encrypted Wire channel; the bot turns their questions, fault reports and part orders into requests for the manufacturer's service desk, and nothing leaves Wire without a driver's yes. The demo runs with `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types mapped and the service scope set.
 
-The presenter's script, with the exact lines to type, the Jira steps, talking points, limits and fallbacks, is [docs/DEMO-PLAYBOOK.md](docs/DEMO-PLAYBOOK.md), with a German version for presenting in German in [docs/DEMO-PLAYBOOK.de.md](docs/DEMO-PLAYBOOK.de.md) (bot interactions stay in English); keep both in step. A short German introductory deck (three slides: title, from bot to assistant, security and sovereignty; highlights only, no process walk-through) is [docs/decks/wire-apps-premium-support.de.html](docs/decks/wire-apps-premium-support.de.html) (a single HTML file built on the Wire deck template from `wire-helm-deploy/decks`, arrow keys to navigate). The demo shows what an app built with the Wire Apps SDK makes possible for this use case; it is not a product offer.
+The presenter's script (English `docs/DEMO-PLAYBOOK.md` and German `docs/DEMO-PLAYBOOK.de.md`, bot interactions in English) and a three-slide German introductory deck (`docs/decks/wire-apps-premium-support.de.html`) are kept locally in the operator's checkout and are not tracked on `demo/typing` (operator, 2026-09-28; `docs/` is in `.git/info/exclude`). `demo/jira` still contains an older English playbook. The demo shows what an app built with the Wire Apps SDK makes possible for this use case; it is not a product offer.
 
 The message for security-minded customers: the conversation stays in Wire; only what a driver confirms is sent to the service desk. For defence customers, see the security note under "Truck premium support".
 
@@ -2154,24 +2154,55 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Bot side built (2026-09-28).** `WireOutboundPort.setTyping(conversationId, typing)` (Wire adapter over `sendTypingIndicator`, a no-op without SDK support; the CLI ignores it) and `withTyping` in `src/application/services/typing.ts`: started at once without delaying the work, refreshed every 8 seconds (the operator saw the indicator hold steady with that interval), cleared in a `finally` after "started" has gone out, failures (including synchronous throws) logged once by error name. The router wraps the answer path (mentioned questions and follow-ups to the bot's question), `catch me up` and the support commands (`support:`, `resolve`, `reply to`, `support requests`, `status of`). Extended the same day at the operator's request, since several demo steps work without a mention: a yes to an offer (while the ticket is raised, replied to or resolved), an answer that completes a part order, and passive help for a message the classifier marks as a service request or status question (while the model drafts the offer; the indicator can occasionally appear without a reply when the model then offers nothing). Other confirmations, updates, actions and decisions checked against open requests, capture and the Jira watch show nothing.
 
-### Handover for the next session (2026-09-26, evening)
+### Pause means "mentions only" (planned 2026-09-28)
 
-**Start here.** Read AGENTS.md, then this section 6. The next task is "Jira updates in Wire by polling", including quoting the last ticket message: the plan is confirmed by the operator and nothing of it is built yet. Follow the usual pattern: write and commit the contract, parallel subagents in worktrees, an independent review, CLI checks (scripts grepped for write lines, offers answered no), then a live staging check where the operator acts as the desk agent in Jira. Everything listed below the plan is built, reviewed and checked live on staging, most recently on the local Ollama model.
+**Why (operator).** Pause and secure mode should have distinct roles. Pause stops passive listening and unmentioned commands but still reacts when the bot is mentioned; secure mode stays as it is and hears nothing. Today a mentioned message in a paused channel only gets "I'm currently standing by…", and only `resume` and `secure mode` get through.
+
+**Behaviour in a paused channel.**
+
+| | Today | New |
+|---|---|---|
+| Ordinary chat: capture, 📝/✅ reactions, passive offers | off | off |
+| Unmentioned commands (`decision:`, `action:`, `remind me …`, `ACT-… done`) | off | off |
+| Mentioned questions | "standing by" | answered normally |
+| Mentioned support commands (`support:`, `status of`, `reply to`, `resolve`, `support requests`) | "standing by" | carried out normally |
+| Mentioned channel commands (`resume`, `secure mode`, `status`, `timezone`, `catch me up`, `context:`) | only `resume` and `secure mode` | all |
+
+**Decisions (operator, 2026-09-28).**
+1. Answers to the bot's own questions count without a mention: when a mentioned message in pause leads to an offer or a part-order question, the requester's unmentioned "yes", "no", correction or missing details are handled as today (the conversation started with a mention).
+2. No conversation context in pause: nothing is buffered while paused, so a mentioned question is answered from stored records (decisions, actions, requests) and the question itself, not from recent chat.
+3. Jira updates stay held back while paused and arrive after `resume`, as today (they are unsolicited).
+
+**Design pointers.**
+- Router (`src/infrastructure/wire/WireEventRouter.ts`, the `PAUSED` branch of `handleTextMessage`): for a mentioned message, continue into the normal handling with a mentions-only flag instead of replying "standing by"; with the flag, never buffer messages, never enqueue for the pipeline (no capture, no passive help, no reactions), never run unmentioned commands and never treat an unmentioned message as a follow-up, except answers to a pending offer or part-order draft of the same requester (decision 1). Keep the existing `resume`/`secure mode` handling. Files posted in a paused channel stay ignored.
+- Entering pause still clears both buffers, pending offers and queued jobs, as today; offers made during pause live normally.
+- The Jira watch keeps treating paused channels as not postable (decision 3); `OpenAgentConversation` likewise.
+- Texts: the answer prompt's description of `pause` (`src/infrastructure/llm/OpenAIGeneralAnswerAdapter.ts`), the bot's pause confirmation ("Understood. I shall step out…") and the welcome's privacy sentence must say that the bot still answers when mentioned. The local playbooks (`docs/`, untracked) describe pause in step 9; update them in place without committing them.
+- Tests: router contract tests for each row of the table and each decision, including that nothing is buffered or enqueued in pause and that a mentioned question in pause gets no conversation context.
+
+**Evidence required.** Unit and contract tests; a CLI check on the local model (paused channel: a mentioned question is answered, an unmentioned fault gets no offer, a mentioned `support:` is not run in the check script unless the operator approves the write); a live staging check with the operator.
+
+**Branch.** A new branch from `demo/typing` (for example `demo/pause-mentions`), so the running demo keeps typing and the local SDK; keep the pause change in its own commits so it can be moved to `demo/jira` or upstream later.
+
+### Handover for the next session (2026-09-28, evening)
+
+**Start here.** Read AGENTS.md, then this section 6. The next task is "Pause means \"mentions only\"" above: the behaviour and decisions are confirmed by the operator and nothing of it is built. Build it on a new branch from `demo/typing`. The usual pattern applies: plan or contract commit, implementation with tests (subagents in worktrees only if the change grows), an independent review, CLI checks (scripts grepped for write lines, offers answered no, lines paced like a person), then a live staging check with the operator.
 
 **State.**
-- Branch `demo/jira`, pushed to the fork and tracking `fork/demo/jira`. Work on the typing indicator is on `demo/typing`, which uses the local SDK checkout (see "Typing indicator while the model works"). `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
-- 1365 tests pass; `npx tsc --noEmit` and `npm run lint` are clean.
-- The local database `wire_team_bot` has the `support_requests` migration applied (2026-09-26). It also has the `kind` column (2026-09-26) and the watch markers (2026-09-27). On 2026-09-27 the operator closed all support requests in Jira; the accidental CLI requests DS-6 and DS-12 were soft-deleted in the database with audit entries (operator-approved), so no request is open. On 2026-09-27 the operator soft-deleted ACT-0035 (a duplicate of a part order), ACT-0010 (wrongly marked done) and the CLI test action ACT-0034, each with an audit entry. The old `jira:` links on ACT-0005, ACT-0008, ACT-0010 and ACT-0012 are inert.
-- The `.env` points all chat slots at a local Ollama model (`qwen3.5-4b`, registered from a Qwen3.5-4B GGUF, `WIRE_TEAM_BOT_LLM_REASONING_EFFORT=none`); switch the LLM lines back to the Claude API for the stronger model.
-- The staging bot runs from this checkout on macOS (`npm run build && npm start`, loading `.env` with Wire staging, the model settings above, all Jira keys and `WIRE_TEAM_BOT_JIRA_SHARE_WITH_MODEL=on`). It was started from a Claude Code session and stops when that session ends; start it again with `npm run build && npm start` (Ollama must be running for the local model). `.env` carries the truck demo settings (`WIRE_TEAM_BOT_JIRA_PASSIVE=on`, `WIRE_TEAM_BOT_JIRA_REQUEST_TYPES=question=11809,part=11810,fault=11808`, the truck `WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE`), so `npm start` is enough. For e2e runs and the simulation, put `WIRE_TEAM_BOT_JIRA_PASSIVE=off` in front of the command, since passive offers would otherwise count as unsolicited replies. Restart it after a rebuild; it stops when the Claude Code session that started it ends.
-- Postgres 17 with pgvector via `brew services`. The staging channel's timezone is `Europe/Berlin` (now settable with `@Wire Team Bot timezone <name>`); the CLI channel is `UTC`.
-- Jira: DS-1 to DS-5 are test tickets from the action-linked build; DS-6 to DS-20 are synthetic support requests from CLI and staging checks. Request types: Ask a question `11809`, Submit a request or incident `11808`, Replacement part `11810` (created by the operator 2026-09-26).
+- Branches: `demo/jira` is pushed to the fork `mastaab/wire-team-bot` (`fork` remote) and holds the Jira demo up to the agent conversation. `demo/typing` (not pushed) adds the typing indicator and part-order hardening and depends on the sibling SDK checkout through `"@wireapp/wire-apps-js-sdk": "file:../wire-apps-js-sdk"`; it must not be merged into `demo/jira` or upstream with that dependency. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`; upstream merges are the owner's decision.
+- `docs/` (playbooks and deck) is local-only on `demo/typing` (in `.git/info/exclude`); do not add it to commits.
+- 1726 tests pass on `demo/typing`; `npx tsc --noEmit` and `npm run lint` are clean.
+- SDK: the sibling checkout `../wire-apps-js-sdk` is on `feat/typing-indicators` (`5c24bb1`, pull request wireapp/wire-apps-js-sdk#354 open). Open finding there: `{retry: false}` also disables the access-token refresh on 401 (see "Typing indicator while the model works"). The checkout has `@wireapp/core-crypto` 10.5.2 installed with `--no-save`; repeat `npm install --no-save @wireapp/core-crypto@10.5.2` after any `npm ci`/`npm install` there, or the bot cannot open its key store. Rebuild it with `npm run build` there after SDK changes.
+- The local database `wire_team_bot` has all migrations applied up to `20260928140000_add_support_request_agent_conversation`.
+- `.env`: Wire staging, Jira (DS), the truck demo settings, `WIRE_TEAM_BOT_JIRA_WATCH_SECONDS=30`, `WIRE_TEAM_BOT_JIRA_AGENTS` (one mapped agent, the assignee account of DS-28, to the Wire handle `harveywolff`), and all chat slots on the local Ollama model `qwen3.5-4b` (`WIRE_TEAM_BOT_LLM_REASONING_EFFORT=none`); switch the LLM lines to the Claude API for the stronger model.
+- The staging bot runs from this checkout on `demo/typing` (`npm run build && npm start`; Ollama must be running). It stops when the Claude Code session that started it ends. Do not restart it while the operator is testing: a message sent during a restart may never be processed.
+- Staging channels: "Support Team C3" is used for tests (no Wire Cells); DS-26 to DS-30 are open requests from the tests. Jira SLAs in DS run on a 24/7 calendar.
 
 **Next steps (each Jira write needs the operator's approval).**
-1. "Jira updates in Wire by polling" with quoting is built, reviewed and checked live (2026-09-27). Open: SLA wording for working-hours calendars (Jira's "0m" reads "under a minute" even when a cycle spanned hours outside working time); the DS sandbox now uses a 24/7 calendar.
-2. All DS support requests are closed (2026-09-27); DS-1 to DS-5 remain as closed test tickets from the action-linked build.
-3. "Photos and documents to the service desk" (DS-25) and "Direct conversation with the desk agent" (DS-30) are built, reviewed and checked live (2026-09-28), in a channel without Wire Cells; a phone client is not yet covered for photos. Open requests: DS-26 to DS-30. Open, not built: German (driver-language) bot texts; for defence customers, a customer-hosted tracker (the local model works: see "Local model trial").
-4. `demo/jira` is pushed to the fork `mastaab/wire-team-bot` (2026-09-28, `fb75177`); a pull request to upstream and its merge are the owner's decision.
+1. Build "Pause means \"mentions only\"" (above) on a new branch from `demo/typing`, then check it live with the operator.
+2. Open, not built: German (driver-language) bot texts; for defence customers, a customer-hosted tracker; SLA wording for working-hours calendars.
+3. Once the SDK pull request is merged and released, switch `demo/typing` to the released version and bring the typing indicator to `demo/jira`.
+4. Resolve DS-26 to DS-30 when no longer needed.
 
 **How to validate.**
 - Unit gate: `npx tsc --noEmit; echo $?`, `npm run lint >/dev/null 2>&1; echo $?`, `npm test > log 2>&1; echo $?`. Check exit codes; never pipe the checked command into `tail`.
@@ -2182,6 +2213,8 @@ Committed by the main session before the parallel build. Builders code against t
 - Subagent worktrees start from `main`: brief every subagent to reset or fast-forward to the contract commit, symlink `node_modules`, and remove the symlink before finishing.
 - A message sent while the bot restarts may never be processed: on 2026-09-27 a question sent in the seconds between stopping and reconnecting got no answer, and the SDK logged one (redacted) error on reconnect. Do not restart the bot during a demo.
 - The answer model explains commands only as its prompt describes them; a command named without a description gets guessed (secure mode was once described as switching off encryption). Describe every command the prompt names.
+- Piping several lines into the CLI at once delivers them before passive help has answered the first; pace the lines (for example a small feeder with pauses of about 30 seconds) when a line answers the bot.
+- A second SDK instance (a probe script) must never run next to the bot on the same `storage/`; stop the bot for the probe and restart it afterwards.
 - Jira localises status names from `Accept-Language`; match statuses by category only.
 - The agent-level token receives internal notes; only comments flagged `public: true` may reach Wire or the model.
 - SLA clocks stop a few seconds after the transition; poll the SLA endpoint only.
