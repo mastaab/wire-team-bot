@@ -127,6 +127,13 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain("never decide that the new problem is the same as an earlier request, and never refuse or ask for more details because of one.");
   });
 
+  it("offers instead of giving the command when asked to act, also again after a no", () => {
+    const prompt = integrationsPrompt({ jiraProjectKey: "DS" });
+    expect(prompt).toContain("When asked how to raise, follow, reply to or resolve a support request, give the exact supported command");
+    expect(prompt).toContain("When the requester asks you to raise a problem, send a reply or resolve a request, do not answer with the command instead: make the offer");
+    expect(prompt).toContain("When the requester asks again to raise a problem after a no, that is a new request: make a new offer.");
+  });
+
   it("describes the desk with the configured service scope, and keeps the generic wording without it", () => {
     const scope = "questions about the truck, faults, breakdowns, damage, service and maintenance, and replacement part orders";
     const prompt = integrationsPrompt({ jiraProjectKey: "DS", jiraServiceScope: `  ${scope}.\n` });
