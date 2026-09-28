@@ -2045,16 +2045,16 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Work split.** Main session: contract (port method, entity fields and migration, the outbound reference and quote option, setting, use-case signature), the runner and wiring, the Wire and CLI outbound adapters, docs. Subagents: (a) the Jira adapter method and `WatchSupportRequests` with tests; (b) storing the reference and `lastSeenReplyAt` in the existing use cases (`RaiseSupportRequest`, `ReplyToServiceDesk`, `GetIssueStatus`, `ResolveSupportRequest`, passive offers, the answer path) with tests. Then an independent review, the read-only JQL check and the live check.
 
-### Photos to the service desk (planned 2026-09-28)
+### Photos and documents to the service desk (planned 2026-09-28)
 
 **Why.** In the demo the desk asks the driver for a photo ("Please check the brake fluid level and send a photo"), and the natural answer is a photo in the Wire channel. Today the bot ignores images: `WireEventRouter` does not implement `onAssetMessageReceived`. The SDK already delivers images to apps (`onAssetMessageReceived` with name, MIME type, size and image metadata) and downloads and decrypts them (`WireApplicationManager.downloadAsset`), so this shows a further SDK capability: files in both directions between an encrypted Wire channel and a business system.
 
 **Behaviour.**
 - Only with passive help on (`WIRE_TEAM_BOT_JIRA_PASSIVE=on`): an image cannot carry a mention, so this is passive by nature.
-- A driver posts an image (JPEG, PNG, HEIC or WebP, at most 10 MB) in a channel with an open support request. The bot replies to the image: `Shall I add this photo to **DS-16** "Brake warning light on truck 12"?` followed by "(yes or no)?". On yes from the same person as their next message, it downloads the image from Wire, attaches it to the request as a public reply "Photo from Wire, sent by <name>. Sent from Wire.", and replies `Added the photo to **DS-16** in Jira.` A no, or anything else, sends nothing, as for every offer.
-- Which request: the channel's open request with the latest bot message about it (the one the desk last answered or the driver last followed), else the newest open one. The offer names the key and summary, so a wrong guess is visible and answered with no. Proposed; see the decisions below.
-- No image is offered: in a channel with no open request, for self-deleting images (Wire's timer must be respected; the image is never forwarded), for other file types or larger files, in paused or secure channels (the router's state checks apply as for text), and for images the bot itself sent.
-- The image is held only in memory between the download and the upload and is never stored or logged; the pending offer keeps only the SDK's download reference (asset ID, token, domain and key material, needed to fetch it) until it expires. Audit: the attach is audited as an update of the request with the MIME type and size, not the file name.
+- A driver posts a photo or a document in a channel with an open support request: images (JPEG, PNG, HEIC, WebP) or documents (PDF, plain text, CSV, Word `.docx`, Excel `.xlsx`), at most 10 MB, recognised by MIME type. The bot replies to the file: `Shall I add this photo to **DS-16** "Brake warning light on truck 12"?` ("this file" for a document, with its name) followed by "(yes or no)?". On yes from the same person as their next message, it downloads the file from Wire, attaches it to the request as a public reply "Photo from Wire, sent by <name>. Sent from Wire." ("File from Wire …" for a document), and replies `Added the photo to **DS-16** in Jira.` A no, or anything else, sends nothing, as for every offer.
+- Which request: the channel's open request with the latest bot message about it (the one the desk last answered or the driver last followed), else the newest open one. The offer names the key and summary, so a wrong guess is visible and answered with no.
+- No offer: in a channel with no open request (a photo does not raise a new request), for self-deleting messages (Wire's timer must be respected; the file is never forwarded), for other file types or larger files, in paused or secure channels (the router's state checks apply as for text), and for files the bot itself sent.
+- The file is held only in memory between the download and the upload and is never stored or logged; the file name goes to Jira as the attachment name only; the pending offer keeps only the SDK's download reference (asset ID, token, domain and key material, needed to fetch it) until it expires. Audit: the attach is audited as an update of the request with the MIME type and size, not the file name.
 - The watch does not announce the bot's own attachment reply (`fromThisBot`), as for replies sent from Wire.
 
 **Design.**
@@ -2063,9 +2063,9 @@ Committed by the main session before the parallel build. Builders code against t
 - Offer kind `attach` (`issueKey`, the asset reference, MIME type, size) in the pending offer store; `ConfirmOffer` hands a yes to a new use case `AttachPhotoToRequest` (scope check, download, upload, audit, reply, `setLastMessage`). A failed download or upload is reported plainly ("I'm afraid I couldn't add the photo to **DS-16**.") and, as for replies, an unconfirmed upload does not invite a retry.
 - Router: `onAssetMessageReceived` runs the same channel-state gate as text, ignores events without `remoteData` (the preview arrives before the upload, with the same message ID) and repeats of a message ID, then calls the use case that picks the request and makes the offer. The image is added to the conversation buffer as "(photo)" so the next text message has context.
 
-**Decisions to confirm with the operator.** (1) The target rule above. (2) No offer without an open request (not: raise a new request from a photo). (3) Images only, no other files.
+**Decisions (operator, 2026-09-28).** (1) The target is the open request with the latest bot message about it, else the newest open one. (2) No offer without an open request. (3) Images and documents, with the types listed above.
 
-**Evidence required.** Unit tests with mocked ports; contract tests for asset routing (preview without upload data, repeats, self-deleting, state gates); one approved write check that the gateway accepts the attachment upload on a DS test ticket; a live staging check: desk asks for a photo, the driver posts one, yes attaches it, the desk sees it in Jira, the watch does not echo it, and a self-deleting image gets no offer.
+**Evidence required.** Unit tests with mocked ports; contract tests for asset routing (preview without upload data, repeats, self-deleting, state gates); one approved write check that the gateway accepts the attachment upload on a DS test ticket; a live staging check: desk asks for a photo, the driver posts one, yes attaches it, the desk sees it in Jira, the watch does not echo it; one PDF attached the same way; a self-deleting image gets no offer.
 
 **Work split.** Main session: contract (ports, offer kind, use case signature, router hook), wiring, docs, playbook step. Subagents: (a) the Jira adapter method with tests; (b) the use cases (offer and attach) with tests. Then an independent review, the approved upload check and the live check.
 
@@ -2087,7 +2087,7 @@ Committed by the main session before the parallel build. Builders code against t
 **Next steps (each Jira write needs the operator's approval).**
 1. "Jira updates in Wire by polling" with quoting is built, reviewed and checked live (2026-09-27). Open: SLA wording for working-hours calendars (Jira's "0m" reads "under a minute" even when a cycle spanned hours outside working time); the DS sandbox now uses a 24/7 calendar.
 2. All DS support requests are closed (2026-09-27); DS-1 to DS-5 remain as closed test tickets from the action-linked build.
-3. Planned, not built: "Photos to the service desk" (above), awaiting the operator's decisions. Open, not built: German (driver-language) bot texts; for defence customers, a customer-hosted tracker (the local model works: see "Local model trial").
+3. Planned and confirmed, not built: "Photos and documents to the service desk" (above). Open, not built: German (driver-language) bot texts; for defence customers, a customer-hosted tracker (the local model works: see "Local model trial").
 4. Push to the fork on request; upstream merge is the owner's decision.
 
 **How to validate.**
