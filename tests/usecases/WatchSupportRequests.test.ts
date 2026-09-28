@@ -3,6 +3,9 @@ import { WatchSupportRequests } from "../../src/application/usecases/jira/WatchS
 import type { WatchGuards } from "../../src/application/usecases/jira/WatchSupportRequests";
 import { SupportRequestWrites } from "../../src/application/services/SupportRequestWrites";
 import { GetIssueStatus } from "../../src/application/usecases/jira/GetIssueStatus";
+import type {
+  OpenAgentConversation, OpenAgentConversationInput, OpenAgentConversationOutcome,
+} from "../../src/application/usecases/jira/OpenAgentConversation";
 import type { SupportRequest } from "../../src/domain/entities/SupportRequest";
 import type { ChannelConfig, ChannelState } from "../../src/domain/repositories/ChannelConfigRepository";
 import type { IssueChange, IssueReply, IssueStatusCategory } from "../../src/application/ports/IssueTrackerPort";
@@ -586,5 +589,171 @@ describe("WatchSupportRequests: conversations it cannot post to", () => {
     await watcher.check();
     expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("WatchSupportRequests: direct conversation with the desk agent", () => {
+  const AGENT = "jira-agent-1";
+  const OTHER = "jira-agent-2";
+  const NOTICE_REF = { messageId: "notice-1", sha256: "b".repeat(64) };
+  const withAssignee = (key: string, statusCategory: IssueStatusCategory, updated: Date, assigneeAccountId?: string): IssueChange =>
+    ({ ...change(key, statusCategory, updated), ...(assigneeAccountId ? { assigneeAccountId } : {}) });
+
+  /** Guards with a mapped agent and a mocked use case; the records follow the bookkeeping writes. */
+  function agentSetup(records: SupportRequest[], options: { channels?: ReturnType<typeof makeChannels>; now?: () => Date } = {}) {
+    const open = {
+      execute: vi.fn(async (input: OpenAgentConversationInput): Promise<OpenAgentConversationOutcome> => {
+        const found = records.find((r) => r.key === input.request.key)!;
+        found.agentConversationAt = T0;
+        found.lastMessage = NOTICE_REF;
+        return "opened";
+      }),
+    };
+    const guards: WatchGuards = {
+      agents: { handles: new Map([[AGENT, "petra.desk"]]), open: open as unknown as OpenAgentConversation },
+    };
+    const ctx = setup(records, { ...options, guards });
+    ctx.requests.setAssignee.mockImplementation(async (key: string, accountId: string | null) => {
+      const found = records.find((r) => r.key === key);
+      if (found) found.assigneeAccountId = accountId ?? undefined;
+    });
+    return { ...ctx, open };
+  }
+
+  it("stores the assignee on first sight without opening anything", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([makeRequest()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("stores null on first sight when unassigned", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([makeRequest()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", null);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("opens once for a newly assigned mapped agent, before the other update, which quotes the notice", async () => {
+    const t1 = new Date("2026-09-26T10:00:30Z");
+    const { watcher, tracker, requests, wire, open } = agentSetup([watched()], { now: clock(T0, T0, t1) });
+    tracker.listChangedSince.mockResolvedValueOnce([withAssignee("DS-6", "in_progress", T0, AGENT)]);
+    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+    expect(open.execute).toHaveBeenCalledTimes(1);
+    expect(open.execute).toHaveBeenCalledWith({ request: expect.objectContaining({ key: "DS-6" }), agentHandle: "petra.desk" });
+    expect(open.execute.mock.invocationCallOrder[0]).toBeLessThan(wire.sendPlainText.mock.invocationCallOrder[0]);
+    expect(wire.sendPlainText.mock.calls[0][2]).toEqual({ quote: NOTICE_REF });
+
+    // Jira reports the issue again with the same assignee: nothing more is opened.
+    tracker.listChangedSince.mockResolvedValueOnce([withAssignee("DS-6", "in_progress", t1, AGENT)]);
+    await watcher.check();
+    expect(open.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens when there is no status or reply update, posting nothing else", async () => {
+    const { watcher, tracker, open, wire } = agentSetup([watched()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
+    expect(open.execute).toHaveBeenCalledTimes(1);
+    expect(wire.sendPlainText).not.toHaveBeenCalled();
+  });
+
+  it("only stores an unmapped assignee", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, OTHER)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", OTHER);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen for a request that already has a conversation, after a change of assignee", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched({ assigneeAccountId: OTHER, agentConversationAt: SEEN })]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not open for an unchanged assignee", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched({ assigneeAccountId: AGENT })]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "in_progress", T0, AGENT)]);
+    await watcher.check();
+    expect(requests.setAssignee).not.toHaveBeenCalled();
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not open for a request that is done", async () => {
+    const { watcher, tracker, requests, open, sent } = agentSetup([watched()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "done", T0, AGENT)]);
+    await watcher.check();
+    expect(tracker.getIssue).toHaveBeenCalledWith("DS-6");
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+    expect(open.execute).not.toHaveBeenCalled();
+    expect(sent[0]).toContain("Resolved by the service desk.");
+  });
+
+  it("does not open when the live read shows the request done although the change listed it open", async () => {
+    const { watcher, tracker, open } = agentSetup([watched({ statusCategory: "in_progress" })]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    tracker.getIssue.mockResolvedValue(makeSnapshot({ statusCategory: "done" }));
+    await watcher.check();
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("defers in a paused channel and opens after resume", async () => {
+    const channels = makeChannels();
+    setState(channels, "paused");
+    const { watcher, tracker, requests, open } = agentSetup([watched()], { channels });
+    tracker.listChangedSince.mockResolvedValueOnce([withAssignee("DS-6", "todo", T0, AGENT)]).mockResolvedValue([]);
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
+    expect(requests.setAssignee).not.toHaveBeenCalled();
+    expect(open.execute).not.toHaveBeenCalled();
+
+    setState(channels, "active");
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 0 });
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+    expect(open.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("stores a cleared assignee as null without opening", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched({ assigneeAccountId: AGENT })]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", null);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("still posts the status and reply update when opening throws", async () => {
+    const { watcher, tracker, open, sent, logger, requests, wire } = agentSetup([watched()]);
+    open.execute.mockRejectedValue(new Error("boom"));
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "in_progress", T0, AGENT)]);
+    tracker.listCustomerReplies.mockResolvedValue([reply("Dana", "2026-09-26T09:30:00Z", "Looking into it.")]);
+    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Now in progress.");
+    expect(sent[0]).toContain("Looking into it.");
+    expect(wire.sendPlainText.mock.calls[0][2]).toEqual({ quote: LAST_MESSAGE });
+    expect(requests.updateStatusCategory).toHaveBeenCalledWith("DS-6", "in_progress", T0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("agent conversation"), { key: "DS-6", err: "Error" });
+  });
+
+  it("carries on when storing the assignee fails", async () => {
+    const { watcher, tracker, requests, open, sent, logger } = agentSetup([watched()]);
+    requests.setAssignee.mockRejectedValue(new Error("db down"));
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "in_progress", T0, AGENT)]);
+    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    expect(open.execute).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("setAssignee"), { key: "DS-6", err: "Error" });
+  });
+
+  it("stores the assignee without the agents setting", async () => {
+    const { watcher, tracker, requests } = setup([watched()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
   });
 });

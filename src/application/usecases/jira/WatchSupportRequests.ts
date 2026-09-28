@@ -185,10 +185,14 @@ export class WatchSupportRequests {
     const timeZone = await this.activeTimeZone(request);
     if (!timeZone) return "pending";
 
+    // First sight of this request: take a baseline of replies, status and assignee so nothing old is announced.
+    const baseline = !request.lastSeenReplyAt;
+    const assignee = change.assigneeAccountId ?? null;
+    const assigneeChanged = assignee !== (request.assigneeAccountId ?? null);
+    if (baseline || assigneeChanged) await this.storeAssignee(request.key, assignee);
+
     const replies = await this.tracker.listCustomerReplies(request.key, REPLIES_READ);
     const newest = newestReplyTime(replies);
-    // First sight of this request: take a baseline of replies and status so nothing old is announced.
-    const baseline = !request.lastSeenReplyAt;
     let newReplies: IssueReply[] = [];
     let seenUpTo: Date | undefined;
     if (baseline) {
@@ -210,6 +214,14 @@ export class WatchSupportRequests {
       if (!snapshot) return "silent";
       status = snapshot.statusCategory;
     }
+
+    // A newly assigned mapped agent gets the direct conversation, once, before the other update.
+    let lastMessage = request.lastMessage;
+    const agentHandle = assignee !== null ? this.guards.agents?.handles.get(assignee) : undefined;
+    if (!baseline && assigneeChanged && agentHandle && status !== "done" && !request.agentConversationAt) {
+      lastMessage = await this.openAgentConversation(request, agentHandle);
+    }
+
     const statusLines = baseline ? [] : statusChangeLines(request.statusCategory, status, snapshot);
     const announce = statusLines.length > 0 || newReplies.length > 0;
     if (announce) {
@@ -223,7 +235,7 @@ export class WatchSupportRequests {
       let ref;
       try {
         ref = await this.wireOutbound.sendPlainText(
-          request.conversationId, text, request.lastMessage ? { quote: request.lastMessage } : undefined,
+          request.conversationId, text, lastMessage ? { quote: lastMessage } : undefined,
         );
       } catch (err) {
         this.logger?.warn("WatchSupportRequests: send failed", { key: request.key, ...trackerErrorFields(err) });
@@ -250,6 +262,39 @@ export class WatchSupportRequests {
       }
     }
     return announce ? "announced" : "silent";
+  }
+
+  /** Stores the assignee last seen; bookkeeping, so a failure is logged and never stops the check. */
+  private async storeAssignee(key: string, accountId: string | null): Promise<void> {
+    try {
+      await this.requests.setAssignee(key, accountId);
+    } catch (err) {
+      this.logger?.warn("WatchSupportRequests: setAssignee failed", { key, ...trackerErrorFields(err) });
+    }
+  }
+
+  /**
+   * Opens the direct conversation with the agent and returns the message the request's next
+   * update should quote: the notice just posted when the conversation was opened, otherwise the
+   * stored one. A failure is logged and never stops the rest of the check.
+   */
+  private async openAgentConversation(
+    request: SupportRequest, agentHandle: string,
+  ): Promise<SupportRequest["lastMessage"]> {
+    let outcome;
+    try {
+      outcome = await this.guards.agents!.open.execute({ request, agentHandle });
+    } catch (err) {
+      this.logger?.warn("WatchSupportRequests: opening the agent conversation failed", { key: request.key, ...trackerErrorFields(err) });
+      return request.lastMessage;
+    }
+    if (outcome !== "opened") return request.lastMessage;
+    try {
+      return (await this.requests.findByKey(request.key))?.lastMessage ?? request.lastMessage;
+    } catch (err) {
+      this.logger?.warn("WatchSupportRequests: re-reading after the agent conversation failed", { key: request.key, ...trackerErrorFields(err) });
+      return request.lastMessage;
+    }
   }
 
   /**
