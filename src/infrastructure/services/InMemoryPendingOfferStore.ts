@@ -25,7 +25,8 @@ export class InMemoryPendingOfferStore implements PendingOfferStore {
   private readonly dropped = new Map<string, Map<string, DroppedOffer>>();
 
   put(offer: PendingOffer): void {
-    this.purgeExpired(new Date());
+    // Measured by the caller's clock, like every other method, not the system clock.
+    this.purgeExpired(offer.createdAt);
     this.forget(offer.conversationId, offer.requesterId);
     const conversationKey = key(offer.conversationId);
     const byRequester = this.offers.get(conversationKey) ?? new Map<string, PendingOffer>();

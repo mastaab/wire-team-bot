@@ -110,9 +110,11 @@ describe("InMemoryPendingOfferStore", () => {
 
   it("purges expired offers when a new one is stored", () => {
     const store = new InMemoryPendingOfferStore();
-    const stale = offer({ requesterId: bob, expiresAt: new Date(Date.now() - 1000) });
+    const stale = offer({ requesterId: bob, expiresAt: expires });
     store.put(stale);
-    store.put(offer({ expiresAt: new Date(Date.now() + 60_000) }));
+    // Stored after the stale one expired, by the caller's clock.
+    const later = new Date(expires.getTime() + 1000);
+    store.put(offer({ createdAt: later, expiresAt: new Date(later.getTime() + 60_000) }));
 
     // With a clock before its expiry the stale offer would be live, unless it was purged.
     expect(store.has(convA, bob, new Date(stale.expiresAt.getTime() - 60_000))).toBe(false);
