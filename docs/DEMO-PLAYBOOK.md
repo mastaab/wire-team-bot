@@ -47,13 +47,22 @@ Then type `@<bot> timezone Europe/Berlin` and `@<bot> context: premium support f
 
 Say: this is a Wire App. It was added to the channel like a colleague, it sees messages because it is a member of the encrypted group, and the SDK gives it events (messages, members joining and leaving, the conversation being deleted) and ways to answer (text, replies, mentions, reactions).
 
-### 2. A fault, noticed without being asked (4 min)
+### 2. A fault, noticed without being asked, and the desk answers (8 min)
 
 Type, without mentioning the bot: `the brake warning light on truck 12 came on this morning`
 
-Show: the bot replies "Shall I report this to the service desk?" with the full text it would send, ending "(yes or no)?". Answer `yes`. It replies "Raised **DS-N** with the service desk" with the link. Open the ticket in Jira: request type "Submit a request or incident", the driver named as requester, both SLA clocks running.
+Show: the bot replies "Shall I report this to the service desk?" with the full text it would send, ending "(yes or no)?". Answer `yes`. It replies "Raised **DS-N** with the service desk" with the link.
 
 Say: the model read an ordinary chat message and recognised a fault. The driver saw exactly what would be sent and decided. Only this text went to Jira; the rest of the conversation did not.
+
+Follow the link to Jira and, as the desk agent, pick the ticket up there: point out the request type "Submit a request or incident", the driver named as requester and both SLA clocks running. Then, on the ticket:
+1. Add a **public reply**, for example "Please check the brake fluid level and send a photo."
+2. Add an **internal note**, for example "Likely the sensor; check stock."
+3. Move the ticket to **In progress**.
+
+Back in Wire, show: within about 30 seconds the update arrives as a reply quoting the "Raised" message: "New reply from the service desk" with the reply, and "Now in progress." (changes made within one check arrive as one message). The internal note never appears.
+
+Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed.
 
 ### 3. A part order, completed in conversation (5 min)
 
@@ -71,18 +80,7 @@ Show: "Shall I ask the service desk?"; `yes` raises an "Ask a question" request.
 
 Say: three kinds of request, three queues for the desk, sorted by the AI and confirmed by the driver.
 
-### 5. The desk answers, and the channel hears about it (5 min)
-
-In Jira, as the desk agent, on the brake light ticket:
-1. Add a **public reply**, for example "Please check the brake fluid level and send a photo."
-2. Add an **internal note**.
-3. Move the ticket to **In progress**.
-
-Show: within about 30 seconds each public change appears in Wire as a reply quoting the bot's last message about that ticket: "New reply from the service desk" with the reply, then "Now in progress." The internal note never appears.
-
-Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed.
-
-### 6. Follow up in plain language (4 min)
+### 5. Follow up in plain language (4 min)
 
 As Driver B, type: `has anyone heard back about the brake light?`
 
@@ -94,7 +92,7 @@ Show: "Shall I add this to **DS-N** …?" with the text; `yes` sends it to the t
 
 Say: no ticket numbers or forms needed; the model matches the message to the right request, and still asks before sending.
 
-### 7. Close the loop (3 min)
+### 6. Close the loop (3 min)
 
 Type: `the brake light is fine now, please close it`
 
@@ -102,7 +100,7 @@ Show: the resolve offer with the closing remark as a comment; `yes` resolves the
 
 Alternatively resolve it in Jira as the desk agent and show "Resolved by the service desk." arriving in the channel.
 
-### 8. Off the record (3 min)
+### 7. Off the record (3 min)
 
 Type: `@<bot> secure mode`
 
@@ -112,7 +110,7 @@ Show: after resume, the held-back update about the part order arrives.
 
 Say: security-minded teams can switch the app off for part of a conversation, provably; Wire's encryption is unaffected and always on. `pause` is the lighter version: the bot steps out but still says it is standing by when mentioned.
 
-### 9. Optional: team memory (3 min)
+### 8. Optional: team memory (3 min)
 
 Type: `decision: truck 12 stays off the road until the brakes are checked` and `action: book the brake inspection for truck 12`
 
