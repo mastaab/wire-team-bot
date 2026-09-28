@@ -17,6 +17,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 
 **Environment (the day before).**
 - Bot running from this checkout with `npm run build && npm start`; `.env` has Wire staging, Jira, `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types, the service scope and `WIRE_TEAM_BOT_JIRA_WATCH_SECONDS=30`. See README for the settings.
+- The desk agent is mapped in `WIRE_TEAM_BOT_JIRA_AGENTS` (Jira account ID = Wire handle), and both driver and agent are in the app's Wire team with a signed-in client.
 - Ollama running with the local model (`qwen3.5-4b`) if you present the local-AI story; otherwise the chat slots point at the Claude API (faster and more fluent, but conversation text then goes to the API provider).
 - Jira DS project: SLAs on the 24/7 calendar, so SLA lines show real times at any hour. No open test requests left (open ones show breached SLAs after a few hours).
 - The demo channel must not use Wire Cells: the SDK cannot read Cells file messages yet, so the photo step would silently do nothing.
@@ -57,13 +58,14 @@ Show: the bot replies "Shall I report this to the service desk?" with the full t
 Say: the model read an ordinary chat message and recognised a fault. The driver saw exactly what would be sent and decided. Only this text went to Jira; the rest of the conversation did not.
 
 Follow the link to Jira and, as the desk agent, pick the ticket up there: point out the request type "Submit a request or incident", the driver named as requester and both SLA clocks running. Then, on the ticket:
-1. Add a **public reply**, for example "Please check the brake fluid level and send a photo."
-2. Add an **internal note**, for example "Likely the sensor; check stock."
-3. Move the ticket to **In progress**.
+1. **Assign** the ticket to yourself (the desk agent mapped in `WIRE_TEAM_BOT_JIRA_AGENTS`).
+2. Add a **public reply**, for example "Please check the brake fluid level and send a photo."
+3. Add an **internal note**, for example "Likely the sensor; check stock."
+4. Move the ticket to **In progress**.
 
-Back in Wire, show: within about 30 seconds the update arrives as a reply quoting the "Raised" message: "New reply from the service desk" with the reply, and "Now in progress." (changes made within one check arrive as one message). The internal note never appears.
+Back in Wire, show: within about 30 seconds the channel gets "Contact with the responsible support agent (<name>) has been initiated", and the driver and the agent find a new group named after the ticket with the bot's introduction; the bot has made them both admins and left. Then the update arrives in the channel as a reply: "New reply from the service desk" with the reply, and "Now in progress." (changes made within one check arrive as one message). The internal note never appears.
 
-Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed.
+Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed. When an agent picks a request up, the app creates a private conversation for the two of them in the customer's own Wire team, hands it over and leaves: it is not recorded anywhere, and the agent did not have to be in the drivers' channel.
 
 ### 3. The driver answers with a photo (3 min)
 
@@ -133,6 +135,7 @@ Say: the same app keeps decisions, actions and reminders for the team; support i
 |---|---|---|
 | The app in the channel, reading and replying | App membership of MLS-encrypted conversations; message events | Automation inside the secure channel, not beside it |
 | "Shall I …?" replies under the driver's message | Text messages with native replies (quotes) | Clear, threaded conversation |
+| A private group for driver and agent when the ticket is picked up | Creating group conversations, member roles and leaving (`createGroupConversation`, `updateConversationMemberRole`, `leaveConversation`), user search by handle | Direct, secure contact without adding the desk to every channel |
 | A photo from the driver arriving on the Jira ticket | File messages received and decrypted by the app (`onAssetMessageReceived`, `downloadAsset`) | Evidence from the field reaches the desk without leaving the secure channel first |
 | Desk updates quoting the earlier ticket message | Replies to the app's own earlier messages | Each ticket reads as one thread |
 | The app's name and members' names in texts, @mentions | User profile lookup, mentions | Natural, correct addressing |
