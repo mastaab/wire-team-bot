@@ -43,6 +43,9 @@ import { SupportRequestWrites } from "../application/services/SupportRequestWrit
 import { AttachFileToRequest } from "../application/usecases/jira/AttachFileToRequest";
 import { OfferAttachment } from "../application/usecases/jira/OfferAttachment";
 import { createWireAssetAdapter } from "../infrastructure/wire/WireAssetAdapter";
+import { CreatedConversations } from "../infrastructure/wire/CreatedConversations";
+import { createWireConversationAdapter } from "../infrastructure/wire/WireConversationAdapter";
+import { OpenAgentConversation } from "../application/usecases/jira/OpenAgentConversation";
 import { startIntervalRunner, type IntervalRunner } from "./intervalRunner";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
@@ -229,11 +232,24 @@ export function createContainer(config: Config, logger: Logger): Container {
   const resolveSupportRequest = issueTracker && supportRequestsRepo ? new ResolveSupportRequest(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger, supportRequestWrites) : undefined;
   const replyToServiceDesk = issueTracker && supportRequestsRepo ? new ReplyToServiceDesk(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, logger) : undefined;
   // Announces changes made in Jira; started once the Wire client is ready (see getWireClient).
-  const watchSupportRequests = issueTracker && supportRequestsRepo && config.jira?.watchSeconds
-    ? new WatchSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, channelConfigRepo, logger, undefined,
-      // The CLI's test conversations (domain "cli.local") have no Wire group to post to, as for reminders.
-      { conversations: conversationConfigRepo, writes: supportRequestWrites, skipConversation: (c) => c.domain === "cli.local" })
+  // Direct conversations between requester and desk agent: groups the app creates and leaves.
+  const createdConversations = new CreatedConversations();
+  const agentHandles = config.jira?.agents;
+  const openAgentConversation = supportRequestsRepo && agentHandles
+    ? new OpenAgentConversation(
+      supportRequestsRepo, createWireConversationAdapter(handlerRef, config.wire.appDomain, createdConversations), wireOutbound, auditLogRepo, logger,
+    )
     : undefined;
+  const watchSupportRequests = issueTracker && supportRequestsRepo && config.jira?.watchSeconds
+    ? new WatchSupportRequests(supportRequestsRepo, issueTracker, wireOutbound, auditLogRepo, channelConfigRepo, logger, undefined, {
+      conversations: conversationConfigRepo,
+      writes: supportRequestWrites,
+      // The CLI's test conversations (domain "cli.local") have no Wire group to post to, as for reminders.
+      skipConversation: (c) => c.domain === "cli.local",
+      ...(openAgentConversation && agentHandles ? { agents: { handles: agentHandles, open: openAgentConversation } } : {}),
+    })
+    : undefined;
+  if (agentHandles && !watchSupportRequests) logger.warn("WIRE_TEAM_BOT_JIRA_AGENTS needs WIRE_TEAM_BOT_JIRA_WATCH_SECONDS; direct conversations are off");
   // Photos and documents to the service desk: offered only with passive help, since a file cannot carry a mention.
   const attachFileToRequest = issueTracker && supportRequestsRepo
     ? new AttachFileToRequest(supportRequestsRepo, issueTracker, createWireAssetAdapter(handlerRef), wireOutbound, auditLogRepo, logger)
@@ -338,6 +354,7 @@ export function createContainer(config: Config, logger: Logger): Container {
     raiseSupportRequest,
     completePartOrder,
     offerAttachment,
+    createdConversations,
     supportWelcome: issueTracker
       ? { projectKey: issueTracker.projectKey, passive: passiveOn, watching: !!watchSupportRequests }
       : undefined,

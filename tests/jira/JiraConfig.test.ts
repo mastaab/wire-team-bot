@@ -77,6 +77,15 @@ describe("resolveJiraConfig", () => {
     }
   });
 
+  it("maps desk agents to Wire handles and rejects malformed mappings", () => {
+    expect(resolveJiraConfig(full)!.agents).toBeUndefined();
+    const cfg = resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_AGENTS: "712020:abc-1=@HarveyWolff, 5b10a2=dana.desk" })!;
+    expect([...cfg.agents!]).toEqual([["712020:abc-1", "harveywolff"], ["5b10a2", "dana.desk"]]);
+    for (const bad of ["", "no-handle", "id=", "=handle", "id=bad handle", "a=b,a=c", "id=x"]) {
+      expect(() => resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_AGENTS: bad || " , " })).toThrow(/WIRE_TEAM_BOT_JIRA_AGENTS/);
+    }
+  });
+
   it("switches to Basic auth when an email is configured", () => {
     expect(resolveJiraConfig({ ...full, WIRE_TEAM_BOT_JIRA_EMAIL: "bot@example.com" })!.email).toBe("bot@example.com");
   });

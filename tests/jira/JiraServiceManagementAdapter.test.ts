@@ -481,6 +481,15 @@ describe("JiraServiceManagementAdapter.listChangedSince", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it("reports the assignee's account ID when there is one", async () => {
+    const assigned = { ...found("DS-1", "indeterminate", "2026-09-26T10:00:00.000Z"), fields: { ...found("DS-1", "indeterminate", "2026-09-26T10:00:00.000Z").fields, assignee: { accountId: "712020:abc", displayName: "Agent" } } };
+    const unassigned = { ...found("DS-2", "new", "2026-09-26T10:00:00.000Z"), fields: { ...found("DS-2", "new", "2026-09-26T10:00:00.000Z").fields, assignee: null } };
+    stubJira({ [SEARCH]: [json({ isLast: true, issues: [assigned, unassigned] })] });
+    const changes = await adapter().listChangedSince(["DS-1", "DS-2"]);
+    expect(changes[0]).toEqual({ key: "DS-1", statusCategory: "in_progress", updated: new Date("2026-09-26T10:00:00Z"), assigneeAccountId: "712020:abc" });
+    expect(changes[1]).not.toHaveProperty("assigneeAccountId");
+  });
+
   it("asks for all given keys without a time bound, reading status and update time only", async () => {
     const fetch = stubJira({ [SEARCH]: [json({ isLast: true, issues: [
       found("DS-1", "new", "2026-09-26T13:59:00.000+0200", "Offen"),

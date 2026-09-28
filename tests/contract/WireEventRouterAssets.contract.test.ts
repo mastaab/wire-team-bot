@@ -8,6 +8,7 @@ import { WireEventRouter } from "../../src/infrastructure/wire/WireEventRouter";
 import type { WireEventRouterDeps } from "../../src/infrastructure/wire/WireEventRouter";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
 import { InMemoryMemberCache } from "../../src/infrastructure/services/InMemoryMemberCache";
+import { CreatedConversations } from "../../src/infrastructure/wire/CreatedConversations";
 
 const convId: QualifiedId = { id: "conv-1", domain: "wire.com" };
 const sender: QualifiedId = { id: "user-1", domain: "wire.com" };
@@ -146,5 +147,19 @@ describe("WireEventRouter contract: posted files", () => {
     release();
     await Promise.all([file, text]);
     expect(order).toEqual(["file", "text"]);
+  });
+
+  it("ignores text, files and the app-added event in a group the app created and is leaving", async () => {
+    const created = new CreatedConversations();
+    created.add(convId);
+    const { deps: d, offerAttachment } = deps({ createdConversations: created } as never);
+    const router = new WireEventRouter(d);
+    await router.onAppAddedToConversation({ id: convId.id, domain: convId.domain } as never, []);
+    await router.onTextMessageReceived(TextMessage.create({ conversationId: convId, text: "hello", senderId: sender } as never));
+    await router.onAssetMessageReceived(asset());
+    expect(d.wireOutbound.sendPlainText).not.toHaveBeenCalled();
+    expect(vi.mocked(d.channelConfig.upsert)).not.toHaveBeenCalled();
+    expect(offerAttachment.execute).not.toHaveBeenCalled();
+    expect(vi.mocked(d.messageBuffer.push)).not.toHaveBeenCalled();
   });
 });
