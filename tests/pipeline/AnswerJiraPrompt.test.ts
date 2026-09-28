@@ -121,6 +121,12 @@ describe("integrationsPrompt", () => {
     expect(prompt).toContain("key, summary, kind, requester and last known status");
   });
 
+  it("never lets an earlier similar request, open or Done, stand in for a requested new one", () => {
+    const prompt = integrationsPrompt({ jiraProjectKey: "DS" });
+    expect(prompt).toContain("An earlier support request about a similar problem, open or Done, never stands in for a new one.");
+    expect(prompt).toContain("never decide that the new problem is the same as an earlier request, and never refuse or ask for more details because of one.");
+  });
+
   it("describes the desk with the configured service scope, and keeps the generic wording without it", () => {
     const scope = "questions about the truck, faults, breakdowns, damage, service and maintenance, and replacement part orders";
     const prompt = integrationsPrompt({ jiraProjectKey: "DS", jiraServiceScope: `  ${scope}.\n` });
