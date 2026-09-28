@@ -1621,11 +1621,7 @@ This work lives on the `demo/jira` branch. It is a customer demo, not part of th
 
 A truck manufacturer offers the bot as premium support with its trucks. Drivers talk in an encrypted Wire channel; the bot turns their questions, fault reports and part orders into requests for the manufacturer's service desk, and nothing leaves Wire without a driver's yes. The demo runs with `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types mapped and the service scope set.
 
-1. **Fault:** a driver writes, without mentioning the bot, "the brake warning light on truck 12 came on this morning". The bot offers "Shall I report this to the service desk?" with the full text; on yes it raises the request (request type "Submit a request or incident") and replies with the link. Both SLA clocks start.
-2. **Part order:** "we need a new left mirror for truck 7". The bot asks for what is missing ("To order it I need the quantity and the delivery location. What are they?"), the driver answers, and the bot offers "Shall I order this part?" with `Vehicle`, `Part`, `Quantity` and `Deliver to` lines; yes raises a "Replacement part" request.
-3. **Question:** "how do I reset the AdBlue warning after a refill?" gets "Shall I ask the service desk?"; yes raises an "Ask a question" request.
-4. **Follow and add:** "has anyone heard back about the brake light?" gets the live status and the desk's replies; "it only happens when the trailer is attached" gets "Shall I add this to DS-N …?".
-5. **Resolve:** `@Wire Team Bot resolve DS-N` or "the brake light is fine now, please close it" (confirmed) resolves the request and reports the SLA outcome.
+The presenter's script, with the exact lines to type, the Jira steps, talking points, limits and fallbacks, is [docs/DEMO-PLAYBOOK.md](docs/DEMO-PLAYBOOK.md). The demo shows what an app built with the Wire Apps SDK makes possible for this use case; it is not a product offer.
 
 The message for security-minded customers: the conversation stays in Wire; only what a driver confirms is sent to the service desk. For defence customers, see the security note under "Truck premium support".
 
