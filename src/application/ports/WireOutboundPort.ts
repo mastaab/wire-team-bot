@@ -62,6 +62,12 @@ export interface WireOutboundPort {
     options?: CompositePromptOptions,
   ): Promise<void>;
 
+  /**
+   * Shows (`true`) or clears (`false`) the app's typing indicator in the conversation. Wire
+   * clients expire a shown indicator after a few seconds, so callers refresh it while working.
+   */
+  setTyping(conversationId: QualifiedId, typing: boolean): Promise<void>;
+
   sendReaction(
     conversationId: QualifiedId,
     messageId: string,

@@ -221,6 +221,22 @@ it("passes the actual caller and cleaned question after a custom bot mention", a
   }));
 });
 
+it("shows the app typing while it answers a mentioned question, and clears it afterwards", async () => {
+  const deps = makeDeps();
+  vi.mocked(deps.answerQuestion.execute).mockImplementation(async () => {
+    expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls).toEqual([[convId, true]]);
+    return "answer";
+  });
+  await new WireEventRouter(deps).onTextMessageReceived(customMention("What am I responsible for?"));
+  await vi.waitFor(() => expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls.at(-1)).toEqual([convId, false]));
+});
+
+it("does not show typing for an ordinary message nobody asked the bot about", async () => {
+  const deps = makeDeps();
+  await new WireEventRouter(deps).onTextMessageReceived(makeMessage("lunch at noon?"));
+  expect(deps.wireOutbound.setTyping).not.toHaveBeenCalled();
+});
+
 it("routes an action status question to record retrieval, not channel status", async () => {
   const deps = makeDeps({ statusCommand: { execute: vi.fn() } as never });
   await new WireEventRouter(deps).onTextMessageReceived(customMention("What is the status and owner of ACT-0002?"));
@@ -298,6 +314,7 @@ function makeDeps(overrides: Partial<WireEventRouterDeps> = {}): WireEventRouter
       sendCompositePrompt: vi.fn().mockResolvedValue(undefined),
       sendReaction: vi.fn().mockResolvedValue(undefined),
       sendFile: vi.fn().mockResolvedValue(undefined),
+      setTyping: vi.fn().mockResolvedValue(undefined),
     },
     messageBuffer: { clear: vi.fn(), push: vi.fn(), getLastN: vi.fn().mockReturnValue([]) },
     dateTimeService: { parse: vi.fn().mockReturnValue(null) },

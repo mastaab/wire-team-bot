@@ -2149,6 +2149,8 @@ Committed by the main session before the parallel build. Builders code against t
 - A failed typing call is logged by error name and never delays or blocks the answer.
 - Evidence: unit tests with mocked ports; a live staging check that the indicator appears while the local model works and disappears with the answer.
 
+**Bot side built (2026-09-28).** `WireOutboundPort.setTyping(conversationId, typing)` (Wire adapter over `sendTypingIndicator`, a no-op without SDK support; the CLI ignores it) and `withTyping` in `src/application/services/typing.ts`: started at once without delaying the work, refreshed every 8 seconds (the operator saw the indicator hold steady with that interval), cleared in a `finally` after "started" has gone out, failures (including synchronous throws) logged once by error name. The router wraps the answer path (mentioned questions and follow-ups to the bot's question), `catch me up` and the support commands (`support:`, `resolve`, `reply to`, `support requests`, `status of`). Offer confirmations, passive help, capture and the Jira watch show nothing.
+
 ### Handover for the next session (2026-09-26, evening)
 
 **Start here.** Read AGENTS.md, then this section 6. The next task is "Jira updates in Wire by polling", including quoting the last ticket message: the plan is confirmed by the operator and nothing of it is built yet. Follow the usual pattern: write and commit the contract, parallel subagents in worktrees, an independent review, CLI checks (scripts grepped for write lines, offers answered no), then a live staging check where the operator acts as the desk agent in Jira. Everything listed below the plan is built, reviewed and checked live on staging, most recently on the local Ollama model.

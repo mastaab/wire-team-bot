@@ -92,6 +92,17 @@ describe("WireOutboundAdapter contract", () => {
     expect((sendMessage.mock.calls[0]![0] as TextMessage).text).toBe("@Wire Team Bot pause");
   });
 
+  it("setTyping sends started and stopped for the conversation, and does nothing without SDK support", async () => {
+    const sendTypingIndicator = vi.fn().mockResolvedValue(undefined);
+    const withTyping = createWireOutboundAdapter(
+      { current: { manager: { sendMessage: vi.fn(), sendAsset: vi.fn(), getUsers: vi.fn(), sendTypingIndicator } } }, mockLogger,
+    );
+    await withTyping.setTyping(convId, true);
+    await withTyping.setTyping(convId, false);
+    expect(sendTypingIndicator.mock.calls.map(([c, s]) => [c.id, c.domain, s])).toEqual([["conv-1", "wire.com", "started"], ["conv-1", "wire.com", "stopped"]]);
+    await expect(createWireOutboundAdapter(makeRef(), mockLogger).setTyping(convId, true)).resolves.toBeUndefined();
+  });
+
   it("sendPlainText returns undefined without a connection", async () => {
     const adapter = createWireOutboundAdapter({ current: null }, mockLogger);
     expect(await adapter.sendPlainText(convId, "Hello")).toBeUndefined();

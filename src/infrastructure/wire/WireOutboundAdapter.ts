@@ -9,7 +9,7 @@ import type {
   UserProfile,
 } from "../../application/ports/WireOutboundPort";
 import type { Logger } from "../../application/ports/Logger";
-import { TextMessage, CompositeMessage, CompositeButton, Reaction } from "@wireapp/wire-apps-js-sdk";
+import { TextMessage, CompositeMessage, CompositeButton, Reaction, TypingStatus, QualifiedId as SdkQualifiedId } from "@wireapp/wire-apps-js-sdk";
 import type { WireMessage, WireUser } from "@wireapp/wire-apps-js-sdk";
 import type { WireReplyContext } from "./WireReplyContext";
 import { renameBot, usableBotName } from "./renameBot";
@@ -23,6 +23,7 @@ const BOT_NAME_TTL_MS = 5 * 60 * 1000;
  */
 export interface ManagerHandle {
   sendMessage(message: WireMessage): Promise<string>;
+  sendTypingIndicator?(conversationId: QualifiedId, status: TypingStatus): Promise<void>;
   sendAsset(conversationId: QualifiedId, asset: { data: Uint8Array; name: string; mimeType: string }): Promise<string>;
   getUsers(userIds: QualifiedId[]): Promise<Array<Pick<WireUser, "id" | "name" | "handle">>>;
 }
@@ -141,6 +142,14 @@ export function createWireOutboundAdapter(
             ...buttons.map((b) => CompositeButton.create({ id: b.id, text: b.label })),
           ],
         }),
+      );
+    },
+
+    async setTyping(conversationId: QualifiedId, typing: boolean): Promise<void> {
+      const h = handlerRef.current;
+      if (!h?.manager?.sendTypingIndicator) return;
+      await h.manager.sendTypingIndicator(
+        new SdkQualifiedId(conversationId.id, conversationId.domain), typing ? TypingStatus.STARTED : TypingStatus.STOPPED,
       );
     },
 

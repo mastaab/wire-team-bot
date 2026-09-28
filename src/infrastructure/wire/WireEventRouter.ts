@@ -53,6 +53,7 @@ import { welcomeText, type SupportWelcome } from "./welcomeText";
 import type { OfferAttachment } from "../../application/usecases/jira/OfferAttachment";
 import type { CreatedConversations } from "./CreatedConversations";
 import { ATTACHMENT_MAX_BYTES, attachableKind } from "../../application/services/attachments";
+import { withTyping } from "../../application/services/typing";
 import type { WireReplyContext } from "./WireReplyContext";
 
 const CONTEXT_WINDOW = 10;
@@ -475,12 +476,12 @@ export class WireEventRouter extends WireEventsHandler {
       ) {
         if (this.deps.catchMeUpCommand) {
           const orgId = this.deps.orgId ?? convId.domain;
-          await this.deps.catchMeUpCommand.execute({
+          await this.typing(convId, () => this.deps.catchMeUpCommand!.execute({
             conversationId: convId,
             channelId,
             organisationId: orgId,
             replyToMessageId: wireMessage.id,
-          });
+          }));
           return;
         }
       }
@@ -533,10 +534,10 @@ export class WireEventRouter extends WireEventsHandler {
     const supportMatch = this.deps.raiseSupportRequest && isBotAddressed ? commandText.match(/^support\s*:\s*([\s\S]+)$/i) : null;
     if (supportMatch && this.deps.raiseSupportRequest) {
       const { summary, description } = splitSupportText(supportMatch[1]!);
-      await this.deps.raiseSupportRequest.execute({
+      await this.typing(convId, () => this.deps.raiseSupportRequest!.execute({
         summary, description, conversationId: convId, requesterId: sender,
         requesterName: senderDisplayName, replyToMessageId: wireMessage.id, requestKind: "fault",
-      });
+      }));
       return;
     }
 
@@ -546,10 +547,10 @@ export class WireEventRouter extends WireEventsHandler {
     if (resolveMatch && this.deps.resolveSupportRequest) {
       // `resolve DS-6: <comment>` adds a closing comment before resolving.
       const comment = resolveMatch[2]?.trim();
-      await this.deps.resolveSupportRequest.execute({
+      await this.typing(convId, () => this.deps.resolveSupportRequest!.execute({
         issueKey: resolveMatch[1]!.toUpperCase(), conversationId: convId, actorId: sender,
         ...(comment ? { comment } : {}), replyToMessageId: wireMessage.id,
-      });
+      }));
       return;
     }
 
@@ -557,10 +558,10 @@ export class WireEventRouter extends WireEventsHandler {
       ? commandText.match(new RegExp(`^reply\\s+to\\s+(${jiraProjectKey}-\\d+)\\s*:\\s*([\\s\\S]+)$`, "i"))
       : null;
     if (replyMatch && this.deps.replyToServiceDesk) {
-      await this.deps.replyToServiceDesk.execute({
+      await this.typing(convId, () => this.deps.replyToServiceDesk!.execute({
         reference: replyMatch[1]!.toUpperCase(), body: replyMatch[2]!, conversationId: convId,
         actorId: sender, replyToMessageId: wireMessage.id,
-      });
+      }));
       return;
     }
 
@@ -568,9 +569,9 @@ export class WireEventRouter extends WireEventsHandler {
       ? commandLowered.match(/^(my\s+)?(?:open\s+)?support\s+requests?[?.]?\s*$/)
       : null;
     if (supportListMatch && this.deps.listSupportRequests) {
-      await this.deps.listSupportRequests.execute({
+      await this.typing(convId, () => this.deps.listSupportRequests!.execute({
         conversationId: convId, ...(supportListMatch[1] ? { requesterId: sender } : {}), replyToMessageId: wireMessage.id,
-      });
+      }));
       return;
     }
 
@@ -579,10 +580,10 @@ export class WireEventRouter extends WireEventsHandler {
     const issueReference = jiraProjectKey && isBotAddressed ? matchIssueStatusRequest(commandText, jiraProjectKey) : null;
     if (issueReference && this.deps.getIssueStatus) {
       const config = await this.deps.conversationConfig.get(convId);
-      await this.deps.getIssueStatus.execute({
+      await this.typing(convId, () => this.deps.getIssueStatus!.execute({
         reference: issueReference, conversationId: convId,
         timezone: config?.timezone ?? this.deps.defaultTimezone ?? "UTC", replyToMessageId: wireMessage.id,
-      });
+      }));
       return;
     }
 
@@ -836,7 +837,7 @@ export class WireEventRouter extends WireEventsHandler {
       );
       const orgId = this.deps.orgId ?? convId.domain;
       const isPersonal = this.personalModeCache.get(channelId) ?? false;
-      const answer = await this.deps.answerQuestion.execute({
+      const answer = await this.typing(convId, () => this.deps.answerQuestion.execute({
         question: commandText,
         requester: { id: sender.id, domain: sender.domain, name: senderDisplayName },
         conversationContext: recentContext,
@@ -850,7 +851,7 @@ export class WireEventRouter extends WireEventsHandler {
         ...(droppedOffer ? { pendingOffer: droppedOffer } : {}),
         ...(amendOnly ? { amendOnly: true } : {}),
         timezone: config?.timezone ?? this.deps.defaultTimezone,
-      });
+      }));
       // Not a revision: the message was ordinary conversation, so it continues to capture.
       if (amendOnly && !answer) {
         this.enqueueForPipeline(wireMessage, text, convId, sender, channelId, senderDisplayName, log);
@@ -1144,6 +1145,14 @@ export class WireEventRouter extends WireEventsHandler {
       expiresAfterMillis: message.expiresAfterMillis || preview.expiresAfterMillis,
       timestamp: preview.timestamp,
     };
+  }
+
+  /**
+   * Work the requester is waiting for (the answer model, catch-up summaries, support commands),
+   * shown as the app typing in the conversation while it runs.
+   */
+  private typing<T>(conversationId: QualifiedId, work: () => Promise<T>): Promise<T> {
+    return withTyping(this.deps.wireOutbound, conversationId, work, this.deps.logger);
   }
 
   /** Recent file message IDs, so a repeated event is handled once; bounded. */
