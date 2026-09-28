@@ -2087,6 +2087,14 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Out of scope.** Reading the photo with an AI vision model (for example to describe damage); possible later with a vision-capable local model, not planned.
 
+### Direct conversation with the desk agent (feasibility, 2026-09-28)
+
+**Idea (operator).** When a service desk agent picks up a request, the bot creates a separate Wire group with the requester and that agent, who need not be in the main channel.
+
+**Feasibility.** The SDK can create groups in the app's team (`createGroupConversation`, created without Cells), add and remove members, change roles, leave and delete, and find users by handle (`searchUsers`). Jira gives the assignee with the change check already used by the watch. The missing link is the agent's Wire account: Jira has no such link and the SDK cannot search by email, so a setting mapping Jira agents to Wire handles would be needed. Open design decisions: whether the bot stays in the group or hands admin to the agent and leaves; where later ticket updates go; that the direct conversation is not copied to Jira (extract-and-forget); what the main channel is told. Not planned or built.
+
+**Probe (operator-approved, 2026-09-28, bot stopped for the run).** Both staging test handles (driver and agent) resolved through `searchUsers`; `createGroupConversation("DS-25 test", …)` succeeded; a message was sent; the group has three members: the app as admin, driver and agent as members. The test group still exists and the bot is a member of it, so it processes messages there like in any channel.
+
 ### Handover for the next session (2026-09-26, evening)
 
 **Start here.** Read AGENTS.md, then this section 6. The next task is "Jira updates in Wire by polling", including quoting the last ticket message: the plan is confirmed by the operator and nothing of it is built yet. Follow the usual pattern: write and commit the contract, parallel subagents in worktrees, an independent review, CLI checks (scripts grepped for write lines, offers answered no), then a live staging check where the operator acts as the desk agent in Jira. Everything listed below the plan is built, reviewed and checked live on staging, most recently on the local Ollama model.
