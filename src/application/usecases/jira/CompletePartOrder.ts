@@ -6,6 +6,7 @@ import type { SupportTriagePort } from "../../ports/SupportTriagePort";
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { OFFER_TTL_MS, PART_DETAIL_FIELDS, formatMissingPartsQuestion, formatSupportQuestion, missingPartDetails } from "../../services/offers";
+import { statedPartDetails } from "../../services/partDetails";
 
 /** Contract: see PLAN.md §6 "Part orders completed in code, and no double capture". */
 export interface CompletePartOrderInput {
@@ -42,7 +43,7 @@ export class CompletePartOrder {
 
     let extracted: PartDetails;
     try {
-      extracted = statedDetails(boundedDetails(await this.triage.extractPartDetails(input.text)), input.text);
+      extracted = statedPartDetails(boundedDetails(await this.triage.extractPartDetails(input.text)), input.text);
     } catch (err) {
       this.logger?.warn("CompletePartOrder: extractPartDetails failed", { err: errorName(err) });
       return false;
@@ -102,22 +103,6 @@ function boundedDetails(details: PartDetails | null | undefined): PartDetails {
   return bounded;
 }
 
-/**
- * Keeps vehicle, part and delivery location only when a word of the value appears in the
- * message, so a value the model took from elsewhere or made up is dropped. A quantity may be
- * written differently ("two" as 2), so it is kept as extracted.
- */
-function statedDetails(details: PartDetails, message: string): PartDetails {
-  const words = new Set(message.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
-  const stated: PartDetails = {};
-  for (const { key } of PART_DETAIL_FIELDS) {
-    const value = details[key];
-    if (!value) continue;
-    const valueWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-    if (key === "quantity" || valueWords.some((word) => words.has(word))) stated[key] = value;
-  }
-  return stated;
-}
 
 /** The essentials known so far, one quoted line each, for a question that follows a change. */
 function formatPartSoFar(part: PartDetails | undefined): string {

@@ -169,7 +169,7 @@ describe("CompletePartOrder", () => {
   it("replaces an earlier value with the one in this message", async () => {
     const { sent, offers, useCase } = setup({ quantity: "three", deliverTo: "depot north" });
 
-    await useCase.execute(input());
+    await useCase.execute(input({ text: "actually three, deliver to depot north" }));
 
     const command = offers.put.mock.calls[0]![0].command;
     expect(command.part).toEqual({ vehicle: "truck 7", part: "PRIVATE_PART_MARKER left mirror", quantity: "three", deliverTo: "depot north" });

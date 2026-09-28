@@ -422,7 +422,7 @@ describe("OfferSupportFromConversation", () => {
       it("offers a complete part order with the detail lines above the description", async () => {
         const { offers, wire, sent, useCase } = setup(undefined, PART_DRAFT);
 
-        await useCase.execute(input());
+        await useCase.execute(input({ text: PART_DRAFT.description }));
 
         expect(sent).toEqual([
           "Shall I order this part?\n> **Left mirror glass for truck 17**\n> Vehicle: truck 17\n> Part: left mirror glass\n> Quantity: 2\n> Deliver to: Depot North\n> I need two left mirror glasses for truck 17, delivered to Depot North.\n\n(yes or no)?",
@@ -433,10 +433,19 @@ describe("OfferSupportFromConversation", () => {
         });
       });
 
+      it("asks for the quantity when the model filled one in that the driver did not state", async () => {
+        const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { vehicle: "truck 7", part: "left mirror", quantity: "1" } });
+
+        await useCase.execute(input({ text: "we need a new left mirror for truck 7" }));
+
+        expect(sent).toEqual(["To order it I need the quantity and the delivery location. What are they?"]);
+        expect(offers.put.mock.calls[0]![0].command.part).toEqual({ vehicle: "truck 7", part: "left mirror" });
+      });
+
       it("collapses whitespace in the part details", async () => {
         const { offers, useCase } = setup(undefined, { ...PART_DRAFT, part: { vehicle: " truck\n 17 ", part: "left  mirror glass", quantity: " 2 ", deliverTo: "Depot\tNorth" } });
 
-        await useCase.execute(input());
+        await useCase.execute(input({ text: PART_DRAFT.description }));
 
         expect(offers.put.mock.calls[0]![0].command.part).toEqual(PART_DRAFT.part);
       });
@@ -444,7 +453,7 @@ describe("OfferSupportFromConversation", () => {
       it("asks for exactly the missing details and stores the incomplete order for the speaker", async () => {
         const { offers, wire, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { part: "left mirror glass", quantity: "2" } });
 
-        await useCase.execute(input());
+        await useCase.execute(input({ text: PART_DRAFT.description }));
 
         expect(sent).toEqual([formatMissingPartsQuestion(["vehicle", "deliverTo"])]);
         expect(sent[0]).toBe("To order it I need the vehicle (fleet or chassis number) and the delivery location. What are they?");
@@ -475,7 +484,7 @@ describe("OfferSupportFromConversation", () => {
       it("treats an empty or over-long detail as missing", async () => {
         const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { ...PART_DRAFT.part, vehicle: "v".repeat(PART_DETAIL_MAX + 1), quantity: "  " } });
 
-        await useCase.execute(input());
+        await useCase.execute(input({ text: PART_DRAFT.description }));
 
         expect(sent).toEqual([formatMissingPartsQuestion(["vehicle", "quantity"])]);
         expect(offers.put.mock.calls[0]![0].command.part).toEqual({ part: "left mirror glass", deliverTo: "Depot North" });
@@ -485,7 +494,7 @@ describe("OfferSupportFromConversation", () => {
         const vehicle = "v".repeat(PART_DETAIL_MAX);
         const { offers, sent, useCase } = setup(undefined, { ...PART_DRAFT, part: { ...PART_DRAFT.part, vehicle } });
 
-        await useCase.execute(input());
+        await useCase.execute(input({ text: `${PART_DRAFT.description} ${vehicle}` }));
 
         expect(sent[0]).toMatch(/^Shall I order this part\?\n/);
         expect(offers.put.mock.calls[0]![0].command.part.vehicle).toBe(vehicle);

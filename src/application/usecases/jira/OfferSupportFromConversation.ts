@@ -15,6 +15,7 @@ import {
 } from "../../services/offers";
 import type { GetIssueStatus } from "./GetIssueStatus";
 import { rememberLastMessage } from "./supportRequestMarkers";
+import { statedPartDetails } from "../../services/partDetails";
 
 /** Classifier confidence required before passive help acts on a message. */
 export const PASSIVE_CONFIDENCE_MIN = 0.8;
@@ -205,7 +206,7 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
       return this.offer(input, formatReplyQuestion(covering.key, covering.summary, body), { kind: "reply", issueKey: covering.key, body });
     }
     if (additionOnly) return false;
-    const command = toSupportCommand(draft);
+    const command = toSupportCommand(draft, input.text);
     if (!command) {
       this.logger?.debug("OfferSupportFromConversation: draft outside the offer bounds");
       return false;
@@ -256,14 +257,15 @@ export class OfferSupportFromConversation implements OfferSupportFromConversatio
 }
 
 /** The draft as a `support` command within the offer bounds, or null. */
-function toSupportCommand(draft: SupportDraft): Extract<OfferCommand, { kind: "support" }> | null {
+function toSupportCommand(draft: SupportDraft, message: string): Extract<OfferCommand, { kind: "support" }> | null {
   const summary = typeof draft.summary === "string" ? draft.summary.replace(/\s+/g, " ").trim() : "";
   const description = typeof draft.description === "string" ? draft.description.trim() : "";
   if (!summary || summary.length > SUPPORT_SUMMARY_MAX) return null;
   if (!description || description.length > OFFER_DESCRIPTION_MAX) return null;
   const requestKind: SupportRequestKind = SUPPORT_REQUEST_KINDS.includes(draft.requestKind) ? draft.requestKind : "fault";
   if (requestKind !== "part") return { kind: "support", requestKind, summary, description };
-  return { kind: "support", requestKind, summary, description, part: toPartDetails(draft.part) };
+  // Only essentials the driver's message states; anything the model filled in is asked for.
+  return { kind: "support", requestKind, summary, description, part: statedPartDetails(toPartDetails(draft.part), message) };
 }
 
 /**

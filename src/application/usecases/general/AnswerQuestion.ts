@@ -22,6 +22,7 @@ import { formatSla, statusLabel } from "../jira/formatIssue";
 import { findSupportRequestInConversation } from "../jira/supportRequestScope";
 import { markRepliesSeen, rememberLastMessage } from "../jira/supportRequestMarkers";
 import { formatTimeInZone } from "../../services/formatTimeInZone";
+import { statedPartDetails } from "../../services/partDetails";
 
 /**
  * Scans `text` for `@Name` tokens and returns Wire mention objects with UTF-16 offsets.
@@ -272,7 +273,8 @@ export class AnswerQuestion {
     // The raw marker is never sent, whether or not the offer is valid.
     const parsed = parseOfferMarker(modelAnswer);
     const text = parsed.text || FALLBACK_ANSWER;
-    const command = parsed.command ? withPendingDetails(input.pendingOffer, parsed.command) : null;
+    // Part essentials the model proposes must be stated in this message; earlier ones come from the pending draft.
+    const command = parsed.command ? withPendingDetails(input.pendingOffer, withStatedPart(parsed.command, input.question)) : null;
     const prepared = command ? await this.prepareOffer(this.jira, input, command) : null;
     if (input.amendOnly && !(prepared && command && isRevision(input.pendingOffer, command)
         && !sameCommand(input.pendingOffer, command))) {
@@ -561,6 +563,15 @@ function isRevision(pending: OfferCommand | undefined, command: OfferCommand): b
  * A revised part order keeps the essentials already given: the model may return only the
  * ones the message adds, and a detail the driver gave earlier must not be asked for again.
  */
+/** A part order keeps only the essentials the requester's message states (see `statedPartDetails`). */
+function withStatedPart(command: OfferCommand, message: string): OfferCommand {
+  if (command.kind !== "support" || command.requestKind !== "part") return command;
+  const part = statedPartDetails(command.part, message);
+  if (Object.keys(part).length > 0) return { ...command, part };
+  const { part: _dropped, ...rest } = command;
+  return rest;
+}
+
 function withPendingDetails(pending: OfferCommand | undefined, command: OfferCommand): OfferCommand {
   if (pending?.kind !== "support" || pending.requestKind !== "part" || command.kind !== "support" || command.requestKind !== "part") return command;
   const part = { ...(pending.part ?? {}), ...(command.part ?? {}) };
