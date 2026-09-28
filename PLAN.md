@@ -2133,7 +2133,7 @@ Committed by the main session before the parallel build. Builders code against t
 **Start here.** Read AGENTS.md, then this section 6. The next task is "Jira updates in Wire by polling", including quoting the last ticket message: the plan is confirmed by the operator and nothing of it is built yet. Follow the usual pattern: write and commit the contract, parallel subagents in worktrees, an independent review, CLI checks (scripts grepped for write lines, offers answered no), then a live staging check where the operator acts as the desk agent in Jira. Everything listed below the plan is built, reviewed and checked live on staging, most recently on the local Ollama model.
 
 **State.**
-- Branch `demo/jira`, working tree clean, not pushed. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
+- Branch `demo/jira`, pushed to the fork and tracking `fork/demo/jira`. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`. The fork `mastaab/wire-team-bot` is the `fork` remote; upstream merges are the owner's decision.
 - 1365 tests pass; `npx tsc --noEmit` and `npm run lint` are clean.
 - The local database `wire_team_bot` has the `support_requests` migration applied (2026-09-26). It also has the `kind` column (2026-09-26) and the watch markers (2026-09-27). On 2026-09-27 the operator closed all support requests in Jira; the accidental CLI requests DS-6 and DS-12 were soft-deleted in the database with audit entries (operator-approved), so no request is open. On 2026-09-27 the operator soft-deleted ACT-0035 (a duplicate of a part order), ACT-0010 (wrongly marked done) and the CLI test action ACT-0034, each with an audit entry. The old `jira:` links on ACT-0005, ACT-0008, ACT-0010 and ACT-0012 are inert.
 - The `.env` points all chat slots at a local Ollama model (`qwen3.5-4b`, registered from a Qwen3.5-4B GGUF, `WIRE_TEAM_BOT_LLM_REASONING_EFFORT=none`); switch the LLM lines back to the Claude API for the stronger model.
@@ -2145,7 +2145,7 @@ Committed by the main session before the parallel build. Builders code against t
 1. "Jira updates in Wire by polling" with quoting is built, reviewed and checked live (2026-09-27). Open: SLA wording for working-hours calendars (Jira's "0m" reads "under a minute" even when a cycle spanned hours outside working time); the DS sandbox now uses a 24/7 calendar.
 2. All DS support requests are closed (2026-09-27); DS-1 to DS-5 remain as closed test tickets from the action-linked build.
 3. "Photos and documents to the service desk" (DS-25) and "Direct conversation with the desk agent" (DS-30) are built, reviewed and checked live (2026-09-28), in a channel without Wire Cells; a phone client is not yet covered for photos. Open requests: DS-26 to DS-30. Open, not built: German (driver-language) bot texts; for defence customers, a customer-hosted tracker (the local model works: see "Local model trial").
-4. Push to the fork on request; upstream merge is the owner's decision.
+4. `demo/jira` is pushed to the fork `mastaab/wire-team-bot` (2026-09-28, `fb75177`); a pull request to upstream and its merge are the owner's decision.
 
 **How to validate.**
 - Unit gate: `npx tsc --noEmit; echo $?`, `npm run lint >/dev/null 2>&1; echo $?`, `npm test > log 2>&1; echo $?`. Check exit codes; never pipe the checked command into `tail`.
