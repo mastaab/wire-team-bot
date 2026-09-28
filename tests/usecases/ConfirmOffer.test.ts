@@ -4,6 +4,7 @@ import type { ConfirmOfferHandlers } from "../../src/application/usecases/jira/C
 import { InMemoryPendingOfferStore } from "../../src/infrastructure/services/InMemoryPendingOfferStore";
 import { RECENT_DROP_MS } from "../../src/application/services/offers";
 import type { OfferCommand, PendingOfferStore } from "../../src/application/services/offers";
+import type { InboundFile } from "../../src/application/ports/PendingOfferPort";
 import type { QualifiedId } from "../../src/domain/ids/QualifiedId";
 
 const convId: QualifiedId = { id: "conv-1", domain: "wire.com" };
@@ -409,6 +410,93 @@ describe("ConfirmOffer", () => {
       expectNothingDispatched(handlers);
       expect(sent).toEqual(["Understood, I won't."]);
       expect(store.has(convId, alice, now)).toBe(false);
+    });
+  });
+
+  describe("attach offers", () => {
+    const PHOTO: InboundFile = {
+      ref: { transport: "wire", data: { assetId: "asset-1" } }, fileKind: "photo", name: "IMG_0042.jpg", mimeType: "image/jpeg", sizeInBytes: 2048,
+    };
+    const DOCUMENT: InboundFile = { ...PHOTO, fileKind: "file", name: "service-log.pdf", mimeType: "application/pdf" };
+    const ATTACH_PHOTO: OfferCommand = { kind: "attach", issueKey: "DS-6", file: PHOTO };
+    const ATTACH_DOCUMENT: OfferCommand = { kind: "attach", issueKey: "DS-6", file: DOCUMENT };
+
+    function setupAttach() {
+      const context = setup();
+      const attachFileToRequest = { execute: vi.fn().mockResolvedValue(true) };
+      const useCase = new ConfirmOffer(
+        context.store,
+        { ...context.handlers, attachFileToRequest } as unknown as ConfirmOfferHandlers,
+        context.wire,
+        () => now,
+      );
+      return { ...context, attachFileToRequest, useCase };
+    }
+
+    it("hands a yes to AttachFileToRequest with the file, the requester as actor and their display name", async () => {
+      const { handlers, attachFileToRequest, sent, store, useCase, offer } = setupAttach();
+      offer(ATTACH_PHOTO);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expect(attachFileToRequest.execute).toHaveBeenCalledTimes(1);
+      expect(attachFileToRequest.execute).toHaveBeenCalledWith({
+        issueKey: "DS-6", file: PHOTO, conversationId: convId, actorId: alice, senderName: "Alice", replyToMessageId: "msg-9",
+      });
+      expectNothingDispatched(handlers);
+      expect(sent).toEqual([]);
+      expect(store.has(convId, alice, now)).toBe(false);
+    });
+
+    it("cancels an attach offer on no without attaching", async () => {
+      const { handlers, attachFileToRequest, sent, store, useCase, offer } = setupAttach();
+      offer(ATTACH_PHOTO);
+
+      expect(await useCase.execute({ ...input, text: "no" })).toBe(true);
+
+      expect(sent).toEqual(["Understood, I won't."]);
+      expect(attachFileToRequest.execute).not.toHaveBeenCalled();
+      expectNothingDispatched(handlers);
+      expect(store.has(convId, alice, now)).toBe(false);
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(false);
+      expect(attachFileToRequest.execute).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [ATTACH_PHOTO, "I need a clear yes or no, so I haven't added this photo to **DS-6** yet. Shall I add it (yes or no)?"],
+      [ATTACH_DOCUMENT, "I need a clear yes or no, so I haven't added this file (service-log.pdf) to **DS-6** yet. Shall I add it (yes or no)?"],
+    ])("asks again after an acknowledgement for %j, keeps it, and a following yes attaches it", async (command, question) => {
+      const { attachFileToRequest, wire, store, useCase, offer } = setupAttach();
+      offer(command);
+
+      expect(await useCase.execute({ ...input, text: "ok" })).toBe(true);
+      expect(wire.sendPlainText).toHaveBeenCalledWith(convId, question, { replyToMessageId: "msg-9" });
+      expect(attachFileToRequest.execute).not.toHaveBeenCalled();
+      expect(store.has(convId, alice, now)).toBe(true);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+      expect(attachFileToRequest.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores another member's yes to an attach offer", async () => {
+      const { attachFileToRequest, store, useCase, offer } = setupAttach();
+      offer(ATTACH_PHOTO);
+
+      expect(await useCase.execute({ ...input, requesterId: bob, text: "yes" })).toBe(false);
+
+      expect(attachFileToRequest.execute).not.toHaveBeenCalled();
+      expect(store.has(convId, alice, now)).toBe(true);
+    });
+
+    it("tells a late yes after a dropped attach offer to post the file again", async () => {
+      const { attachFileToRequest, sent, store, useCase, offer } = setupAttach();
+      offer(ATTACH_PHOTO);
+      store.drop(convId, alice, now);
+
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+
+      expect(sent).toEqual([`${NOTHING}\nTo add it, post the file again.`]);
+      expect(attachFileToRequest.execute).not.toHaveBeenCalled();
     });
   });
 
