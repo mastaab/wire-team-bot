@@ -4,7 +4,7 @@ A presenter's script for showing a truck manufacturer what an app built with the
 
 ## The story in one paragraph
 
-The manufacturer sells premium support with its trucks. Drivers, possibly in defence or other security-sensitive roles, talk in an end-to-end encrypted Wire channel. An app sits in that channel as a member: it notices when a driver has a question, a fault or a part to order, drafts the request, and sends it to the manufacturer's service desk only after the driver says yes. When the desk answers or changes the ticket, the update arrives in the channel as a reply to the conversation about it. The AI model runs locally on the presenter's laptop, so no conversation text goes to a cloud AI provider.
+The manufacturer sells premium support with its trucks. Drivers, possibly in defence or other security-sensitive roles, talk in an end-to-end encrypted Wire channel. An app sits in that channel as a member: it notices when a driver has a question, a fault or a part to order, drafts the request, and sends it to the manufacturer's service desk only after the driver says yes. When the desk answers or changes the ticket, the update arrives in the channel as a reply to the conversation about it. When an agent picks the request up, the app opens a private Wire conversation between the driver and that agent, hands it over and leaves. The AI model runs locally on the presenter's laptop, so no conversation text goes to a cloud AI provider.
 
 ## Key messages
 
@@ -12,6 +12,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 2. **AI helps; people decide.** The model classifies messages and drafts requests, but nothing leaves Wire without an explicit yes from the driver, and the bot shows the full text first.
 3. **Your systems, your data.** The app connects Wire to the tools the customer already runs (here Jira Service Management). It sends only what the driver confirmed, stores only short extracts, and can run the model on the customer's own infrastructure.
 4. **Two-way, not a form.** Desk replies and status changes come back into the conversation on their own, threaded under the ticket's earlier messages.
+5. **Apps organise conversations, not only take part in them.** The app creates a private group for the driver and the responsible agent, makes them its owners and steps out, so the personal contact is theirs alone.
 
 ## Before the demo
 
@@ -26,7 +27,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 **Cast.**
 - **Driver A** (presenter) in Wire, main screen.
 - **Driver B**, a second account in the same channel, to show that any member can follow and close requests.
-- **Desk agent** in Jira (browser, second screen or a colleague), logged into the DS service desk queue.
+- **Desk agent** in Jira (browser, second screen or a colleague), logged into the DS service desk queue, and signed in to Wire with the mapped account on a second screen, so the audience sees the private group arrive. The agent is not a member of the drivers' channel.
 
 **Ten minutes before.**
 - In a scratch channel with the app, `@<bot> status`: state active, no open support requests.
@@ -35,7 +36,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 
 `<bot>` stands for the app's display name in Wire (for example `STCO-Support-Demo`); the bot uses whatever name the app currently has.
 
-## Run of show (about 35 minutes)
+## Run of show (about 40 minutes)
 
 Timing assumes the local model, which takes around 10 to 20 seconds per answer. Fill the pause with the talking point for that step.
 
@@ -49,7 +50,7 @@ Then type `@<bot> timezone Europe/Berlin` and `@<bot> context: premium support f
 
 Say: this is a Wire App. It was added to the channel like a colleague, it sees messages because it is a member of the encrypted group, and the SDK gives it events (messages, members joining and leaving, the conversation being deleted) and ways to answer (text, replies, mentions, reactions).
 
-### 2. A fault, noticed without being asked, and the desk answers (8 min)
+### 2. A fault, noticed without being asked, and the desk picks it up (10 min)
 
 Type, without mentioning the bot: `the brake warning light on truck 12 came on this morning`
 
@@ -65,15 +66,17 @@ Follow the link to Jira and, as the desk agent, pick the ticket up there: point 
 
 Back in Wire, show: within about 30 seconds the channel gets "Contact with the responsible support agent (<name>) has been initiated", and the driver and the agent find a new group named after the ticket with the bot's introduction; the bot has made them both admins and left. Then the update arrives in the channel as a reply: "New reply from the service desk" with the reply, and "Now in progress." (changes made within one check arrive as one message). The internal note never appears.
 
-Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed. When an agent picks a request up, the app creates a private conversation for the two of them in the customer's own Wire team, hands it over and leaves: it is not recorded anywhere, and the agent did not have to be in the drivers' channel.
+Show the agent's Wire screen: the group named after the ticket (for example "DS-N The brake warning light on truck 12") with the bot's introduction: the agent has picked up the request, the two can talk here directly, the conversation is not recorded in the ticket, and the bot is leaving. The member list shows the driver and the agent, both admins, and no bot. Let the agent write one line there, for example "Hi, I'm on it. Are you safe to drive to the depot?", and the driver answer.
+
+Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed. When an agent picks a request up, the app creates a private conversation for the two of them in the customer's own Wire team, hands it over and leaves: the bot cannot read it, nothing of it is recorded, and the agent did not have to join the drivers' channel. Ticket updates keep coming in the channel, so the whole team stays informed.
 
 ### 3. The driver answers with a photo (3 min)
 
-The desk asked for a photo, so post one: any picture of a dashboard or an engine bay from the phone (never a real vehicle's plate or a person).
+The desk asked for a photo, so post one in the **channel** (not the private group): any picture of a dashboard or an engine bay from the phone (never a real vehicle's plate or a person).
 
 Show: the bot replies to the photo "Shall I add this photo to **DS-N** "Brake warning light on truck 12"?" and "(yes or no)?". Answer `yes`. It replies "Added the photo to **DS-N** in Jira." In Jira, the desk agent sees the photo on the ticket with a public reply "Photo from Wire, sent by <name>." The update check does not echo it back into the channel.
 
-Say: the app receives the file through the SDK, downloads and decrypts it as a member of the channel, and passes it to the desk only after the driver's yes. It is held in memory for the upload and never stored. A self-deleting photo is never forwarded, and the same works for documents such as a PDF delivery note.
+Say: the app receives the file through the SDK, downloads and decrypts it as a member of the channel, and passes it to the desk only after the driver's yes. It is held in memory for the upload and never stored. A self-deleting photo is never forwarded, and the same works for documents such as a PDF delivery note. In the private group, a photo simply goes to the agent in Wire; in the channel, the app files it on the ticket, where the whole desk sees it.
 
 ### 4. A part order, completed in conversation (5 min)
 
@@ -150,6 +153,7 @@ The integration with Jira and the local model are the app's own code: the SDK ha
 - **AI model:** in this demo a small open model runs locally (Ollama, Qwen 3.5 4B), so conversation text does not leave the laptop for AI processing. Any OpenAI-compatible endpoint works, including one hosted by the customer.
 - **Service desk:** only what a driver confirmed is sent (the request, a reply, a closing comment). Jira Cloud is used for the demo; for defence customers a customer-hosted tracker would be the production choice.
 - **What the app keeps:** short extracts (a request's summary, decisions and actions), not the raw conversation. Secure-mode periods are never used as context.
+- **Private groups:** created in the customer's own Wire team, with the driver and the agent as admins; the app leaves before anyone writes there, so it never sees that conversation. The app keeps only the time it opened the group, not the group's ID, and the ticket is not changed.
 
 ## Honest limits (say them before the audience finds them)
 
@@ -159,6 +163,8 @@ The integration with Jira and the local model are the app's own code: the SDK ha
 - No "typing" indicator while the model works: the SDK does not offer sending one yet.
 - Files are picked up only in conversations without Wire Cells: the SDK does not read Cells file messages yet.
 - Desk updates arrive within the check interval (30 seconds in the demo), not instantly.
+- For the demo, desk agents are mapped to Wire accounts in a setting; a production app would take this from the customer's directory. Driver and agent must be in the app's Wire team and have a signed-in Wire client.
+- One private group per request: reassigning the ticket to another agent does not open a second one. The private conversation is not part of the ticket, by design, so agents note outcomes in Jira themselves.
 
 ## If something goes wrong
 
@@ -166,10 +172,12 @@ The integration with Jira and the local model are the app's own code: the SDK ha
 - **An offer you did not want:** answer `no`; nothing is sent.
 - **The bot is silent:** wait 30 seconds (the local model can be slow), then try `@<bot> status`. Do not restart during the demo. The log shows errors without message content.
 - **A desk update does not appear:** check the change was public (not an internal note) and that the channel is not paused or in secure mode.
+- **No private group after assigning:** check that the ticket went to the mapped Jira account and that the agent's Wire account is in the app's team with a signed-in client, then wait for the next check (30 seconds). A ticket that was already assigned when the bot first saw it opens nothing; unassign it, wait for a check, and assign it again.
 - **SLA lines say "under a minute":** the SLA ran on a working-hours calendar; switch DS to the 24/7 calendar and use a fresh request.
 
 ## After the demo
 
 - Resolve the demo tickets in Jira (or from Wire with `@<bot> resolve DS-N`).
+- Delete the private demo groups from the driver's or agent's Wire client (both are admins; the bot has already left).
 - Remove the demo channel's records if the channel will be reused.
 - Note what the customer asked about in PLAN.md, section 6.
