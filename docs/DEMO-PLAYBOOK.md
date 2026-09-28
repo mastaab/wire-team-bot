@@ -19,6 +19,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 - Bot running from this checkout with `npm run build && npm start`; `.env` has Wire staging, Jira, `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types, the service scope and `WIRE_TEAM_BOT_JIRA_WATCH_SECONDS=30`. See README for the settings.
 - Ollama running with the local model (`qwen3.5-4b`) if you present the local-AI story; otherwise the chat slots point at the Claude API (faster and more fluent, but conversation text then goes to the API provider).
 - Jira DS project: SLAs on the 24/7 calendar, so SLA lines show real times at any hour. No open test requests left (open ones show breached SLAs after a few hours).
+- The demo channel must not use Wire Cells: the SDK cannot read Cells file messages yet, so the photo step would silently do nothing.
 - A fresh demo channel with Driver A and Driver B, without the app yet: you add it live in step 1, which shows its welcome. The welcome appears only in a channel without a saved purpose, so do not reuse a channel the app has been in.
 
 **Cast.**
@@ -153,6 +154,7 @@ The integration with Jira and the local model are the app's own code: the SDK ha
 - The local model is slow and its wording is sometimes rough; the facts it may state are fixed in code or prompt, and every write needs a yes. The Claude API is faster and more fluent when data policy allows.
 - Bot texts are English; it understands drivers in other languages.
 - No "typing" indicator while the model works: the SDK does not offer sending one yet.
+- Files are picked up only in conversations without Wire Cells: the SDK does not read Cells file messages yet.
 - Desk updates arrive within the check interval (30 seconds in the demo), not instantly.
 
 ## If something goes wrong
