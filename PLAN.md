@@ -1621,7 +1621,7 @@ This work lives on the `demo/jira` branch. It is a customer demo, not part of th
 
 A truck manufacturer offers the bot as premium support with its trucks. Drivers talk in an encrypted Wire channel; the bot turns their questions, fault reports and part orders into requests for the manufacturer's service desk, and nothing leaves Wire without a driver's yes. The demo runs with `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types mapped and the service scope set.
 
-The presenter's script, with the exact lines to type, the Jira steps, talking points, limits and fallbacks, is [docs/DEMO-PLAYBOOK.md](docs/DEMO-PLAYBOOK.md). The demo shows what an app built with the Wire Apps SDK makes possible for this use case; it is not a product offer.
+The presenter's script (playbook) is kept locally in the operator's checkout and is not part of the repository (operator, 2026-09-28). The demo shows what an app built with the Wire Apps SDK makes possible for this use case; it is not a product offer.
 
 The message for security-minded customers: the conversation stays in Wire; only what a driver confirms is sent to the service desk. For defence customers, see the security note under "Truck premium support".
 
