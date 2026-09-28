@@ -33,7 +33,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 
 `<bot>` stands for the app's display name in Wire (for example `STCO-Support-Demo`); the bot uses whatever name the app currently has.
 
-## Run of show (about 30 minutes)
+## Run of show (about 35 minutes)
 
 Timing assumes the local model, which takes around 10 to 20 seconds per answer. Fill the pause with the talking point for that step.
 
@@ -64,7 +64,15 @@ Back in Wire, show: within about 30 seconds the update arrives as a reply quotin
 
 Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed.
 
-### 3. A part order, completed in conversation (5 min)
+### 3. The driver answers with a photo (3 min)
+
+The desk asked for a photo, so post one: any picture of a dashboard or an engine bay from the phone (never a real vehicle's plate or a person).
+
+Show: the bot replies to the photo "Shall I add this photo to **DS-N** "Brake warning light on truck 12"?" and "(yes or no)?". Answer `yes`. It replies "Added the photo to **DS-N** in Jira." In Jira, the desk agent sees the photo on the ticket with a public reply "Photo from Wire, sent by <name>." The update check does not echo it back into the channel.
+
+Say: the app receives the file through the SDK, downloads and decrypts it as a member of the channel, and passes it to the desk only after the driver's yes. It is held in memory for the upload and never stored. A self-deleting photo is never forwarded, and the same works for documents such as a PDF delivery note.
+
+### 4. A part order, completed in conversation (5 min)
 
 Type: `we need a new left mirror for truck 7`
 
@@ -72,7 +80,7 @@ Show: the bot asks only for what is missing ("To order it I need the quantity an
 
 Say: the essentials are checked in code, not left to the model: the order cannot be sent until vehicle, part, quantity and delivery location are known, and every value must come from the driver's own words. A correction such as `actually three` updates the draft.
 
-### 4. A question for the desk (2 min)
+### 5. A question for the desk (2 min)
 
 Type: `how do I reset the AdBlue warning after a refill?`
 
@@ -80,7 +88,7 @@ Show: "Shall I ask the service desk?"; `yes` raises an "Ask a question" request.
 
 Say: three kinds of request, three queues for the desk, sorted by the AI and confirmed by the driver.
 
-### 5. Follow up in plain language (4 min)
+### 6. Follow up in plain language (4 min)
 
 As Driver B, type: `has anyone heard back about the brake light?`
 
@@ -92,7 +100,7 @@ Show: "Shall I add this to **DS-N** …?" with the text; `yes` sends it to the t
 
 Say: no ticket numbers or forms needed; the model matches the message to the right request, and still asks before sending.
 
-### 6. Close the loop (3 min)
+### 7. Close the loop (3 min)
 
 Type: `the brake light is fine now, please close it`
 
@@ -100,7 +108,7 @@ Show: the resolve offer with the closing remark as a comment; `yes` resolves the
 
 Alternatively resolve it in Jira as the desk agent and show "Resolved by the service desk." arriving in the channel.
 
-### 7. Off the record (3 min)
+### 8. Off the record (3 min)
 
 Type: `@<bot> secure mode`
 
@@ -110,7 +118,7 @@ Show: after resume, the held-back update about the part order arrives.
 
 Say: security-minded teams can switch the app off for part of a conversation, provably; Wire's encryption is unaffected and always on. `pause` is the lighter version: the bot steps out but still says it is standing by when mentioned.
 
-### 8. Optional: team memory (3 min)
+### 9. Optional: team memory (3 min)
 
 Type: `decision: truck 12 stays off the road until the brakes are checked` and `action: book the brake inspection for truck 12`
 
@@ -124,6 +132,7 @@ Say: the same app keeps decisions, actions and reminders for the team; support i
 |---|---|---|
 | The app in the channel, reading and replying | App membership of MLS-encrypted conversations; message events | Automation inside the secure channel, not beside it |
 | "Shall I …?" replies under the driver's message | Text messages with native replies (quotes) | Clear, threaded conversation |
+| A photo from the driver arriving on the Jira ticket | File messages received and decrypted by the app (`onAssetMessageReceived`, `downloadAsset`) | Evidence from the field reaches the desk without leaving the secure channel first |
 | Desk updates quoting the earlier ticket message | Replies to the app's own earlier messages | Each ticket reads as one thread |
 | The app's name and members' names in texts, @mentions | User profile lookup, mentions | Natural, correct addressing |
 | 📝 and ✅ | Reactions | Lightweight feedback without noise |
