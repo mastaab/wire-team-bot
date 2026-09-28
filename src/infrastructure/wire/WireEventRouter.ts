@@ -160,7 +160,8 @@ export class WireEventRouter extends WireEventsHandler {
   /**
    * The channel state as this process applies it. `blocked` is local only: processing stopped
    * because the durable state could not be read or written (fail-closed), or a state change is
-   * in progress. Unlike `paused`, it handles nothing but mentioned `resume` and `secure mode`.
+   * in progress. Unlike `paused`, it handles nothing but mentioned `resume`, `secure mode` and
+   * `pause`.
    */
   private readonly channelStateCache = new Map<string, "active" | "paused" | "secure" | "blocked">();
   /** True when the channel is a 1:1 DM (one non-bot member). Enables personal-mode retrieval scope. */
@@ -341,6 +342,11 @@ export class WireEventRouter extends WireEventsHandler {
       }
       if (this.matchesSecureCommand(commandLowered)) {
         await this.setChannelState(convId, channelId, "secure", sender.id, wireMessage.id, log);
+        return;
+      }
+      // A pause whose write failed must be retryable.
+      if (this.matchesPauseCommand(commandLowered)) {
+        await this.setChannelState(convId, channelId, "paused", sender.id, wireMessage.id, log);
         return;
       }
       await this.deps.wireOutbound.sendPlainText(
@@ -712,7 +718,7 @@ export class WireEventRouter extends WireEventsHandler {
     // decision: <summary>
     const decisionMatch = commandText.match(/^decision:\s*(.+)$/i);
     if (decisionMatch) {
-      const contextMessages = this.deps.messageBuffer.getLastN(convId, CONTEXT_WINDOW);
+      const contextMessages = mentionsOnly ? [] : this.deps.messageBuffer.getLastN(convId, CONTEXT_WINDOW);
       const participantIds = contextMessages.length
         ? [...new Map(contextMessages.map((m) => [m.senderId.id, m.senderId])).values()]
         : [sender];
@@ -1004,7 +1010,7 @@ export class WireEventRouter extends WireEventsHandler {
     log: Logger,
   ): Promise<void> {
     const now = new Date();
-    const prevState = this.channelStateCache.get(channelId) ?? "active";
+    const cachedState = this.channelStateCache.get(channelId) ?? "active";
     // Stop locally first. Resume only after the durable state write succeeds.
     this.channelStateCache.set(channelId, "blocked");
     this.deps.messageBuffer.clear(convId);
@@ -1017,6 +1023,9 @@ export class WireEventRouter extends WireEventsHandler {
         await this.deps.channelConfig.upsert({ channelId, organisationId: convId.domain,
           state: "paused", secureRanges: [], timezone: this.deps.defaultTimezone ?? "UTC", locale: "en" });
       }
+      // The stored state decides whether a secure range is open: after a failed write or read the
+      // cache only says "blocked".
+      const prevState = existing?.state ?? cachedState;
       await this.deps.channelConfig.setState(channelId, newState, actorId, now);
       if (newState === "secure") await this.deps.channelConfig.openSecureRange(channelId, now);
       else if (prevState === "secure") await this.deps.channelConfig.closeSecureRange(channelId, now);

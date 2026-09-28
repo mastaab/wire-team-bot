@@ -1687,6 +1687,46 @@ describe("WireEventRouter contract: pause means mentions only", () => {
     expect(deps.pendingOffers!.drop).toHaveBeenCalledWith(convId, sender);
     expect(deps.updateActionStatus.execute).not.toHaveBeenCalled();
   });
+
+  it("gives a mentioned record command no conversation context", async () => {
+    const deps = pausedDeps();
+    vi.mocked(deps.messageBuffer.getLastN).mockReturnValue([
+      { messageId: "old", senderId: other, senderName: "Bob", text: "EXCLUDED_MARKER", timestamp: new Date() },
+    ]);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("decision: use Postgres"));
+    expect(deps.logDecision.execute).toHaveBeenCalledWith(expect.objectContaining({ contextMessages: [], participantIds: [sender] }));
+  });
+
+  it("hands a mentioned yes to the pending offer without buffering", async () => {
+    const deps = pausedDeps(faultOffer, { handled: true });
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("yes"));
+    expect(deps.confirmOffer!.execute).toHaveBeenCalledWith(expect.objectContaining({ text: "yes", requesterId: sender }));
+    expectNothingKept(deps);
+  });
+
+  it("does not merge a message to the bot by name into a part-order draft; it may revise the offer", async () => {
+    const deps = pausedDeps(partDraft);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("@Wire Team Bot two, to depot north"));
+    expect(deps.completePartOrder!.execute).not.toHaveBeenCalled();
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ pendingOffer: partDraft, amendOnly: true, conversationContext: [] }));
+    expectNothingKept(deps);
+  });
+
+  it("sends details the part-order completion did not take to the answer path as a revision", async () => {
+    const deps = pausedDeps(partDraft);
+    vi.mocked(deps.completePartOrder!.execute).mockResolvedValue(false);
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("actually it is the left mirror"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalledWith(expect.objectContaining({ pendingOffer: partDraft, amendOnly: true }));
+    expectNothingKept(deps);
+  });
+
+  it("discards the requester's unmentioned message when the pending offer is a file offer", async () => {
+    const deps = pausedDeps({ kind: "attach", issueKey: "DS-4" });
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("nice weather today"));
+    expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+    expect(deps.completePartOrder!.execute).not.toHaveBeenCalled();
+    expectNothingKept(deps);
+  });
 });
 
 describe("WireEventRouter contract: local fail-closed block", () => {
@@ -1698,6 +1738,7 @@ describe("WireEventRouter contract: local fail-closed block", () => {
     expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
     expect(deps.wireOutbound.sendPlainText).toHaveBeenCalledWith(convId, expect.stringContaining("standing by"), expect.anything());
     expect(deps.messageBuffer.push).not.toHaveBeenCalled();
+    expect(deps.slidingWindow.push).not.toHaveBeenCalled();
   });
 
   it("does not answer mentions after a failed secure mode write", async () => {
@@ -1709,5 +1750,50 @@ describe("WireEventRouter contract: local fail-closed block", () => {
     await router.onTextMessageReceived(customMention("what did we decide?"));
     expect(deps.logDecision.execute).not.toHaveBeenCalled();
     expect(deps.answerQuestion.execute).not.toHaveBeenCalled();
+  });
+
+  const blockedDeps = () => {
+    const deps = makeDeps({ processingQueue: { enqueue: vi.fn(), cancelChannel: vi.fn() }, pipeline: {} } as unknown as Partial<WireEventRouterDeps>);
+    vi.mocked(deps.channelConfig.get).mockRejectedValueOnce(new Error("DB down"));
+    return deps;
+  };
+
+  it("ignores unmentioned messages while blocked", async () => {
+    const deps = blockedDeps();
+    await new WireEventRouter(deps).onTextMessageReceived(makeMessage("decision: EXCLUDED_MARKER"));
+    expect(deps.logDecision.execute).not.toHaveBeenCalled();
+    expect(deps.messageBuffer.push).not.toHaveBeenCalled();
+    expect(deps.processingQueue!.enqueue).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.sendPlainText).not.toHaveBeenCalled();
+  });
+
+  it("returns to normal handling after a successful resume", async () => {
+    const deps = blockedDeps();
+    const router = new WireEventRouter(deps);
+    await router.onTextMessageReceived(customMention("resume"));
+    expect(deps.channelConfig.setState).toHaveBeenCalledWith("conv-1@wire.com", "active", sender.id, expect.any(Date));
+    await router.onTextMessageReceived(makeMessage("decision: use Postgres"));
+    expect(deps.logDecision.execute).toHaveBeenCalled();
+  });
+
+  it("lets a pause whose write failed be retried", async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.channelConfig.setState).mockRejectedValueOnce(new Error("DB down"));
+    const router = new WireEventRouter(deps);
+    await router.onTextMessageReceived(customMention("pause"));
+    await router.onTextMessageReceived(customMention("pause"));
+    expect(deps.channelConfig.setState).toHaveBeenCalledTimes(2);
+    expect(deps.channelConfig.setState).toHaveBeenLastCalledWith("conv-1@wire.com", "paused", sender.id, expect.any(Date));
+    await router.onTextMessageReceived(customMention("what did we decide?"));
+    expect(deps.answerQuestion.execute).toHaveBeenCalled();
+  });
+
+  it("closes the stored secure range on resume even when the cache only says blocked", async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.channelConfig.get)
+      .mockRejectedValueOnce(new Error("DB down"))
+      .mockResolvedValue({ state: "secure", secureRanges: [], timezone: "UTC", locale: "en", organisationId: "wire.com", channelId: "conv-1@wire.com" } as never);
+    await new WireEventRouter(deps).onTextMessageReceived(customMention("resume"));
+    expect(deps.channelConfig.closeSecureRange).toHaveBeenCalledWith("conv-1@wire.com", expect.any(Date));
   });
 });
