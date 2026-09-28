@@ -15,6 +15,9 @@ function setup() {
     createGroupConversation: vi.fn().mockResolvedValue(group),
     updateConversationMemberRole: vi.fn().mockResolvedValue(undefined),
     leaveConversation: vi.fn().mockResolvedValue(undefined),
+    deleteConversation: vi.fn().mockResolvedValue(undefined),
+    getMembersInConversation: vi.fn().mockResolvedValue([{ userId: driver }, { userId: { id: "app", domain: "staging.zinfra.io" } }]),
+    getAllConversations: vi.fn().mockResolvedValue([]),
   };
   const created = new CreatedConversations();
   const adapter = createWireConversationAdapter({ current: { manager: manager as never } }, "staging.zinfra.io", created);
@@ -49,6 +52,27 @@ describe("WireConversationAdapter contract", () => {
     await adapter.createGroup("DS-25", [driver]);
     await expect(adapter.leave(group)).rejects.toThrow("offline");
     expect(created.has(group)).toBe(true);
+  });
+
+  it("removes a group again when a member could not be added, and fails", async () => {
+    const { manager, adapter } = setup();
+    manager.getMembersInConversation.mockResolvedValue([{ userId: { id: "app", domain: "staging.zinfra.io" } }]);
+    await expect(adapter.createGroup("DS-25", [driver])).rejects.toThrow("Not every member could be added");
+    expect(manager.deleteConversation).toHaveBeenCalledWith(expect.objectContaining(group));
+  });
+
+  it("does not trust a silent leave: still listed means not left", async () => {
+    const { manager, created, adapter } = setup();
+    await adapter.createGroup("DS-25", [driver]);
+    manager.getAllConversations.mockResolvedValue([group]);
+    await expect(adapter.leave(group)).rejects.toThrow("still in the conversation");
+    expect(created.has(group)).toBe(true);
+  });
+
+  it("ignores a matching handle on another domain", async () => {
+    const { manager, adapter } = setup();
+    manager.searchUsers.mockResolvedValue([{ id: { id: "x", domain: "other.example" }, name: "Harvey", handle: "harveywolff" }]);
+    expect(await adapter.findUserByHandle("harveywolff")).toBeNull();
   });
 
   it("fails plainly without a connection", async () => {

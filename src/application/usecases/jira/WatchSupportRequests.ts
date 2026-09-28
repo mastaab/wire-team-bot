@@ -185,11 +185,12 @@ export class WatchSupportRequests {
     const timeZone = await this.activeTimeZone(request);
     if (!timeZone) return "pending";
 
-    // First sight of this request: take a baseline of replies, status and assignee so nothing old is announced.
+    // First sight of this request: take a baseline of replies and status so nothing old is announced.
     const baseline = !request.lastSeenReplyAt;
+    // The assignee has its own baseline: rows from before the assignee was stored have replies seen.
+    const assigneeBaseline = !request.assigneeSeenAt;
     const assignee = change.assigneeAccountId ?? null;
     const assigneeChanged = assignee !== (request.assigneeAccountId ?? null);
-    if (baseline || assigneeChanged) await this.storeAssignee(request.key, assignee);
 
     const replies = await this.tracker.listCustomerReplies(request.key, REPLIES_READ);
     const newest = newestReplyTime(replies);
@@ -217,10 +218,17 @@ export class WatchSupportRequests {
 
     // A newly assigned mapped agent gets the direct conversation, once, before the other update.
     let lastMessage = request.lastMessage;
+    let openFailed = false;
     const agentHandle = assignee !== null ? this.guards.agents?.handles.get(assignee) : undefined;
-    if (!baseline && assigneeChanged && agentHandle && status !== "done" && !request.agentConversationAt) {
-      lastMessage = await this.openAgentConversation(request, agentHandle);
+    if (!assigneeBaseline && assigneeChanged && agentHandle && status !== "done" && !request.agentConversationAt) {
+      // Checked again: a pause, secure or resolve may have started during the reads.
+      if (this.guards.writes?.has(request.key) || !(await this.activeTimeZone(request))) return "pending";
+      const opened = await this.openAgentConversation(request, agentHandle);
+      lastMessage = opened.lastMessage;
+      openFailed = opened.failed;
     }
+    // Stored only now, and not after a failed open, so a failed read or open is retried with the change.
+    if ((assigneeBaseline || assigneeChanged) && !openFailed) await this.storeAssignee(request.key, assignee);
 
     const statusLines = baseline ? [] : statusChangeLines(request.statusCategory, status, snapshot);
     const announce = statusLines.length > 0 || newReplies.length > 0;
@@ -261,6 +269,7 @@ export class WatchSupportRequests {
         this.logger?.warn("WatchSupportRequests: advanceLastSeenReplyAt failed", { key: request.key, ...trackerErrorFields(err) });
       }
     }
+    if (openFailed) return "failed";
     return announce ? "announced" : "silent";
   }
 
@@ -280,20 +289,20 @@ export class WatchSupportRequests {
    */
   private async openAgentConversation(
     request: SupportRequest, agentHandle: string,
-  ): Promise<SupportRequest["lastMessage"]> {
+  ): Promise<{ lastMessage: SupportRequest["lastMessage"]; failed: boolean }> {
     let outcome;
     try {
       outcome = await this.guards.agents!.open.execute({ request, agentHandle });
     } catch (err) {
       this.logger?.warn("WatchSupportRequests: opening the agent conversation failed", { key: request.key, ...trackerErrorFields(err) });
-      return request.lastMessage;
+      return { lastMessage: request.lastMessage, failed: true };
     }
-    if (outcome !== "opened") return request.lastMessage;
+    if (outcome !== "opened") return { lastMessage: request.lastMessage, failed: outcome === "failed" };
     try {
-      return (await this.requests.findByKey(request.key))?.lastMessage ?? request.lastMessage;
+      return { lastMessage: (await this.requests.findByKey(request.key))?.lastMessage ?? request.lastMessage, failed: false };
     } catch (err) {
       this.logger?.warn("WatchSupportRequests: re-reading after the agent conversation failed", { key: request.key, ...trackerErrorFields(err) });
-      return request.lastMessage;
+      return { lastMessage: request.lastMessage, failed: false };
     }
   }
 

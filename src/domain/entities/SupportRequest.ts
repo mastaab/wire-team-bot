@@ -66,6 +66,8 @@ export interface SupportRequest {
   lastMessageAt?: Date;
   /** Tracker account ID of the assignee last seen by the watch; absent when unassigned or not yet seen. */
   assigneeAccountId?: string;
+  /** When the watch first stored the assignee (even "unassigned"); absent: not yet seen, so the next check only takes a baseline. */
+  assigneeSeenAt?: Date;
   /** When the bot opened the direct conversation between requester and agent; at most once. */
   agentConversationAt?: Date;
 }

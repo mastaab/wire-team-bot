@@ -7,6 +7,8 @@ import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { rememberLastMessage } from "./supportRequestMarkers";
 import { appendAuditSafely, botActor } from "./supportRequestStatus";
+import type { ChannelConfigRepository } from "../../../domain/repositories/ChannelConfigRepository";
+import { toChannelId } from "../../../domain/ids/channelId";
 
 const SOURCE = "OpenAgentConversation";
 
@@ -34,6 +36,9 @@ export type OpenAgentConversationOutcome = "opened" | "skipped" | "failed";
  * before the group exists is "failed" and releases nothing (the claim stays, so it is not
  * retried in a loop); logs carry error names and the key only.
  */
+/** Attempts to leave a created group before it is marked paused instead. */
+const LEAVE_ATTEMPTS = 3;
+
 export class OpenAgentConversation {
   constructor(
     private readonly requests: SupportRequestRepository,
@@ -42,6 +47,8 @@ export class OpenAgentConversation {
     private readonly auditLog: AuditLogRepository,
     private readonly logger?: Logger,
     private readonly now: () => Date = () => new Date(),
+    /** Marks a group the app could not leave as paused, so it is ignored even after a restart. */
+    private readonly channels?: ChannelConfigRepository,
   ) {}
 
   async execute(input: OpenAgentConversationInput): Promise<OpenAgentConversationOutcome> {
@@ -100,11 +107,7 @@ export class OpenAgentConversation {
         this.logger?.warn(`${SOURCE}: making the ${role} an admin failed`, { key, err: errorName(err) });
       }
     }
-    try {
-      await this.conversations.leave(groupId);
-    } catch (err) {
-      this.logger?.error(`${SOURCE}: leaving the group failed`, { key, err: errorName(err) });
-    }
+    await this.leaveOrStandBy(groupId, key);
 
     const requesterName = request.requesterName.trim() || "the requester";
     const agentPart = agentName ? ` (${agentName})` : "";
@@ -129,6 +132,32 @@ export class OpenAgentConversation {
       details: { agentConversation: "opened" },
     }, SOURCE, this.logger);
     return "opened";
+  }
+
+  /**
+   * Leaves the group, trying up to `LEAVE_ATTEMPTS` times. If the app is still a member after
+   * that, the group is marked paused in the channel configuration, so the bot records and offers
+   * nothing there, even after a restart; the failure is logged by error name.
+   */
+  private async leaveOrStandBy(groupId: QualifiedId, key: string): Promise<void> {
+    let last: unknown;
+    for (let attempt = 0; attempt < LEAVE_ATTEMPTS; attempt++) {
+      try {
+        await this.conversations.leave(groupId);
+        return;
+      } catch (err) {
+        last = err;
+      }
+    }
+    this.logger?.error(`${SOURCE}: leaving the group failed; it is marked paused`, { key, err: errorName(last) });
+    try {
+      await this.channels?.upsert({
+        channelId: toChannelId(groupId), organisationId: groupId.domain, state: "paused",
+        secureRanges: [], timezone: "UTC", locale: "en",
+      });
+    } catch (err) {
+      this.logger?.error(`${SOURCE}: marking the group paused failed`, { key, err: errorName(err) });
+    }
   }
 }
 

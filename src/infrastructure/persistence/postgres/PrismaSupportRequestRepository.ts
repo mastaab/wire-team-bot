@@ -101,6 +101,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
 
   async setAssignee(key: string, accountId: string | null): Promise<void> {
     await this.prisma.supportRequest.updateMany({ where: { key }, data: { assigneeAccountId: accountId } });
+    await this.prisma.supportRequest.updateMany({ where: { key, assigneeSeenAt: null }, data: { assigneeSeenAt: new Date() } });
   }
 
   async markAgentConversation(key: string, at: Date): Promise<boolean> {
@@ -137,6 +138,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     lastMessageSha256: string | null;
     lastMessageAt: Date | null;
     assigneeAccountId: string | null;
+    assigneeSeenAt: Date | null;
     agentConversationAt: Date | null;
   }): SupportRequest {
     return {
@@ -157,6 +159,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
         : {}),
       ...(row.lastMessageAt ? { lastMessageAt: row.lastMessageAt } : {}),
       ...(row.assigneeAccountId ? { assigneeAccountId: row.assigneeAccountId } : {}),
+      ...(row.assigneeSeenAt ? { assigneeSeenAt: row.assigneeSeenAt } : {}),
       ...(row.agentConversationAt ? { agentConversationAt: row.agentConversationAt } : {}),
     };
   }

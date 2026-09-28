@@ -33,13 +33,13 @@ export interface SupportRequestRepository {
    * only when it is absent or earlier than `at`, so it never moves back.
    */
   advanceLastSeenReplyAt(key: string, at: Date): Promise<void>;
-  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. Also stamps `lastMessageAt` with the current time. */
-  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. Null clears it. */
+  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. Null clears it; also stamps `assigneeSeenAt` once. */
   setAssignee(key: string, accountId: string | null): Promise<void>;
   /**
    * Sets `agentConversationAt` only when it is not set yet; true when this call set it, so two
    * checks can never open two conversations for one request.
    */
   markAgentConversation(key: string, at: Date): Promise<boolean>;
+  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. Also stamps `lastMessageAt` with the current time. */
   setLastMessage(key: string, ref: { messageId: string; sha256: string }): Promise<void>;
 }

@@ -238,6 +238,7 @@ export function createContainer(config: Config, logger: Logger): Container {
   const openAgentConversation = supportRequestsRepo && agentHandles
     ? new OpenAgentConversation(
       supportRequestsRepo, createWireConversationAdapter(handlerRef, config.wire.appDomain, createdConversations), wireOutbound, auditLogRepo, logger,
+      undefined, channelConfigRepo,
     )
     : undefined;
   const watchSupportRequests = issueTracker && supportRequestsRepo && config.jira?.watchSeconds

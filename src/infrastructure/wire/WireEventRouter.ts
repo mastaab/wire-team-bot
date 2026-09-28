@@ -1313,6 +1313,7 @@ export class WireEventRouter extends WireEventsHandler {
   }
 
   async onUserJoinedConversation(conversationId: QualifiedId, members: ConversationMember[]): Promise<void> {
+    if (this.deps.createdConversations?.has(conversationId)) return;
     this.deps.memberCache.addMembers(conversationId as QualifiedId, members.map((m) => ({
       userId: m.userId as QualifiedId,
       role: toCachedRole(m.role),

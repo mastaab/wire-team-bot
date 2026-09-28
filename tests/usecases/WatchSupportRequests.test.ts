@@ -600,7 +600,12 @@ describe("WatchSupportRequests: direct conversation with the desk agent", () => 
     ({ ...change(key, statusCategory, updated), ...(assigneeAccountId ? { assigneeAccountId } : {}) });
 
   /** Guards with a mapped agent and a mocked use case; the records follow the bookkeeping writes. */
-  function agentSetup(records: SupportRequest[], options: { channels?: ReturnType<typeof makeChannels>; now?: () => Date } = {}) {
+  function agentSetup(
+    records: SupportRequest[],
+    options: { channels?: ReturnType<typeof makeChannels>; now?: () => Date; assigneeUnseen?: boolean } = {},
+  ) {
+    // A watched record has had its assignee seen before, unless a test says otherwise.
+    if (!options.assigneeUnseen) for (const r of records) if (r.lastSeenReplyAt && !r.assigneeSeenAt) r.assigneeSeenAt = SEEN;
     const open = {
       execute: vi.fn(async (input: OpenAgentConversationInput): Promise<OpenAgentConversationOutcome> => {
         const found = records.find((r) => r.key === input.request.key)!;
@@ -615,10 +620,51 @@ describe("WatchSupportRequests: direct conversation with the desk agent", () => 
     const ctx = setup(records, { ...options, guards });
     ctx.requests.setAssignee.mockImplementation(async (key: string, accountId: string | null) => {
       const found = records.find((r) => r.key === key);
-      if (found) found.assigneeAccountId = accountId ?? undefined;
+      if (found) {
+        found.assigneeAccountId = accountId ?? undefined;
+        found.assigneeSeenAt ??= T0;
+      }
     });
     return { ...ctx, open };
   }
+
+  it("takes an assignee baseline for records from before the assignee was stored, even with replies seen", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched()], { assigneeUnseen: true });
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    await watcher.check();
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not store the new assignee when a read fails, so the next check still opens", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    tracker.listCustomerReplies.mockRejectedValueOnce(new Error("timeout"));
+    await watcher.check();
+    expect(requests.setAssignee).not.toHaveBeenCalled();
+    await watcher.check();
+    expect(open.execute).toHaveBeenCalledTimes(1);
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+  });
+
+  it("keeps the assignee unstored after a failed open and retries it", async () => {
+    const { watcher, tracker, requests, open } = agentSetup([watched()]);
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    open.execute.mockResolvedValueOnce("failed");
+    expect((await watcher.check()).pending).toBe(1);
+    expect(requests.setAssignee).not.toHaveBeenCalled();
+    await watcher.check();
+    expect(open.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not open when the channel was paused during the reads", async () => {
+    const channels = makeChannels();
+    const { watcher, tracker, open } = agentSetup([watched()], { channels });
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);
+    tracker.listCustomerReplies.mockImplementationOnce(async () => { setState(channels, "paused"); return []; });
+    expect((await watcher.check()).pending).toBe(1);
+    expect(open.execute).not.toHaveBeenCalled();
+  });
 
   it("stores the assignee on first sight without opening anything", async () => {
     const { watcher, tracker, requests, open } = agentSetup([makeRequest()]);
@@ -731,7 +777,8 @@ describe("WatchSupportRequests: direct conversation with the desk agent", () => 
     open.execute.mockRejectedValue(new Error("boom"));
     tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "in_progress", T0, AGENT)]);
     tracker.listCustomerReplies.mockResolvedValue([reply("Dana", "2026-09-26T09:30:00Z", "Looking into it.")]);
-    expect(await watcher.check()).toEqual({ announced: 1, pending: 0 });
+    // The update is posted; the request stays pending so opening is retried at the next check.
+    expect(await watcher.check()).toEqual({ announced: 0, pending: 1 });
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain("Now in progress.");
     expect(sent[0]).toContain("Looking into it.");

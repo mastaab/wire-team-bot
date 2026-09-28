@@ -271,3 +271,30 @@ describe("OpenAgentConversation: failures", () => {
     expectNoPrivateData(loggedText(logger));
   });
 });
+
+describe("OpenAgentConversation: leaving", () => {
+  it("tries to leave three times, then marks the group paused so it is ignored after a restart", async () => {
+    const request = makeRequest({ lastSeenReplyAt: T0, lastMessage: LAST_MESSAGE });
+    const conversations = makeConversations({ id: agentId, name: AGENT_NAME });
+    conversations.leave.mockRejectedValue(new Error("still there"));
+    const channels = { upsert: vi.fn().mockResolvedValue(undefined) };
+    const { wire } = makeWire();
+    const useCase = new OpenAgentConversation(makeRequests([request]), conversations, wire, makeAudit(), makeLogger(), () => T0, channels as never);
+
+    expect(await useCase.execute({ request, agentHandle: "petra.desk" })).toBe("opened");
+
+    expect(conversations.leave).toHaveBeenCalledTimes(3);
+    expect(channels.upsert).toHaveBeenCalledWith(expect.objectContaining({ channelId: `${groupId.id}@${groupId.domain}`, state: "paused" }));
+  });
+
+  it("does not mark anything when leaving succeeds on a retry", async () => {
+    const request = makeRequest({ lastSeenReplyAt: T0, lastMessage: LAST_MESSAGE });
+    const conversations = makeConversations({ id: agentId, name: AGENT_NAME });
+    conversations.leave.mockRejectedValueOnce(new Error("busy"));
+    const channels = { upsert: vi.fn() };
+    const useCase = new OpenAgentConversation(makeRequests([request]), conversations, makeWire().wire, makeAudit(), makeLogger(), () => T0, channels as never);
+    await useCase.execute({ request, agentHandle: "petra.desk" });
+    expect(conversations.leave).toHaveBeenCalledTimes(2);
+    expect(channels.upsert).not.toHaveBeenCalled();
+  });
+});
