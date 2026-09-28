@@ -34,6 +34,33 @@ describe("parseOfferMarker", () => {
     expect(parseOfferMarker(marker({ kind: "reply", issueKey: "DS-4", body })).command).toEqual({ kind: "reply", issueKey: "DS-4", body });
   });
 
+  it.each([
+    ["bold prefix", (json: string) => `**OFFER**: ${json}`],
+    ["bold prefix with colon", (json: string) => `**OFFER:** ${json}`],
+    ["whole line in code marks", (json: string) => `\`OFFER: ${json}\``],
+    ["code prefix", (json: string) => `\`OFFER:\` ${json}`],
+    ["list bullet", (json: string) => `- OFFER: ${json}`],
+    ["code fence", (json: string) => `\`\`\`json\nOFFER: ${json}\n\`\`\``],
+  ])("honours and hides a marker with Markdown decoration: %s", (_label, decorate) => {
+    const json = JSON.stringify({ kind: "support", requestKind: "fault", summary: "Brakes squeal", description: "The brakes on truck 12 squeal" });
+    expect(parseOfferMarker(`I can raise that.\n\n${decorate(json)}\n`)).toEqual({
+      text: "I can raise that.",
+      command: { kind: "support", requestKind: "fault", summary: "Brakes squeal", description: "The brakes on truck 12 squeal" },
+      hadMarker: true,
+    });
+  });
+
+  it("hides a decorated marker in the middle of the answer without honouring it", () => {
+    const json = JSON.stringify({ kind: "support", summary: "Brakes squeal", description: "Squeal" });
+    expect(parseOfferMarker(`Before.\n**OFFER**: ${json}\nAfter.`)).toEqual({ text: "Before.\nAfter.", command: null, hadMarker: true });
+  });
+
+  it("does not take prose that starts with a capitalised Offer for a marker", () => {
+    expect(parseOfferMarker("Offer: I can raise this with the service desk.")).toEqual({
+      text: "Offer: I can raise this with the service desk.", command: null, hadMarker: false,
+    });
+  });
+
   it("ignores trailing blank lines after the marker", () => {
     expect(parseOfferMarker(`ok\n${marker({ kind: "resolve", issueKey: "DS-1" })}\n\n  \n`).command).toEqual({ kind: "resolve", issueKey: "DS-1" });
   });

@@ -23,7 +23,7 @@ import type { GeneralAnswerService, ConversationMemberContext } from "../../appl
 import type { RetrievalResult } from "../../application/ports/RetrievalPort";
 import type { LLMClientFactory } from "./LLMClientFactory";
 import type { Logger } from "../../application/ports/Logger";
-import { OFFER_MARKER_PREFIX } from "../../application/services/offers";
+import { offerMarkerRest } from "../../application/services/offers";
 
 const SYSTEM_PROMPT = `You are Wire Team Bot, a capable and discreet team assistant embedded in Wire, a secure messaging platform. You are British, professional, and direct — no fuss, no small talk.
 
@@ -141,7 +141,7 @@ function stripKeepingMarker(text: string): string {
   const lines = text.split(/\r?\n/);
   let last = lines.length - 1;
   while (last >= 0 && !lines[last]!.trim()) last--;
-  if (last < 0 || !lines[last]!.trim().startsWith(OFFER_MARKER_PREFIX)) return stripTrailingOffer(text);
+  if (last < 0 || offerMarkerRest(lines[last]!) === null) return stripTrailingOffer(text);
   const marker = lines[last]!.trim();
   let body = lines.slice(0, last).join("\n").trim();
   // Only the final sentence is dropped, keeping earlier text and its line breaks.

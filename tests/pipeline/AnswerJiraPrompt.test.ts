@@ -182,6 +182,13 @@ describe("OpenAIGeneralAnswerAdapter with support requests and offers", () => {
     expect(user).not.toContain("## Live support request tickets");
   });
 
+  it("keeps a bold marker line and strips the offer question before it", async () => {
+    const { adapter } = setup(`Shall I raise this with the service desk?\n**OFFER**: ${support.slice("OFFER: ".length)}`);
+    const returned = await adapter.answer("My VPN drops every ten minutes, can you raise it?", [], [], [], undefined, 0.5);
+    expect(returned).toBe(`**OFFER**: ${support.slice("OFFER: ".length)}`);
+    expect(parseOfferMarker(returned).command).toEqual({ kind: "support", requestKind: "fault", summary: "VPN drops", description: "My VPN drops every ten minutes." });
+  });
+
   it("keeps a final marker line intact after text", async () => {
     const answer = `I can raise that with the service desk.\n${support}`;
     const { llm, adapter } = setup(answer);

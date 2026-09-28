@@ -29,6 +29,21 @@ export const OFFER_DESCRIPTION_MAX = 1000;
 /** The single line the answer model may end with. Everything after the prefix is JSON. */
 export const OFFER_MARKER_PREFIX = "OFFER:";
 
+/**
+ * A marker line as the model may decorate it: Markdown emphasis or code marks around the prefix
+ * (`**OFFER**:`, `**OFFER:**`, `` `OFFER: {…}` ``) or a list bullet before it. The prefix must be
+ * upper case, so prose such as "Offer: …" is never taken for a marker.
+ */
+const MARKER_LINE = /^(?:[-*+>]\s+)?[*_`]*OFFER[*_`]*\s*:[*_`]*\s*(.*)$/;
+/** A Markdown code fence line, which the model may put around the marker. */
+const FENCE_LINE = /^```[\w-]*$/;
+
+/** The rest of the line after the marker prefix (the start of its JSON), or null when the line is no marker. */
+export function offerMarkerRest(line: string): string | null {
+  const match = MARKER_LINE.exec(line.trim());
+  return match ? match[1]! : null;
+}
+
 export interface ParsedAnswer {
   /** The answer with every marker line removed. */
   text: string;
@@ -51,16 +66,19 @@ export function parseOfferMarker(answer: string): ParsedAnswer {
   let command: OfferCommand | null = null;
   let hadMarker = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!.trim();
-    if (!line.startsWith(OFFER_MARKER_PREFIX)) {
+    const rest = offerMarkerRest(lines[i]!);
+    if (rest === null) {
       kept.push(lines[i]!);
       continue;
     }
     hadMarker = true;
-    const block = [line.slice(OFFER_MARKER_PREFIX.length)];
+    const block = [rest];
     // JSON strings cannot contain raw line breaks, so a continuation line of the marker starts
     // with a structural character or a quote.
     while (i + 1 < lines.length && /^[{}[\]",:]/.test(lines[i + 1]!.trim())) block.push(lines[++i]!);
+    // A code fence around the marker belongs to it and is removed with it.
+    if (kept.length > 0 && FENCE_LINE.test(kept[kept.length - 1]!.trim())) kept.pop();
+    if (i + 1 < lines.length && FENCE_LINE.test(lines[i + 1]!.trim())) i++;
     const endsAnswer = lines.slice(i + 1).every((rest) => !rest.trim());
     command = endsAnswer ? toCommand(block.join("\n")) : null;
   }
@@ -70,7 +88,8 @@ export function parseOfferMarker(answer: string): ParsedAnswer {
 function toCommand(json: string): OfferCommand | null {
   let value: unknown;
   try {
-    value = JSON.parse(json.trim());
+    // Emphasis or code marks closing a decorated marker line (`` `OFFER: {…}` ``).
+    value = JSON.parse(json.trim().replace(/[*_`]+$/, ""));
   } catch {
     return null;
   }
