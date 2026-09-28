@@ -140,6 +140,16 @@ function truncateSummary(summary: string): string {
   return text.length <= SUMMARY_MAX_LENGTH ? text : `${text.slice(0, SUMMARY_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+/**
+ * A file name safe to send: path separators and control characters removed, trimmed, and
+ * "attachment" when nothing is left.
+ */
+function sanitiseFileName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = name.replace(/[\\/\u0000-\u001f\u007f-\u009f]/g, "").trim();
+  return cleaned || "attachment";
+}
+
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class JiraServiceManagementAdapter implements IssueTrackerPort {
@@ -305,8 +315,36 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
     return changes;
   }
 
-  async addCustomerAttachment(_key: string, _file: AttachmentFile, _comment: string): Promise<void> {
-    throw new Error("JiraServiceManagementAdapter.addCustomerAttachment is not implemented yet");
+  /**
+   * Uploads the file as a temporary attachment to the service desk, then attaches it to the
+   * request with a public comment. Neither step is retried: after a timeout or a server error
+   * Jira may already have stored the file, so the error is reported instead.
+   */
+  async addCustomerAttachment(key: string, file: AttachmentFile, comment: string): Promise<void> {
+    this.assertInProject(key);
+    const form = new FormData();
+    // Copied into a plain ArrayBuffer view, since Blob does not accept a shared buffer.
+    form.append("file", new Blob([new Uint8Array(file.data)], { type: file.mimeType }), sanitiseFileName(file.name));
+    const uploaded = await this.request<{ temporaryAttachments?: Array<{ temporaryAttachmentId?: unknown }> }>(
+      "POST",
+      `/rest/servicedeskapi/servicedesk/${this.config.serviceDeskId}/attachTemporaryFile`,
+      form,
+      false,
+      { "X-Atlassian-Token": "no-check", "X-ExperimentalApi": "opt-in" },
+    );
+    const temporaries = uploaded.data?.temporaryAttachments;
+    const id = Array.isArray(temporaries) ? temporaries[0]?.temporaryAttachmentId : undefined;
+    if (typeof id !== "string" || !id.trim()) {
+      throw new IssueTrackerError("Jira returned an unexpected response", uploaded.status);
+    }
+    await this.request(
+      "POST",
+      `/rest/servicedeskapi/request/${key}/attachment`,
+      // The service account is an agent: send the public flag explicitly, as for replies.
+      { temporaryAttachmentIds: [id], public: true, additionalComment: { body: comment } },
+      false,
+      { "X-ExperimentalApi": "opt-in" },
+    );
   }
 
   async listCustomerReplies(key: string, limit: number): Promise<IssueReply[]> {
@@ -403,14 +441,26 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
     return `${this.config.siteUrl}/browse/${key}`;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, allowNotFound = false): Promise<JiraResponse<T>> {
+  /**
+   * One Jira call. A FormData body is sent as multipart without an explicit Content-Type, so
+   * fetch sets the boundary; any other body is sent as JSON.
+   */
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    allowNotFound = false,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<JiraResponse<T>> {
     const headers: Record<string, string> = {
       Authorization: this.authorization,
       Accept: "application/json",
       // Without an explicit language Jira localises status names for this account.
       "Accept-Language": "en-GB",
+      ...extraHeaders,
     };
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const isForm = body instanceof FormData;
+    if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
@@ -419,7 +469,7 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
       try {
         res = await fetch(`${this.config.baseUrl}${path}`, {
           method, headers, signal: controller.signal,
-          body: body === undefined ? undefined : JSON.stringify(body),
+          body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
         });
       } catch (err) {
         throw this.transportError(err);

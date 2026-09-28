@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { JiraServiceManagementAdapter } from "../../src/infrastructure/jira/JiraServiceManagementAdapter";
+import { IssueTrackerError } from "../../src/application/ports/IssueTrackerPort";
 import type { JiraConfig } from "../../src/app/config";
 
 const BASE = "https://api.test/ex/jira/cloud";
@@ -585,6 +586,147 @@ describe("JiraServiceManagementAdapter.listChangedSince", () => {
     expect((error as Error).message).toBe("Jira request failed (500)");
     expect((error as Error).name).toBe("IssueTrackerError");
     expect(JSON.stringify([error, log.warn.mock.calls, log.error.mock.calls])).not.toContain(MARKER);
+  });
+});
+
+describe("JiraServiceManagementAdapter.addCustomerAttachment", () => {
+  const UPLOAD = "POST /rest/servicedeskapi/servicedesk/184/attachTemporaryFile";
+  const ATTACH = "POST /rest/servicedeskapi/request/DS-1/attachment";
+  const BYTES = new TextEncoder().encode(`image bytes ${MARKER}`);
+  const photo = (name = `brake-${MARKER}.jpg`) => ({ name, mimeType: "image/jpeg", data: BYTES });
+  const uploaded = (id: unknown = "temp-1") => json({ temporaryAttachments: [{ temporaryAttachmentId: id, fileName: "brake.jpg" }] }, 201);
+  const sentFile = (fetch: ReturnType<typeof stubJira>) => (fetch.mock.calls[0][1].body as FormData).get("file") as File;
+  const allLogs = (log: ReturnType<typeof logger>) =>
+    JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.error.mock.calls, log.debug.mock.calls]);
+  const timeout: Reply = () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); };
+
+  it("uploads a temporary file as multipart, then attaches it with a public comment", async () => {
+    const fetch = stubJira({ [UPLOAD]: [uploaded()], [ATTACH]: [json({ attachments: { values: [] } }, 201)] });
+    await adapter().addCustomerAttachment("DS-1", photo("brake.jpg"), `Photo from Alice. ${MARKER}`);
+    expect(calls(fetch)).toEqual([UPLOAD, ATTACH]);
+
+    const upload = fetch.mock.calls[0][1];
+    expect(upload.headers).toEqual({
+      Authorization: "Bearer synthetic-token", Accept: "application/json", "Accept-Language": "en-GB",
+      "X-Atlassian-Token": "no-check", "X-ExperimentalApi": "opt-in",
+    });
+    expect(upload.body).toBeInstanceOf(FormData);
+    expect([...(upload.body as FormData).keys()]).toEqual(["file"]);
+    const file = sentFile(fetch);
+    expect(file.name).toBe("brake.jpg");
+    expect(file.type).toBe("image/jpeg");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(BYTES);
+
+    const attach = fetch.mock.calls[1][1];
+    expect(attach.headers).toEqual({
+      Authorization: "Bearer synthetic-token", Accept: "application/json", "Accept-Language": "en-GB",
+      "X-ExperimentalApi": "opt-in", "Content-Type": "application/json",
+    });
+    expect(JSON.parse(attach.body as string)).toEqual({
+      temporaryAttachmentIds: ["temp-1"], public: true, additionalComment: { body: `Photo from Alice. ${MARKER}` },
+    });
+  });
+
+  it("uses the configured service desk", async () => {
+    const fetch = stubJira({
+      "POST /rest/servicedeskapi/servicedesk/7/attachTemporaryFile": [uploaded()],
+      [ATTACH]: [empty(204)],
+    });
+    await adapter(logger(), { ...config, serviceDeskId: "7" }).addCustomerAttachment("DS-1", photo(), "Photo");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects keys outside the project without calling Jira", async () => {
+    const fetch = stubJira({});
+    await expect(adapter().addCustomerAttachment("OPS-1", photo(), "Photo")).rejects.toThrow("Issue key is outside the configured project");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a/b\\c.pdf", "abc.pdf"],
+    ["../../etc/passwd", "....etcpasswd"],
+    ["  report\u0000\u001f\u007f\u0085.pdf\n ", "report.pdf"],
+    ["   ", "attachment"],
+    ["/\\\u0001", "attachment"],
+    ["", "attachment"],
+  ])("sanitises the file name %j to %j", async (name, expected) => {
+    const fetch = stubJira({ [UPLOAD]: [uploaded()], [ATTACH]: [empty(204)] });
+    await adapter().addCustomerAttachment("DS-1", photo(name), "Photo");
+    expect(sentFile(fetch).name).toBe(expected);
+  });
+
+  it.each([
+    ["no attachments", {}],
+    ["an empty list", { temporaryAttachments: [] }],
+    ["a missing ID", { temporaryAttachments: [{ fileName: "brake.jpg" }] }],
+    ["a numeric ID", { temporaryAttachments: [{ temporaryAttachmentId: 42 }] }],
+    ["a blank ID", { temporaryAttachments: [{ temporaryAttachmentId: "  " }] }],
+    ["a list that is not an array", { temporaryAttachments: { temporaryAttachmentId: "temp-1" } }],
+    ["a null entry", { temporaryAttachments: [null] }],
+  ])("reports an unexpected response for %s and does not attach", async (_label, body) => {
+    const fetch = stubJira({ [UPLOAD]: [json(body, 201)], [ATTACH]: [empty(204)] });
+    const error = await adapter().addCustomerAttachment("DS-1", photo(), "Photo").catch((e: Error) => e);
+    expect(error).toBeInstanceOf(IssueTrackerError);
+    expect((error as Error).message).toBe("Jira returned an unexpected response");
+    expect(calls(fetch)).toEqual([UPLOAD]);
+  });
+
+  it("reports an empty or non-JSON upload response as unexpected and does not attach", async () => {
+    for (const reply of [empty(204), () => new Response(`<html>${MARKER}</html>`, { status: 200 })]) {
+      const fetch = stubJira({ [UPLOAD]: [reply], [ATTACH]: [empty(204)] });
+      const error = await adapter().addCustomerAttachment("DS-1", photo(), "Photo").catch((e: Error) => e);
+      expect((error as Error).message).toBe("Jira returned an unexpected response");
+      expect(String(error)).not.toContain(MARKER);
+      expect(calls(fetch)).toEqual([UPLOAD]);
+    }
+  });
+
+  it.each([
+    ["upload", 400, "Jira request failed (400)"],
+    ["upload", 403, "Jira rejected the credentials or scopes (403)"],
+    ["upload", 413, "Jira request failed (413)"],
+    ["upload", 500, "Jira request failed (500)"],
+    ["attach", 400, "Jira request failed (400)"],
+    ["attach", 404, "Jira request failed (404)"],
+    ["attach", 503, "Jira request failed (503)"],
+  ])("surfaces a failed %s step (%s) with the status and without any body", async (step, status, message) => {
+    const log = logger();
+    const failure = json({ errorMessage: `echo ${MARKER}` }, status);
+    const fetch = stubJira(step === "upload" ? { [UPLOAD]: [failure] } : { [UPLOAD]: [uploaded()], [ATTACH]: [failure] });
+    const error = await adapter(log).addCustomerAttachment("DS-1", photo(), `comment ${MARKER}`).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(IssueTrackerError);
+    expect((error as IssueTrackerError).status).toBe(status);
+    expect((error as Error).message).toBe(message);
+    expect(JSON.stringify(error)).not.toContain(MARKER);
+    expect(String(error)).not.toContain(MARKER);
+    expect(calls(fetch)).toEqual(step === "upload" ? [UPLOAD] : [UPLOAD, ATTACH]);
+    expect(allLogs(log)).not.toContain(MARKER);
+  });
+
+  it.each([
+    ["a server error", json({ message: MARKER }, 502), "Jira request failed (502)"],
+    ["a timeout", timeout, "Jira request timed out"],
+    ["an unreachable host", () => { throw new TypeError("fetch failed"); }, "Jira is unreachable"],
+  ] as Array<[string, Reply, string]>)("does not retry the upload after %s", async (_label, reply, message) => {
+    const fetch = stubJira({ [UPLOAD]: [reply, uploaded()], [ATTACH]: [empty(204)] });
+    await expect(adapter().addCustomerAttachment("DS-1", photo(), "Photo")).rejects.toThrow(message);
+    expect(calls(fetch)).toEqual([UPLOAD]);
+  });
+
+  it("does not retry the attach step after a timeout", async () => {
+    const fetch = stubJira({ [UPLOAD]: [uploaded()], [ATTACH]: [timeout, empty(204)] });
+    await expect(adapter().addCustomerAttachment("DS-1", photo(), "Photo")).rejects.toThrow("Jira request timed out");
+    expect(calls(fetch)).toEqual([UPLOAD, ATTACH]);
+  });
+
+  it("never logs the file bytes, name or comment, on success or failure", async () => {
+    const log = logger();
+    stubJira({ [UPLOAD]: [uploaded()], [ATTACH]: [empty(204)] });
+    await adapter(log).addCustomerAttachment("DS-1", photo(), `comment ${MARKER}`);
+    stubJira({ [UPLOAD]: [uploaded()], [ATTACH]: [json({ errorMessage: MARKER }, 500)] });
+    await adapter(log).addCustomerAttachment("DS-1", photo(), `comment ${MARKER}`).catch(() => undefined);
+    expect(allLogs(log)).not.toContain(MARKER);
+    expect(allLogs(log)).not.toContain("brake");
   });
 });
 
