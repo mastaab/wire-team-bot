@@ -64,4 +64,8 @@ export interface SupportRequest {
   lastMessage?: { messageId: string; sha256: string };
   /** When `lastMessage` was stored; picks the request a posted photo or file most likely belongs to. */
   lastMessageAt?: Date;
+  /** Tracker account ID of the assignee last seen by the watch; absent when unassigned or not yet seen. */
+  assigneeAccountId?: string;
+  /** When the bot opened the direct conversation between requester and agent; at most once. */
+  agentConversationAt?: Date;
 }

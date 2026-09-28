@@ -11,6 +11,7 @@ import type { IssueChange, IssueReply, IssueSnapshot, IssueTrackerPort } from ".
 import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
 import { SupportRequestWrites } from "../../services/SupportRequestWrites";
+import type { OpenAgentConversation } from "./OpenAgentConversation";
 import { formatReplies, formatSla, type RepliesHeading } from "./formatIssue";
 import { botActor, refreshStatusCategory } from "./supportRequestStatus";
 
@@ -49,6 +50,8 @@ export interface WatchGuards {
   writes?: SupportRequestWrites;
   /** Conversations never posted to, such as the CLI's test conversations; their requests are not watched. */
   skipConversation?: (conversationId: QualifiedId) => boolean;
+  /** Direct conversations with the desk agent: Jira account ID to Wire handle, and the use case. */
+  agents?: { handles: ReadonlyMap<string, string>; open: OpenAgentConversation };
 }
 
 const NEW_REPLIES_HEADING: RepliesHeading = {

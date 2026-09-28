@@ -64,6 +64,8 @@ export interface IssueChange {
   statusCategory: IssueStatusCategory;
   /** The tracker's last update time of the issue (any field, comment or transition). */
   updated: Date;
+  /** Tracker account ID of the assignee; absent when unassigned. */
+  assigneeAccountId?: string;
 }
 
 export interface IssueTrackerPort {

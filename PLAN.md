@@ -2107,12 +2107,19 @@ Committed by the main session before the parallel build. Builders code against t
 - The bot does not send its welcome, capture anything or offer help in a group it created, even for the moment before it leaves.
 
 **Design.**
-- Setting `JiraConfig.agents` (map of Jira account ID to Wire handle), validated at start-up.
-- `IssueChange` gains `assigneeAccountId?`; the change check asks for the `assignee` field too.
 - Port `WireConversationPort`: `findUserByHandle(handle)`, `createGroup(name, members)`, `makeAdmin(conversationId, userId)`, `leave(conversationId)`, implemented over the SDK (`searchUsers`, `createGroupConversation`, `updateConversationMemberRole`, `leaveConversation`).
-- `SupportRequest` gains `agentConversationAt?` (migration), set when the group was created, so it happens once; the group's ID is not stored.
+- `SupportRequest` gains the assignee last seen and `agentConversationAt?` (migration), set when the group is created, so it happens once; the group's ID is not stored.
 - Use case `OpenAgentConversation`, called by `WatchSupportRequests` when the trigger holds, before the other updates for that request. Audited as an update of the request (`agentConversation: "opened"`, no names or IDs).
 - Router: conversations the bot created are remembered in memory and ignored until it has left (no welcome, no processing).
+
+**Contract (2026-09-28).** Committed as code; builders must not change these signatures without the main session.
+- Setting `JiraConfig.agents` from `WIRE_TEAM_BOT_JIRA_AGENTS` (`<jira account id>=<wire handle>` pairs; a leading `@` allowed).
+- `IssueChange.assigneeAccountId?`; the change check asks for `assignee` as well.
+- `SupportRequest.assigneeAccountId?` (the assignee last seen, bookkeeping) and `agentConversationAt?` (migration `20260928140000_add_support_request_agent_conversation`); `SupportRequestRepository.setAssignee(key, accountId | null)` and `markAgentConversation(key, at): Promise<boolean>` (sets it only when unset).
+- `WireConversationPort` (`findUserByHandle`, `createGroup`, `makeAdmin`, `leave`), implemented by `createWireConversationAdapter`, which registers created groups in `CreatedConversations` until it has left them; the router ignores those groups (no welcome, no processing, no file offers).
+- Use case `OpenAgentConversation(requests, conversations, wireOutbound, auditLog, logger?, now?)` with `execute({ request, agentHandle }): Promise<"opened" | "skipped" | "failed">`; `WatchGuards.agents = { handles, open }`.
+- Watch rule: after the re-read and the channel-state check, a request seen for the first time (no `lastSeenReplyAt`) only stores its assignee. Otherwise, when the listed assignee differs from the stored one, the watch stores the new one (`setAssignee`, also when unassigned), and when it is mapped, the request is not done and has no `agentConversationAt`, it calls `OpenAgentConversation` before posting the request's other update. A pending key keeps its listed change, so a paused channel opens the conversation after resume.
+- Assigning is detected from the change check only, so it needs the watch; the first check after a start baselines assignees like replies and status.
 
 **Evidence required.** Unit tests with mocked ports; a live staging check: the desk assigns a mapped agent in Jira, the group appears for requester and agent with the bot's message and both as admins, the bot is gone from it, the original channel gets the notice as a reply, and a later desk reply still arrives in the original channel.
 

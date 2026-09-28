@@ -51,6 +51,7 @@ import { matchIssueStatusRequest } from "./matchIssueStatusRequest";
 import { splitSupportText } from "./splitSupportText";
 import { welcomeText, type SupportWelcome } from "./welcomeText";
 import type { OfferAttachment } from "../../application/usecases/jira/OfferAttachment";
+import type { CreatedConversations } from "./CreatedConversations";
 import { ATTACHMENT_MAX_BYTES, attachableKind } from "../../application/services/attachments";
 import type { WireReplyContext } from "./WireReplyContext";
 
@@ -111,6 +112,8 @@ export interface WireEventRouterDeps {
   supportWelcome?: SupportWelcome;
   /** Offers to attach posted photos and documents to an open request; wired only with passive help on. */
   offerAttachment?: OfferAttachment;
+  /** Groups the app created for requester and agent and is leaving; ignored entirely meanwhile. */
+  createdConversations?: CreatedConversations;
   listSupportRequests?: ListSupportRequests;
   resolveSupportRequest?: ResolveSupportRequest;
   getIssueStatus?: GetIssueStatus;
@@ -183,6 +186,7 @@ export class WireEventRouter extends WireEventsHandler {
   }
 
   private async processTextMessage(wireMessage: TextMessage): Promise<void> {
+    if (this.deps.createdConversations?.has(wireMessage.conversationId as QualifiedId)) return;
     const text = wireMessage.text ?? "";
     const convId = wireMessage.conversationId as QualifiedId;
     const sender = wireMessage.sender as QualifiedId;
@@ -1064,6 +1068,7 @@ export class WireEventRouter extends WireEventsHandler {
   }
 
   private async processAssetMessage(wireMessage: AssetMessage): Promise<void> {
+    if (this.deps.createdConversations?.has(wireMessage.conversationId as QualifiedId)) return;
     const offerAttachment = this.deps.offerAttachment;
     const sender = wireMessage.sender as QualifiedId | undefined;
     if (!offerAttachment || !sender || sameQualifiedId(sender, this.deps.botUserId)) return;
@@ -1236,6 +1241,8 @@ export class WireEventRouter extends WireEventsHandler {
 
   async onAppAddedToConversation(conversation: Conversation, members: ConversationMember[]): Promise<void> {
     const convId = { id: conversation.id, domain: conversation.domain } as QualifiedId;
+    // A group the app created for requester and agent: no welcome, no channel config; it is leaving.
+    if (this.deps.createdConversations?.has(convId)) return;
     const channelId = toChannelId(convId);
     this.deps.memberCache.setMembers(convId, members.map((m) => ({
       userId: m.userId as QualifiedId,

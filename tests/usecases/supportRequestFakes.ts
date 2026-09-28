@@ -55,6 +55,8 @@ export function makeRequests(records: SupportRequest[] = [makeRequest()]) {
     listWatched: vi.fn(async () => records.filter((r) => !r.deleted)),
     advanceLastSeenReplyAt: vi.fn().mockResolvedValue(undefined),
     setLastMessage: vi.fn().mockResolvedValue(undefined),
+    setAssignee: vi.fn().mockResolvedValue(undefined),
+    markAgentConversation: vi.fn().mockResolvedValue(true),
   };
 }
 

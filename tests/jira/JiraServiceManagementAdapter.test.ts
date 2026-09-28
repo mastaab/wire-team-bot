@@ -493,7 +493,7 @@ describe("JiraServiceManagementAdapter.listChangedSince", () => {
       { key: "DS-2", statusCategory: "in_progress", updated: new Date("2026-09-26T11:00:00Z") },
       { key: "DS-3", statusCategory: "done", updated: new Date("2026-09-26T10:00:00Z") },
     ]);
-    expect(bodies(fetch)).toEqual([{ jql: "project = DS AND key in (DS-1, DS-2, DS-3)", fields: ["status", "updated"], maxResults: 50 }]);
+    expect(bodies(fetch)).toEqual([{ jql: "project = DS AND key in (DS-1, DS-2, DS-3)", fields: ["status", "updated", "assignee"], maxResults: 50 }]);
     expect((fetch.mock.calls[0][1].headers as Record<string, string>)["Content-Type"]).toBe("application/json");
   });
 

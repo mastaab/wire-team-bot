@@ -99,6 +99,18 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     });
   }
 
+  async setAssignee(key: string, accountId: string | null): Promise<void> {
+    await this.prisma.supportRequest.updateMany({ where: { key }, data: { assigneeAccountId: accountId } });
+  }
+
+  async markAgentConversation(key: string, at: Date): Promise<boolean> {
+    const result = await this.prisma.supportRequest.updateMany({
+      where: { key, agentConversationAt: null },
+      data: { agentConversationAt: at },
+    });
+    return result.count === 1;
+  }
+
   async setLastMessage(key: string, ref: { messageId: string; sha256: string }): Promise<void> {
     await this.prisma.supportRequest.updateMany({
       where: { key },
@@ -124,6 +136,8 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     lastMessageId: string | null;
     lastMessageSha256: string | null;
     lastMessageAt: Date | null;
+    assigneeAccountId: string | null;
+    agentConversationAt: Date | null;
   }): SupportRequest {
     return {
       key: row.key,
@@ -142,6 +156,8 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
         ? { lastMessage: { messageId: row.lastMessageId, sha256: row.lastMessageSha256 } }
         : {}),
       ...(row.lastMessageAt ? { lastMessageAt: row.lastMessageAt } : {}),
+      ...(row.assigneeAccountId ? { assigneeAccountId: row.assigneeAccountId } : {}),
+      ...(row.agentConversationAt ? { agentConversationAt: row.agentConversationAt } : {}),
     };
   }
 }

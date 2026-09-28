@@ -272,6 +272,8 @@ model SupportRequest {
   lastMessageId   String?   @map("last_message_id")
   lastMessageSha256 String? @map("last_message_sha256")
   lastMessageAt   DateTime? @map("last_message_at")
+  assigneeAccountId String? @map("assignee_account_id")
+  agentConversationAt DateTime? @map("agent_conversation_at")
 
   @@index([conversationId, conversationDom])
   @@map("support_requests")

@@ -127,6 +127,11 @@ export interface JiraConfig {
    * status changes), announced in the request's channel. Absent: no watching. At least 15.
    */
   watchSeconds?: number;
+  /**
+   * Desk agents who get a direct Wire conversation with the requester when assigned: Jira account
+   * ID to Wire handle (on the bot's own domain). Absent: no direct conversations.
+   */
+  agents?: ReadonlyMap<string, string>;
 }
 
 const JIRA_REQUIRED_KEYS = [
@@ -177,6 +182,7 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
   const requestTypes = parseRequestTypes(value("WIRE_TEAM_BOT_JIRA_REQUEST_TYPES")!);
   const serviceScope = value("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE");
   if (serviceScope && serviceScope.length > 500) throw new Error("WIRE_TEAM_BOT_JIRA_SERVICE_SCOPE must be at most 500 characters");
+  const agents = parseAgents(value("WIRE_TEAM_BOT_JIRA_AGENTS"));
   const watchRaw = value("WIRE_TEAM_BOT_JIRA_WATCH_SECONDS");
   if (watchRaw !== undefined && (!/^\d+$/.test(watchRaw) || parseInt(watchRaw, 10) < 15)) {
     throw new Error("WIRE_TEAM_BOT_JIRA_WATCH_SECONDS must be a whole number of seconds, at least 15");
@@ -195,7 +201,24 @@ export function resolveJiraConfig(env: Record<string, string | undefined>): Jira
     requestTypes,
     ...(serviceScope ? { serviceScope } : {}),
     ...(watchRaw !== undefined ? { watchSeconds: parseInt(watchRaw, 10) } : {}),
+    ...(agents ? { agents } : {}),
   };
+}
+
+/**
+ * `<jira account id>=<wire handle>` pairs, comma-separated; a leading `@` on the handle is
+ * allowed. Malformed entries and repeated account IDs fail at startup.
+ */
+function parseAgents(raw: string | undefined): ReadonlyMap<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  const agents = new Map<string, string>();
+  for (const entry of raw.split(",").map((e) => e.trim()).filter(Boolean)) {
+    const m = entry.match(/^([A-Za-z0-9:_-]{1,128})\s*=\s*@?([a-z0-9._-]{2,256})$/i);
+    if (!m || agents.has(m[1]!)) throw new Error("WIRE_TEAM_BOT_JIRA_AGENTS must look like <jira account id>=<wire handle>,...");
+    agents.set(m[1]!, m[2]!.toLowerCase());
+  }
+  if (agents.size === 0) throw new Error("WIRE_TEAM_BOT_JIRA_AGENTS must list at least one <jira account id>=<wire handle>");
+  return agents;
 }
 
 /**

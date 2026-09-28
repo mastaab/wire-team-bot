@@ -81,7 +81,7 @@ interface JiraComment {
 
 interface JiraSearchIssue {
   key?: string;
-  fields?: { status?: JiraStatus; updated?: unknown };
+  fields?: { status?: JiraStatus; updated?: unknown; assignee?: { accountId?: unknown } | null };
 }
 
 interface JiraSearchPage {
@@ -306,7 +306,7 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
     for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
       const res = await this.request<JiraSearchPage>("POST", "/rest/api/3/search/jql", {
         jql,
-        fields: ["status", "updated"],
+        fields: ["status", "updated", "assignee"],
         maxResults: SEARCH_BATCH_SIZE,
         ...(nextPageToken ? { nextPageToken } : {}),
       });
@@ -316,7 +316,11 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
         const updated = parseJiraTime(issue.fields?.updated);
         if (!updated) continue;
         if (since && updated.getTime() <= since.getTime()) continue;
-        changes.push({ key, statusCategory: toCategory(issue.fields?.status?.statusCategory?.key), updated });
+        const assignee = issue.fields?.assignee?.accountId;
+        changes.push({
+          key, statusCategory: toCategory(issue.fields?.status?.statusCategory?.key), updated,
+          ...(typeof assignee === "string" && assignee ? { assigneeAccountId: assignee } : {}),
+        });
       }
       const token = res.data?.nextPageToken;
       nextPageToken = typeof token === "string" && token ? token : undefined;
