@@ -49,6 +49,7 @@ import { hasMultipleCommands } from "./hasMultipleCommands";
 import { parseAddressedAction } from "./parseAddressedAction";
 import { matchIssueStatusRequest } from "./matchIssueStatusRequest";
 import { splitSupportText } from "./splitSupportText";
+import { welcomeText, type SupportWelcome } from "./welcomeText";
 import type { WireReplyContext } from "./WireReplyContext";
 
 const CONTEXT_WINDOW = 10;
@@ -104,6 +105,8 @@ export interface WireEventRouterDeps {
   raiseSupportRequest?: RaiseSupportRequest;
   /** Fills a pending part order's missing essentials from the requester's next message, in code. */
   completePartOrder?: CompletePartOrder;
+  /** What the welcome says about the service desk; absent when the integration is off. */
+  supportWelcome?: SupportWelcome;
   listSupportRequests?: ListSupportRequests;
   resolveSupportRequest?: ResolveSupportRequest;
   getIssueStatus?: GetIssueStatus;
@@ -1164,7 +1167,7 @@ export class WireEventRouter extends WireEventsHandler {
         if (!legacyCfg?.purpose) {
           await this.deps.wireOutbound.sendPlainText(
             convId,
-            "I'm Wire Team Bot. To save the channel purpose, mention me with: context: <brief purpose>. Use decision: or action: to record work. I react 📝 when I save an action from the conversation and ✅ when I save a completion; use my actions to check details. Mention me with pause, secure mode, or resume to control listening.",
+            welcomeText(this.deps.supportWelcome),
           );
         }
       }

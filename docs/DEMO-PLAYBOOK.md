@@ -19,7 +19,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 - Bot running from this checkout with `npm run build && npm start`; `.env` has Wire staging, Jira, `WIRE_TEAM_BOT_JIRA_PASSIVE=on`, the request types, the service scope and `WIRE_TEAM_BOT_JIRA_WATCH_SECONDS=30`. See README for the settings.
 - Ollama running with the local model (`qwen3.5-4b`) if you present the local-AI story; otherwise the chat slots point at the Claude API (faster and more fluent, but conversation text then goes to the API provider).
 - Jira DS project: SLAs on the 24/7 calendar, so SLA lines show real times at any hour. No open test requests left (open ones show breached SLAs after a few hours).
-- A fresh demo channel with the app added, its timezone set (`@<bot> timezone Europe/Berlin`) and a purpose set (`@<bot> context: premium support for our truck fleet`).
+- A fresh demo channel with Driver A and Driver B, without the app yet: you add it live in step 1, which shows its welcome. The welcome appears only in a channel without a saved purpose, so do not reuse a channel the app has been in.
 
 **Cast.**
 - **Driver A** (presenter) in Wire, main screen.
@@ -27,7 +27,7 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 - **Desk agent** in Jira (browser, second screen or a colleague), logged into the DS service desk queue.
 
 **Ten minutes before.**
-- `@<bot> status` in the channel: state active, timezone right, no open support requests.
+- In a scratch channel with the app, `@<bot> status`: state active, no open support requests.
 - Do not restart the bot from now on: a message sent while it restarts may never be processed.
 - Close other chats on the shared screen. DS is visible to all Wire Jira users, so type only synthetic truck data.
 
@@ -37,11 +37,13 @@ The manufacturer sells premium support with its trucks. Drivers, possibly in def
 
 Timing assumes the local model, which takes around 10 to 20 seconds per answer. Fill the pause with the talking point for that step.
 
-### 1. Meet the app (3 min)
+### 1. Meet the app (4 min)
 
-Type: `@<bot> what can you do`
+Add the app to the demo channel.
 
-Show: the answer lists record commands (no mention needed), channel commands and support-request commands (mention needed), in the app's current name.
+Show: its welcome. It leads with the service desk ("Tell me about a fault, a question or a part you need, and I'll offer to raise it with the service desk; nothing is sent without your yes."), says how to follow requests and that desk updates appear in the channel, and then covers decisions, actions and the privacy controls.
+
+Then type `@<bot> timezone Europe/Berlin` and `@<bot> context: premium support for our truck fleet`, and optionally `@<bot> what can you do`, which lists record commands (no mention needed), channel commands and support-request commands (mention needed), in the app's current name.
 
 Say: this is a Wire App. It was added to the channel like a colleague, it sees messages because it is a member of the encrypted group, and the SDK gives it events (messages, members joining and leaving, the conversation being deleted) and ways to answer (text, replies, mentions, reactions).
 

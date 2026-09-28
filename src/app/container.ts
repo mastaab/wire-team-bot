@@ -327,6 +327,9 @@ export function createContainer(config: Config, logger: Logger): Container {
     catchMeUpCommand,
     raiseSupportRequest,
     completePartOrder,
+    supportWelcome: issueTracker
+      ? { projectKey: issueTracker.projectKey, passive: passiveOn, watching: !!watchSupportRequests }
+      : undefined,
     listSupportRequests,
     resolveSupportRequest,
     getIssueStatus,

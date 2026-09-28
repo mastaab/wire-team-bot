@@ -580,6 +580,14 @@ describe("WireEventRouter contract: member cache lifecycle", () => {
     );
   });
 
+  it("explains the service desk first in the welcome when it is configured", async () => {
+    const deps = makeDeps({ supportWelcome: { projectKey: "DS", passive: true, watching: true } } as Partial<WireEventRouterDeps>);
+    await new WireEventRouter(deps).onAppAddedToConversation({ id: "conv-1", domain: "wire.com" }, [{ userId: sender, role: "member" }]);
+    const text = vi.mocked(deps.wireOutbound.sendPlainText).mock.calls[0]![1];
+    expect(text).toMatch(/^I'm Wire Team Bot, and I connect this channel with the service desk\./);
+    expect(text).toMatch(/📝.*save an action.*✅.*save a completion/s);
+  });
+
   it("addMembers (not setMembers) on user-joined", async () => {
     const deps = makeDeps();
     const router = new WireEventRouter(deps);
