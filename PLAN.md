@@ -2087,13 +2087,36 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Out of scope.** Reading the photo with an AI vision model (for example to describe damage); possible later with a vision-capable local model, not planned.
 
-### Direct conversation with the desk agent (feasibility, 2026-09-28)
+### Direct conversation with the desk agent (planned 2026-09-28)
 
-**Idea (operator).** When a service desk agent picks up a request, the bot creates a separate Wire group with the requester and that agent, who need not be in the main channel.
+**Idea (operator).** When a service desk agent picks up a request, the bot creates a separate Wire group with the requester and that agent, who need not be in the main channel, and steps out of it.
 
-**Feasibility.** The SDK can create groups in the app's team (`createGroupConversation`, created without Cells), add and remove members, change roles, leave and delete, and find users by handle (`searchUsers`). Jira gives the assignee with the change check already used by the watch. The missing link is the agent's Wire account: Jira has no such link and the SDK cannot search by email, so a setting mapping Jira agents to Wire handles would be needed. Open design decisions: whether the bot stays in the group or hands admin to the agent and leaves; where later ticket updates go; that the direct conversation is not copied to Jira (extract-and-forget); what the main channel is told. Not planned or built.
+**Decisions (operator, 2026-09-28).**
+1. For the demo, the mapping from Jira agents to Wire accounts is a setting.
+2. The bot makes both members admins and then leaves the group, so the conversation is theirs alone.
+3. Ticket updates stay in the original channel.
+4. The original channel is told that contact with the responsible support agent has been initiated.
 
-**Probe (operator-approved, 2026-09-28, bot stopped for the run).** Both staging test handles (driver and agent) resolved through `searchUsers`; `createGroupConversation("DS-25 test", …)` succeeded; a message was sent; the group has three members: the app as admin, driver and agent as members. The test group still exists and the bot is a member of it, so it processes messages there like in any channel.
+**Behaviour.**
+- Off unless `WIRE_TEAM_BOT_JIRA_AGENTS` is set, as `<jira account id>=<wire handle>` pairs separated by commas (handles on the bot's own Wire domain). Needs the Jira watch (`WIRE_TEAM_BOT_JIRA_WATCH_SECONDS`), which notices the change.
+- Trigger: the first time an open request gets an assignee who is in the mapping. Once per request; a later change of assignee opens no second group. An assignee not in the mapping, a request already done, a paused or secure channel (retried like other pending updates), or a request whose assignee was already set when first seen (the baseline) opens nothing.
+- The bot resolves the agent's handle through the SDK's user search and creates a group named `DS-25 <summary>` (cut to fit) with the requester and the agent. If the agent is the requester, or either cannot be resolved or added, nothing is created and the reason is logged by error name.
+- In the new group the bot posts once: `**DS-25** <summary>` then "<agent name> from the service desk has picked up this request. You can talk here directly; this conversation is not recorded in the ticket, and I'm leaving it now." It then makes the requester and the agent admins and leaves. A failed role change is logged and the bot leaves anyway: privacy comes first, and the group works without admins.
+- In the original channel, as a reply to the bot's last message about the request: `**DS-25** <summary>` then "Contact with the responsible support agent (<agent name>) has been initiated: they and <requester name> now have a direct conversation." This is posted even if the requester has since left the channel.
+- The direct conversation is never copied to Jira (extract-and-forget); the bot is not in it. The ticket is not changed.
+- The bot does not send its welcome, capture anything or offer help in a group it created, even for the moment before it leaves.
+
+**Design.**
+- Setting `JiraConfig.agents` (map of Jira account ID to Wire handle), validated at start-up.
+- `IssueChange` gains `assigneeAccountId?`; the change check asks for the `assignee` field too.
+- Port `WireConversationPort`: `findUserByHandle(handle)`, `createGroup(name, members)`, `makeAdmin(conversationId, userId)`, `leave(conversationId)`, implemented over the SDK (`searchUsers`, `createGroupConversation`, `updateConversationMemberRole`, `leaveConversation`).
+- `SupportRequest` gains `agentConversationAt?` (migration), set when the group was created, so it happens once; the group's ID is not stored.
+- Use case `OpenAgentConversation`, called by `WatchSupportRequests` when the trigger holds, before the other updates for that request. Audited as an update of the request (`agentConversation: "opened"`, no names or IDs).
+- Router: conversations the bot created are remembered in memory and ignored until it has left (no welcome, no processing).
+
+**Evidence required.** Unit tests with mocked ports; a live staging check: the desk assigns a mapped agent in Jira, the group appears for requester and agent with the bot's message and both as admins, the bot is gone from it, the original channel gets the notice as a reply, and a later desk reply still arrives in the original channel.
+
+**Feasibility probe (operator-approved, 2026-09-28, bot stopped for the run).** Both staging test handles (driver and agent) resolved through `searchUsers`; `createGroupConversation("DS-25 test", …)` succeeded; a message was sent; the group has three members: the app as admin, driver and agent as members. The test group still exists and the bot is a member of it. Role changes and leaving were not probed.
 
 ### Handover for the next session (2026-09-26, evening)
 
