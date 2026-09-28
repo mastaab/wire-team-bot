@@ -50,7 +50,7 @@ Then type `@<bot> timezone Europe/Berlin` and `@<bot> context: premium support f
 
 Say: this is a Wire App. It was added to the channel like a colleague, it sees messages because it is a member of the encrypted group, and the SDK gives it events (messages, members joining and leaving, the conversation being deleted) and ways to answer (text, replies, mentions, reactions).
 
-### 2. A fault, noticed without being asked, and the desk picks it up (10 min)
+### 2. A fault, noticed without being asked, and the desk answers (6 min)
 
 Type, without mentioning the bot: `the brake warning light on truck 12 came on this morning`
 
@@ -58,27 +58,33 @@ Show: the bot replies "Shall I report this to the service desk?" with the full t
 
 Say: the model read an ordinary chat message and recognised a fault. The driver saw exactly what would be sent and decided. Only this text went to Jira; the rest of the conversation did not.
 
-Follow the link to Jira and, as the desk agent, pick the ticket up there: point out the request type "Submit a request or incident", the driver named as requester and both SLA clocks running. Then, on the ticket:
-1. **Assign** the ticket to yourself (the desk agent mapped in `WIRE_TEAM_BOT_JIRA_AGENTS`).
-2. Add a **public reply**, for example "Please check the brake fluid level and send a photo."
-3. Add an **internal note**, for example "Likely the sensor; check stock."
-4. Move the ticket to **In progress**.
+Follow the link to Jira and, as the desk agent, look at the ticket: point out the request type "Submit a request or incident", the driver named as requester and both SLA clocks running. Then, on the ticket:
+1. Add a **public reply**, for example "Please check the brake fluid level and send a photo."
+2. Add an **internal note**, for example "Likely the sensor; check stock."
 
-Back in Wire, show: within about 30 seconds the channel gets "Contact with the responsible support agent (<name>) has been initiated", and the driver and the agent find a new group named after the ticket with the bot's introduction; the bot has made them both admins and left. Then the update arrives in the channel as a reply: "New reply from the service desk" with the reply, and "Now in progress." (changes made within one check arrive as one message). The internal note never appears.
+Back in Wire, show: within about 30 seconds the reply arrives as a reply quoting the "Raised" message: "New reply from the service desk" with the text. The internal note never appears.
 
-Show the agent's Wire screen: the group named after the ticket (for example "DS-N The brake warning light on truck 12") with the bot's introduction: the agent has picked up the request, the two can talk here directly, the conversation is not recorded in the ticket, and the bot is leaving. The member list shows the driver and the agent, both admins, and no bot. Let the agent write one line there, for example "Hi, I'm on it. Are you safe to drive to the depot?", and the driver answer.
-
-Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed. When an agent picks a request up, the app creates a private conversation for the two of them in the customer's own Wire team, hands it over and leaves: the bot cannot read it, nothing of it is recorded, and the agent did not have to join the drivers' channel. Ticket updates keep coming in the channel, so the whole team stays informed.
+Say: the app checks the tracker for changes and threads each update under the ticket's earlier messages. Internal notes stay internal. No webhook or public endpoint was needed.
 
 ### 3. The driver answers with a photo (3 min)
 
-The desk asked for a photo, so post one in the **channel** (not the private group): any picture of a dashboard or an engine bay from the phone (never a real vehicle's plate or a person).
+The desk asked for a photo, so post one in the channel: any picture of a dashboard or an engine bay from the phone (never a real vehicle's plate or a person).
 
 Show: the bot replies to the photo "Shall I add this photo to **DS-N** "Brake warning light on truck 12"?" and "(yes or no)?". Answer `yes`. It replies "Added the photo to **DS-N** in Jira." In Jira, the desk agent sees the photo on the ticket with a public reply "Photo from Wire, sent by <name>." The update check does not echo it back into the channel.
 
-Say: the app receives the file through the SDK, downloads and decrypts it as a member of the channel, and passes it to the desk only after the driver's yes. It is held in memory for the upload and never stored. A self-deleting photo is never forwarded, and the same works for documents such as a PDF delivery note. In the private group, a photo simply goes to the agent in Wire; in the channel, the app files it on the ticket, where the whole desk sees it.
+Say: the app receives the file through the SDK, downloads and decrypts it as a member of the channel, and passes it to the desk only after the driver's yes. It is held in memory for the upload and never stored. A self-deleting photo is never forwarded, and the same works for documents such as a PDF delivery note.
 
-### 4. A part order, completed in conversation (5 min)
+### 4. The agent takes over, in a private conversation (5 min)
+
+The photo confirms it needs a closer look, so in Jira, as the desk agent:
+1. **Assign** the ticket to yourself (the account mapped in `WIRE_TEAM_BOT_JIRA_AGENTS`).
+2. Move it to **In progress**.
+
+Show: within about 30 seconds the channel gets "Contact with the responsible support agent (<name>) has been initiated", then "Now in progress.", both as replies in the ticket's thread. On the agent's Wire screen, show the new group named after the ticket (for example "DS-N The brake warning light on truck 12") with the bot's introduction: the agent has picked up the request, the two can talk here directly, the conversation is not recorded in the ticket, and the bot is leaving. The member list shows the driver and the agent, both admins, and no bot. Let the agent write one line there, for example "Hi, I've seen the photo. Are you safe to drive to the depot?", and the driver answer.
+
+Say: when an agent picks a request up, the app creates a private conversation for the two of them in the customer's own Wire team, hands it over and leaves: the bot cannot read it, nothing of it is recorded, and the agent did not have to join the drivers' channel. Ticket updates keep coming in the channel, so the whole team stays informed.
+
+### 5. A part order, completed in conversation (5 min)
 
 Type: `we need a new left mirror for truck 7`
 
@@ -86,7 +92,7 @@ Show: the bot asks only for what is missing ("To order it I need the quantity an
 
 Say: the essentials are checked in code, not left to the model: the order cannot be sent until vehicle, part, quantity and delivery location are known, and every value must come from the driver's own words. A correction such as `actually three` updates the draft.
 
-### 5. A question for the desk (2 min)
+### 6. A question for the desk (2 min)
 
 Type: `how do I reset the AdBlue warning after a refill?`
 
@@ -94,7 +100,7 @@ Show: "Shall I ask the service desk?"; `yes` raises an "Ask a question" request.
 
 Say: three kinds of request, three queues for the desk, sorted by the AI and confirmed by the driver.
 
-### 6. Follow up in plain language (4 min)
+### 7. Follow up in plain language (4 min)
 
 As Driver B, type: `has anyone heard back about the brake light?`
 
@@ -106,7 +112,7 @@ Show: "Shall I add this to **DS-N** …?" with the text; `yes` sends it to the t
 
 Say: no ticket numbers or forms needed; the model matches the message to the right request, and still asks before sending.
 
-### 7. Close the loop (3 min)
+### 8. Close the loop (3 min)
 
 Type: `the brake light is fine now, please close it`
 
@@ -114,7 +120,7 @@ Show: the resolve offer with the closing remark as a comment; `yes` resolves the
 
 Alternatively resolve it in Jira as the desk agent and show "Resolved by the service desk." arriving in the channel.
 
-### 8. Off the record (3 min)
+### 9. Off the record (3 min)
 
 Type: `@<bot> secure mode`
 
@@ -124,7 +130,7 @@ Show: after resume, the held-back update about the part order arrives.
 
 Say: security-minded teams can switch the app off for part of a conversation, provably; Wire's encryption is unaffected and always on. `pause` is the lighter version: the bot steps out but still says it is standing by when mentioned.
 
-### 9. Optional: team memory (3 min)
+### 10. Optional: team memory (3 min)
 
 Type: `decision: truck 12 stays off the road until the brakes are checked` and `action: book the brake inspection for truck 12`
 
