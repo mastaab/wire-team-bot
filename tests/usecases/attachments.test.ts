@@ -69,11 +69,11 @@ describe("attachment texts", () => {
   });
 
   it.each([
-    ["photo", "Alice", "Photo from Wire, sent by Alice."],
-    ["file", "Alice", "File from Wire, sent by Alice."],
-    ["photo", "  Bob  ", "Photo from Wire, sent by Bob."],
-    ["photo", undefined, "Photo from Wire."],
-    ["file", "   ", "File from Wire."],
+    ["photo", "Alice", "Photo from Wire, sent by Alice. Sent from Wire."],
+    ["file", "Alice", "File from Wire, sent by Alice. Sent from Wire."],
+    ["photo", "  Bob  ", "Photo from Wire, sent by Bob. Sent from Wire."],
+    ["photo", undefined, "Photo from Wire. Sent from Wire."],
+    ["file", "   ", "File from Wire. Sent from Wire."],
   ] as const)("writes the %s comment for sender %j", (fileKind, senderName, comment) => {
     expect(attachmentComment({ fileKind }, senderName)).toBe(comment);
   });

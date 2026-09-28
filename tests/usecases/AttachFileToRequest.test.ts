@@ -70,7 +70,7 @@ describe("AttachFileToRequest", () => {
 
     expect(assets.download).toHaveBeenCalledWith(PHOTO.ref);
     expect(tracker.addCustomerAttachment).toHaveBeenCalledWith(
-      "DS-6", { name: "IMG_0042.jpg", mimeType: "image/jpeg", data: BYTES }, "Photo from Wire, sent by Alice.",
+      "DS-6", { name: "IMG_0042.jpg", mimeType: "image/jpeg", data: BYTES }, "Photo from Wire, sent by Alice. Sent from Wire.",
     );
     expectAudited(auditLog, "image/jpeg", 4, "attached");
     expectSingleReplyStored({ wire, sent, requests }, "Added the photo to **DS-6** in Jira.");
@@ -82,7 +82,7 @@ describe("AttachFileToRequest", () => {
     expect(await useCase.execute({ ...input, file: DOCUMENT })).toBe(true);
 
     expect(tracker.addCustomerAttachment).toHaveBeenCalledWith(
-      "DS-6", { name: "service-log.pdf", mimeType: "application/pdf; name=service-log.pdf", data: BYTES }, "File from Wire, sent by Alice.",
+      "DS-6", { name: "service-log.pdf", mimeType: "application/pdf; name=service-log.pdf", data: BYTES }, "File from Wire, sent by Alice. Sent from Wire.",
     );
     expectAudited(auditLog, "application/pdf", 4, "attached");
     expectSingleReplyStored({ wire, sent, requests }, "Added the file (service-log.pdf) to **DS-6** in Jira.");
@@ -93,7 +93,7 @@ describe("AttachFileToRequest", () => {
 
     expect(await useCase.execute({ ...input, senderName: undefined })).toBe(true);
 
-    expect(tracker.addCustomerAttachment).toHaveBeenCalledWith("DS-6", expect.anything(), "Photo from Wire.");
+    expect(tracker.addCustomerAttachment).toHaveBeenCalledWith("DS-6", expect.anything(), "Photo from Wire. Sent from Wire.");
   });
 
   it("normalises the key before the scope check", async () => {

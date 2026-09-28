@@ -22,13 +22,27 @@ export class AssetDownloadError extends Error {
  * Downloads and decrypts files posted in Wire through the SDK. The bytes are returned in memory
  * and never logged or stored here.
  */
-export function createWireAssetAdapter(handlerRef: HandlerManagerRef): WireAssetPort {
+/**
+ * How long a download may take. The SDK has no timeout of its own, and a confirmed attach runs in
+ * the channel's message order, so a hung download would hold every later message, including pause.
+ */
+export const ASSET_DOWNLOAD_TIMEOUT_MS = 30_000;
+
+export function createWireAssetAdapter(handlerRef: HandlerManagerRef, timeoutMs = ASSET_DOWNLOAD_TIMEOUT_MS): WireAssetPort {
   return {
     async download(ref: InboundAssetRef): Promise<Uint8Array> {
       const manager = handlerRef.current?.manager as Partial<AssetManagerHandle> | undefined;
       if (ref.transport !== "wire" || !ref.data) throw new AssetDownloadError("Not a Wire file reference");
       if (!manager?.downloadAsset) throw new AssetDownloadError("Wire is not connected");
-      return manager.downloadAsset(ref.data as AssetRemoteData);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new AssetDownloadError("Download timed out")), timeoutMs);
+      });
+      try {
+        return await Promise.race([manager.downloadAsset(ref.data as AssetRemoteData), timedOut]);
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }

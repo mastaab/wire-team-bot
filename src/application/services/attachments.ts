@@ -1,4 +1,5 @@
 import type { InboundFile } from "../ports/PendingOfferPort";
+import { REPLY_FOOTER } from "../usecases/jira/formatIssue";
 
 /** Largest file the bot offers to attach. */
 export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
@@ -22,7 +23,12 @@ export function attachableKind(mimeType: string): InboundFile["fileKind"] | null
 
 /** "this photo" or "this file (<name>)", for offers and confirmations. */
 export function describeFile(file: Pick<InboundFile, "fileKind" | "name">): string {
-  return file.fileKind === "photo" ? "this photo" : `this file (${file.name})`;
+  return file.fileKind === "photo" ? "this photo" : `this file (${plainName(file.name)})`;
+}
+
+/** A posted file name as plain text in a Wire message: no Markdown, links or line breaks. */
+export function plainName(name: string): string {
+  return name.replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/[\\`*_~[\]()<>#|]/g, "").replace(/\s+/g, " ").trim().slice(0, 100) || "file";
 }
 
 /** The offer, as a reply to the posted file: the target request and "(yes or no)?". */
@@ -34,5 +40,5 @@ export function formatAttachQuestion(key: string, summary: string, file: Pick<In
 export function attachmentComment(file: Pick<InboundFile, "fileKind">, senderName: string | undefined): string {
   const what = file.fileKind === "photo" ? "Photo" : "File";
   const by = senderName?.trim() ? `, sent by ${senderName.trim()}` : "";
-  return `${what} from Wire${by}.`;
+  return `${what} from Wire${by}. ${REPLY_FOOTER}`;
 }

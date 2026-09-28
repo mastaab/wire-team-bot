@@ -142,6 +142,15 @@ export interface WireEventRouterDeps {
   orgId?: string;
 }
 
+/** The details of a file preview that an upload event may lack. */
+interface AssetPreview {
+  mimeType: string;
+  name: string | null;
+  sizeInBytes: AssetMessage["sizeInBytes"];
+  expiresAfterMillis: number | null;
+  timestamp: Date;
+}
+
 export class WireEventRouter extends WireEventsHandler {
   private readonly channelStateCache = new Map<string, "active" | "paused" | "secure">();
   /** True when the channel is a 1:1 DM (one non-bot member). Enables personal-mode retrieval scope. */
@@ -1040,7 +1049,8 @@ export class WireEventRouter extends WireEventsHandler {
    * under the same state gate as text. Wire sends a preview before the upload with the same
    * message ID; only the uploaded event (with download data) counts, once.
    */
-  async onAssetMessageReceived(wireMessage: AssetMessage): Promise<void> {
+  async onAssetMessageReceived(received: AssetMessage): Promise<void> {
+    const wireMessage = this.withPreview(received);
     const channelId = toChannelId(wireMessage.conversationId);
     const previous = this.handlers.get(channelId) ?? Promise.resolve();
     const current = previous.catch(() => {}).then(() => {
@@ -1093,6 +1103,42 @@ export class WireEventRouter extends WireEventsHandler {
     this.deps.messageBuffer.push(convId, {
       messageId: wireMessage.id, senderId: sender, senderName, text: fileKind === "photo" ? "(photo)" : "(file)", timestamp: new Date(),
     });
+  }
+
+  /**
+   * What a file's preview said, by sender and message: the SDK takes the type, name and size only
+   * from the preview part, so an upload event without it would read as an empty unknown file.
+   * Bounded; an entry is used once.
+   */
+  private readonly assetPreviews = new Map<string, AssetPreview>();
+
+  /**
+   * The upload event completed with its preview's details, and the preview's time, which is the
+   * message's time in clients and so the time its quote hash must use. A preview is remembered
+   * and returned as it is.
+   */
+  private withPreview(message: AssetMessage): AssetMessage {
+    const sender = message.sender as QualifiedId | undefined;
+    const previewKey = JSON.stringify([message.conversationId.id, message.conversationId.domain, sender?.id, sender?.domain, message.id]);
+    if (!message.remoteData) {
+      this.assetPreviews.set(previewKey, {
+        mimeType: message.mimeType, name: message.name ?? null, sizeInBytes: message.sizeInBytes,
+        expiresAfterMillis: message.expiresAfterMillis ?? null, timestamp: message.timestamp,
+      });
+      if (this.assetPreviews.size > 200) this.assetPreviews.delete(this.assetPreviews.keys().next().value!);
+      return message;
+    }
+    const preview = this.assetPreviews.get(previewKey);
+    if (!preview) return message;
+    this.assetPreviews.delete(previewKey);
+    return {
+      ...message,
+      mimeType: message.mimeType && message.mimeType !== "*/*" ? message.mimeType : preview.mimeType,
+      name: message.name ?? preview.name,
+      sizeInBytes: Number(message.sizeInBytes) > 0 ? message.sizeInBytes : preview.sizeInBytes,
+      expiresAfterMillis: message.expiresAfterMillis || preview.expiresAfterMillis,
+      timestamp: preview.timestamp,
+    };
   }
 
   /** Recent file message IDs, so a repeated event is handled once; bounded. */

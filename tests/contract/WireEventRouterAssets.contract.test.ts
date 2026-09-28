@@ -62,6 +62,37 @@ describe("WireEventRouter contract: posted files", () => {
     expect(offerAttachment.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("completes a bare upload event with its preview's type, name, size and time", async () => {
+    const replyContext = { withMessage: vi.fn((_m: unknown, handle: () => Promise<unknown>) => handle()), get: vi.fn() };
+    const { deps: d, offerAttachment } = deps({ replyContext } as never);
+    const router = new WireEventRouter(d);
+    const previewTime = new Date("2026-09-28T10:00:00Z");
+    await router.onAssetMessageReceived(asset({ remoteData: null, timestamp: previewTime }));
+    // As the SDK maps an upload-only event: no original part, so an unknown type, no name, size 0.
+    await router.onAssetMessageReceived(asset({ mimeType: "*/*", name: null, sizeInBytes: 0, timestamp: new Date("2026-09-28T10:00:05Z") }));
+    expect(offerAttachment.execute).toHaveBeenCalledWith(expect.objectContaining({
+      file: expect.objectContaining({ fileKind: "photo", name: "brake.jpg", mimeType: "image/jpeg", sizeInBytes: 2048 }),
+    }));
+    const quoted = replyContext.withMessage.mock.calls.at(-1)![0] as { timestamp: Date };
+    expect(quoted.timestamp).toEqual(previewTime);
+  });
+
+  it("keeps a self-deleting preview's timer for the upload event", async () => {
+    const { deps: d, offerAttachment } = deps();
+    const router = new WireEventRouter(d);
+    await router.onAssetMessageReceived(asset({ remoteData: null, expiresAfterMillis: 30_000 }));
+    await router.onAssetMessageReceived(asset({ mimeType: "*/*", name: null, sizeInBytes: 0 }));
+    expect(offerAttachment.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not use another sender's preview", async () => {
+    const { deps: d, offerAttachment } = deps();
+    const router = new WireEventRouter(d);
+    await router.onAssetMessageReceived(asset({ remoteData: null, senderId: { id: "user-2", domain: "wire.com" } }));
+    await router.onAssetMessageReceived(asset({ mimeType: "*/*", name: null, sizeInBytes: 0 }));
+    expect(offerAttachment.execute).not.toHaveBeenCalled();
+  });
+
   it("offers a document as a file", async () => {
     const { deps: d, offerAttachment } = deps();
     await new WireEventRouter(d).onAssetMessageReceived(asset({ mimeType: "application/pdf", name: "delivery-note.pdf" }));

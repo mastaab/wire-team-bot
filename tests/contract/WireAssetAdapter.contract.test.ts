@@ -11,6 +11,19 @@ describe("WireAssetAdapter contract", () => {
     expect(downloadAsset).toHaveBeenCalledWith(remoteData);
   });
 
+  it("gives up on a download that hangs", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createWireAssetAdapter({ current: { manager: { downloadAsset: () => new Promise(() => {}) } as never } }, 1000);
+      const pending = adapter.download({ transport: "wire", data: remoteData });
+      const failed = expect(pending).rejects.toThrow("Download timed out");
+      await vi.advanceTimersByTimeAsync(1000);
+      await failed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails plainly without a connection or with a reference from elsewhere", async () => {
     await expect(createWireAssetAdapter({ current: null }).download({ transport: "wire", data: remoteData })).rejects.toThrow("Wire is not connected");
     const adapter = createWireAssetAdapter({ current: { manager: { downloadAsset: vi.fn() } as never } });

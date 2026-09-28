@@ -152,7 +152,11 @@ export class ConfirmOffer {
         });
         break;
       case "attach":
-        await this.handlers.attachFileToRequest?.execute({
+        if (!this.handlers.attachFileToRequest) {
+          await this.wireOutbound.sendPlainText(conversationId, "I'm afraid I can't add files to requests here, so nothing was sent.", { replyToMessageId });
+          break;
+        }
+        await this.handlers.attachFileToRequest.execute({
           issueKey: command.issueKey, file: command.file, conversationId, actorId,
           senderName: input.requesterName, replyToMessageId,
         });

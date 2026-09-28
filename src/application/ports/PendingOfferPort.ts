@@ -51,6 +51,8 @@ export interface PendingOfferStore {
   take(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): PendingOffer | null;
   /** True when the requester has an unexpired offer, without removing it. */
   has(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): boolean;
+  /** The requester's unexpired offer's command, without removing it; null when there is none. */
+  peek(conversationId: QualifiedId, requesterId: QualifiedId, now?: Date): OfferCommand | null;
   /** Drops every pending offer in the conversation, e.g. when it is paused or made secure. */
   clearConversation(conversationId: QualifiedId): void;
   /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { OfferAttachment } from "../../src/application/usecases/jira/OfferAttachment";
+import { ANSWER_FIRST, OfferAttachment } from "../../src/application/usecases/jira/OfferAttachment";
 import { InMemoryPendingOfferStore } from "../../src/infrastructure/services/InMemoryPendingOfferStore";
 import { OFFER_TTL_MS } from "../../src/application/services/offers";
 import type { InboundFile } from "../../src/application/ports/PendingOfferPort";
@@ -176,7 +176,7 @@ describe("OfferAttachment", () => {
       expect(requests.setLastMessage).not.toHaveBeenCalled();
     });
 
-    it("keeps an existing pending offer of the sender and sends nothing", async () => {
+    it("keeps the sender's pending question and asks them to answer it first", async () => {
       const { requests, offers, wire, useCase } = setup([makeRequest()]);
       const existing = {
         command: { kind: "reply" as const, issueKey: "DS-6", body: "It still drops." },
@@ -186,9 +186,31 @@ describe("OfferAttachment", () => {
 
       expect(await useCase.execute(input)).toBe(false);
 
-      expect(wire.sendPlainText).not.toHaveBeenCalled();
+      expect(wire.sendPlainText).toHaveBeenCalledWith(convId, ANSWER_FIRST, { replyToMessageId: "file-msg-1" });
       expect(requests.setLastMessage).not.toHaveBeenCalled();
       expect(offers.take(convId, alice, now)).toEqual(existing);
+    });
+
+    it("replaces the sender's pending file offer, so a yes attaches the file posted last", async () => {
+      const { offers, useCase } = setup([makeRequest()]);
+      expect(await useCase.execute(input)).toBe(true);
+      expect(await useCase.execute({ ...input, messageId: "file-msg-2", file: DOCUMENT })).toBe(true);
+      const live = offers.take(convId, alice, now);
+      expect(live?.command).toMatchObject({ kind: "attach", file: { name: "service-log.pdf" } });
+    });
+
+    it("keeps an offer stored by passive help while the question was being sent", async () => {
+      const { offers, wire, useCase } = setup([makeRequest()]);
+      const passive = {
+        command: { kind: "reply" as const, issueKey: "DS-6", body: "Fluid is low." },
+        conversationId: convId, requesterId: alice, createdAt: now, expiresAt: new Date(now.getTime() + 60_000),
+      };
+      const send = wire.sendPlainText.getMockImplementation()!;
+      wire.sendPlainText.mockImplementationOnce(async (...args) => { offers.put(passive); return send(...args); });
+
+      expect(await useCase.execute(input)).toBe(false);
+
+      expect(offers.take(convId, alice, now)).toEqual(passive);
     });
 
     it("offers when only another member has a pending offer", async () => {

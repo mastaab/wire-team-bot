@@ -433,6 +433,13 @@ describe("ConfirmOffer", () => {
       return { ...context, attachFileToRequest, useCase };
     }
 
+    it("says so instead of staying silent when attachments are not wired", async () => {
+      const { sent, useCase, offer } = setup();
+      offer(ATTACH_PHOTO);
+      expect(await useCase.execute({ ...input, text: "yes" })).toBe(true);
+      expect(sent).toEqual(["I'm afraid I can't add files to requests here, so nothing was sent."]);
+    });
+
     it("hands a yes to AttachFileToRequest with the file, the requester as actor and their display name", async () => {
       const { handlers, attachFileToRequest, sent, store, useCase, offer } = setupAttach();
       offer(ATTACH_PHOTO);

@@ -15,6 +15,22 @@ describe("formatReplies with the bot's own replies", () => {
     ].join("\n"));
   });
 
+  it("shows attachment markup as a readable line and still strips the footer before it", () => {
+    expect(formatReplies([
+      { author: "WireTeamBotDemo", created, body: "Photo from Wire, sent by Alice. Sent from Wire.\n\n!IMG_0042.jpg|thumbnail!", fromThisBot: true },
+      { author: "Dana", created, body: "Here is the manual [^manual.pdf]" },
+    ], "UTC")).toBe([
+      "Latest replies on the ticket:",
+      "",
+      "**Your team (via Wire)**, 25 Sept, 09:00 UTC",
+      "> Photo from Wire, sent by Alice.",
+      "> (attachment: IMG_0042.jpg)",
+      "",
+      "**Dana**, 25 Sept, 09:00 UTC",
+      "> Here is the manual (attachment: manual.pdf)",
+    ].join("\n"));
+  });
+
   it("keeps the account name for other replies", () => {
     const expected = "Latest replies on the ticket:\n\n**Dana**, 25 Sept, 09:00 UTC\n> First\n\n**Lee**, 25 Sept, 09:00 UTC\n> Second";
     expect(formatReplies([

@@ -41,7 +41,13 @@ export class InMemoryPendingOfferStore implements PendingOfferStore {
   }
 
   has(conversationId: QualifiedId, requesterId: QualifiedId, now: Date = new Date()): boolean {
+    this.purgeExpired(now);
     return this.liveOffer(conversationId, requesterId, now) !== null;
+  }
+
+  peek(conversationId: QualifiedId, requesterId: QualifiedId, now: Date = new Date()): OfferCommand | null {
+    this.purgeExpired(now);
+    return this.liveOffer(conversationId, requesterId, now)?.command ?? null;
   }
 
   clearConversation(conversationId: QualifiedId): void {
@@ -50,6 +56,7 @@ export class InMemoryPendingOfferStore implements PendingOfferStore {
   }
 
   drop(conversationId: QualifiedId, requesterId: QualifiedId, now: Date = new Date()): OfferCommand | null {
+    this.purgeExpired(now);
     const offer = this.liveOffer(conversationId, requesterId, now);
     if (!offer) return null;
     this.remove(conversationId, requesterId);
@@ -92,7 +99,7 @@ export class InMemoryPendingOfferStore implements PendingOfferStore {
   private remember(conversationId: QualifiedId, requesterId: QualifiedId, command: OfferCommand, droppedAt: Date): void {
     const conversationKey = key(conversationId);
     const byRequester = this.dropped.get(conversationKey) ?? new Map<string, DroppedOffer>();
-    byRequester.set(key(requesterId), { command, droppedAt });
+    byRequester.set(key(requesterId), { command: withoutFileRef(command), droppedAt });
     this.dropped.set(conversationKey, byRequester);
   }
 
@@ -111,7 +118,7 @@ export class InMemoryPendingOfferStore implements PendingOfferStore {
         if (isLive(offer, now)) continue;
         byRequester.delete(requesterKey);
         const remembered = this.dropped.get(conversationKey) ?? new Map<string, DroppedOffer>();
-        remembered.set(requesterKey, { command: offer.command, droppedAt: offer.expiresAt });
+        remembered.set(requesterKey, { command: withoutFileRef(offer.command), droppedAt: offer.expiresAt });
         this.dropped.set(conversationKey, remembered);
       }
       if (byRequester.size === 0) this.offers.delete(conversationKey);
@@ -131,4 +138,13 @@ function isLive(offer: PendingOffer, now: Date): boolean {
 
 function isRecent(entry: DroppedOffer, now: Date): boolean {
   return now.getTime() - entry.droppedAt.getTime() < RECENT_DROP_MS;
+}
+
+/**
+ * A remembered attach offer keeps no download reference: it holds the file's key material, and a
+ * dropped offer can never be confirmed, only mentioned ("To add it, post the file again.").
+ */
+function withoutFileRef(command: OfferCommand): OfferCommand {
+  if (command.kind !== "attach") return command;
+  return { ...command, file: { ...command.file, ref: { transport: command.file.ref.transport, data: null } } };
 }

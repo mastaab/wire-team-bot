@@ -649,6 +649,10 @@ describe("JiraServiceManagementAdapter.addCustomerAttachment", () => {
     ["   ", "attachment"],
     ["/\\\u0001", "attachment"],
     ["", "attachment"],
+    // A right-to-left override can make "invoice\u202Efdp.exe" display as "invoice.exe.pdf" style names.
+    ["invoice\u202Efdp.exe", "invoicefdp.exe"],
+    ["a\u200Bb\u2066c.pdf", "abc.pdf"],
+    [`${"x".repeat(300)}.pdf`, `${"x".repeat(251)}.pdf`],
   ])("sanitises the file name %j to %j", async (name, expected) => {
     const fetch = stubJira({ [UPLOAD]: [uploaded()], [ATTACH]: [empty(204)] });
     await adapter().addCustomerAttachment("DS-1", photo(name), "Photo");

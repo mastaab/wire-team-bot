@@ -256,4 +256,31 @@ describe("InMemoryPendingOfferStore: dropped offers", () => {
     expect(store.recentlyDropped(convB, alice, t)).toBeNull();
     expect(store.recentlyDropped(convA, alice, t)).toEqual(SUPPORT);
   });
+
+  it("keeps no file reference for an attach offer once it is dropped or expired", () => {
+    const attach: OfferCommand = {
+      kind: "attach", issueKey: "DS-1",
+      file: { ref: { transport: "wire", data: { otrKey: "secret-key" } }, fileKind: "photo", name: "brake.jpg", mimeType: "image/jpeg", sizeInBytes: 10 },
+    };
+    const store = new InMemoryPendingOfferStore();
+    store.put(offer({}, attach));
+    expect(store.drop(convA, alice, created)).toEqual(attach);
+    const dropped = store.recentlyDropped(convA, alice, created);
+    expect(dropped).toMatchObject({ kind: "attach", issueKey: "DS-1", file: { name: "brake.jpg", ref: { transport: "wire", data: null } } });
+    expect(JSON.stringify(dropped)).not.toContain("secret-key");
+
+    store.put(offer({ requesterId: bob }, attach));
+    const later = new Date(expires.getTime() + 1);
+    expect(store.has(convA, bob, later)).toBe(false);
+    expect(JSON.stringify(store.recentlyDropped(convA, bob, later))).not.toContain("secret-key");
+  });
+
+  it("peeks at a live offer without removing it", () => {
+    const store = new InMemoryPendingOfferStore();
+    store.put(offer());
+    expect(store.peek(convA, alice, created)).toEqual({ kind: "resolve", issueKey: "DS-1" });
+    expect(store.has(convA, alice, created)).toBe(true);
+    expect(store.peek(convA, bob, created)).toBeNull();
+    expect(store.peek(convA, alice, new Date(expires.getTime() + 1))).toBeNull();
+  });
 });

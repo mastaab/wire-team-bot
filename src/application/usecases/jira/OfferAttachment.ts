@@ -27,6 +27,9 @@ export interface OfferAttachmentInput {
  * (`formatAttachQuestion`), then stores the reply as the request's last message. Does nothing
  * without an open request, or while the sender already has a pending offer. True when it offered.
  */
+/** The reply to a file while the sender still has a question to answer. */
+export const ANSWER_FIRST = "Please answer my question above first (yes or no), then post the file again.";
+
 export class OfferAttachment {
   constructor(
     private readonly requests: SupportRequestRepository,
@@ -37,8 +40,17 @@ export class OfferAttachment {
   ) {}
 
   async execute(input: OfferAttachmentInput): Promise<boolean> {
-    // A pending offer is never replaced by a file: the sender's next message still answers it.
-    if (this.offers.has(input.conversationId, input.senderId, this.now())) return false;
+    // A pending question to the sender is not replaced by a file: they answer it first. A pending
+    // file offer is replaced, so a yes always attaches the file they posted last.
+    const pending = this.offers.peek(input.conversationId, input.senderId, this.now());
+    if (pending && pending.kind !== "attach") {
+      try {
+        await this.wireOutbound.sendPlainText(input.conversationId, ANSWER_FIRST, { replyToMessageId: input.messageId });
+      } catch (err) {
+        this.logger?.warn("OfferAttachment: sending the answer-first reply failed", { err: errorName(err) });
+      }
+      return false;
+    }
 
     let open: SupportRequest[];
     try {
@@ -62,6 +74,12 @@ export class OfferAttachment {
       return false;
     }
 
+    // Passive help runs alongside and may have stored a question for the sender meanwhile; keep it.
+    const current = this.offers.peek(input.conversationId, input.senderId, this.now());
+    if (current && current !== pending) {
+      this.logger?.info("OfferAttachment: another offer was stored meanwhile; the file offer is not kept");
+      return false;
+    }
     const now = this.now();
     this.offers.put({
       command: { kind: "attach", issueKey: target.key, file: input.file },

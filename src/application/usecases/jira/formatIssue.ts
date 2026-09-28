@@ -7,8 +7,19 @@ const REPLY_DISPLAY_MAX = 500;
 /** The footer ReplyToServiceDesk appends to replies it sends. */
 export const REPLY_FOOTER = "Sent from Wire.";
 
-/** The current footer and the older one naming an action, as found on replies already in the tracker. */
-const OWN_REPLY_FOOTER = /\s*Sent from Wire(?: \(ACT-\d+\))?\.\s*$/;
+/**
+ * The current footer and the older one naming an action, as found on replies already in the
+ * tracker, wherever it ends a line: Jira puts attachment markup after the text.
+ */
+const OWN_REPLY_FOOTER = /\s*Sent from Wire(?: \(ACT-\d+\))?\.\s*(?=\n|$)/g;
+
+/** Jira's wiki markup for an attachment in a comment: `!name|thumbnail!`, `!name!` or `[^name]`. */
+const ATTACHMENT_MARKUP = /!([^!|\n]+)(?:\|[^!\n]*)?!|\[\^([^\]\n]+)\]/g;
+
+/** Attachment markup read as "(attachment: name)"; the file itself stays in the ticket. */
+function withoutAttachmentMarkup(body: string): string {
+  return body.replace(ATTACHMENT_MARKUP, (_m, image: string | undefined, file: string | undefined) => `(attachment: ${(image ?? file ?? "").trim()})`);
+}
 
 /** English label for a status category. Tracker status names are localised, so they are never shown. */
 export function statusLabel(category: IssueStatusCategory): string {
@@ -71,7 +82,8 @@ export function formatReplies(
   if (replies.length === 0) return "No replies from the service desk yet.";
   const blocks = replies.map((reply) => {
     // The bot's own replies carry a "Sent from Wire" footer; the label already says so.
-    const raw = reply.fromThisBot ? reply.body.replace(OWN_REPLY_FOOTER, "") : reply.body;
+    const readable = withoutAttachmentMarkup(reply.body);
+    const raw = reply.fromThisBot ? readable.replace(OWN_REPLY_FOOTER, "") : readable;
     const body = raw.trim();
     const text = body.length <= REPLY_DISPLAY_MAX ? body : `${body.slice(0, REPLY_DISPLAY_MAX - 3).trimEnd()}...`;
     // Every quoted line is non-empty: an empty "> " line ends the quote in Markdown.

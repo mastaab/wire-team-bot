@@ -7,7 +7,7 @@ import type { InboundFile } from "../../ports/PendingOfferPort";
 import type { WireAssetPort } from "../../ports/WireAssetPort";
 import type { SentMessageRef, WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { Logger } from "../../ports/Logger";
-import { ATTACHMENT_MAX_BYTES, attachmentComment } from "../../services/attachments";
+import { ATTACHMENT_MAX_BYTES, attachmentComment, plainName } from "../../services/attachments";
 import { findSupportRequestInConversation } from "./supportRequestScope";
 import { appendAuditSafely, notInConversation, wasRefused } from "./supportRequestStatus";
 import { rememberLastMessage } from "./supportRequestMarkers";
@@ -114,7 +114,7 @@ export class AttachFileToRequest {
     await this.audit(input, key, sizeInBytes, "attached");
     await replyAbout(file.fileKind === "photo"
       ? `Added the photo to **${key}** in Jira.`
-      : `Added the file (${file.name}) to **${key}** in Jira.`);
+      : `Added the file (${plainName(file.name)}) to **${key}** in Jira.`);
     return true;
   }
 

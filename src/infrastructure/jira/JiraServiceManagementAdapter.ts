@@ -140,14 +140,24 @@ function truncateSummary(summary: string): string {
   return text.length <= SUMMARY_MAX_LENGTH ? text : `${text.slice(0, SUMMARY_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+/** Longest attachment name Jira accepts. */
+const FILE_NAME_MAX = 255;
+
+/** File uploads get at least this long, since a 10 MB file can outlast the default timeout. */
+const UPLOAD_TIMEOUT_MS = 60_000;
+
 /**
- * A file name safe to send: path separators and control characters removed, trimmed, and
- * "attachment" when nothing is left.
+ * A file name safe to send: path separators, control characters and bidirectional or other
+ * invisible format characters (which can disguise an extension) removed, trimmed, cut to
+ * Jira's length limit keeping the extension, and "attachment" when nothing is left.
  */
 function sanitiseFileName(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  const cleaned = name.replace(/[\\/\u0000-\u001f\u007f-\u009f]/g, "").trim();
-  return cleaned || "attachment";
+  const cleaned = name.replace(/[\\/\p{Cc}\p{Cf}]/gu, "").trim();
+  if (!cleaned) return "attachment";
+  if (cleaned.length <= FILE_NAME_MAX) return cleaned;
+  const dot = cleaned.lastIndexOf(".");
+  const extension = dot > 0 && cleaned.length - dot <= 10 ? cleaned.slice(dot) : "";
+  return cleaned.slice(0, FILE_NAME_MAX - extension.length) + extension;
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -463,7 +473,7 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
     if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), isForm ? Math.max(this.config.timeoutMs, UPLOAD_TIMEOUT_MS) : this.config.timeoutMs);
     try {
       let res: Response;
       try {
