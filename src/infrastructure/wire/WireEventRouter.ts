@@ -1,7 +1,7 @@
 import { sameQualifiedId } from "../../domain/ids/QualifiedId";
 import type { QualifiedId } from "../../domain/ids/QualifiedId";
 import { randomUUID } from "node:crypto";
-import type { Conversation, ConversationMember, TextMessage, CompositeButtonAction, TextEditedMessage, WireMessage } from "@wireapp/wire-apps-js-sdk";
+import type { AssetMessage, Conversation, ConversationMember, TextMessage, CompositeButtonAction, TextEditedMessage, WireMessage } from "@wireapp/wire-apps-js-sdk";
 import { WireEventsHandler, ConversationRole } from "@wireapp/wire-apps-js-sdk";
 import type { LogDecision } from "../../application/usecases/decisions/LogDecision";
 import type { CreateActionFromExplicit } from "../../application/usecases/actions/CreateActionFromExplicit";
@@ -50,6 +50,8 @@ import { parseAddressedAction } from "./parseAddressedAction";
 import { matchIssueStatusRequest } from "./matchIssueStatusRequest";
 import { splitSupportText } from "./splitSupportText";
 import { welcomeText, type SupportWelcome } from "./welcomeText";
+import type { OfferAttachment } from "../../application/usecases/jira/OfferAttachment";
+import { ATTACHMENT_MAX_BYTES, attachableKind } from "../../application/services/attachments";
 import type { WireReplyContext } from "./WireReplyContext";
 
 const CONTEXT_WINDOW = 10;
@@ -107,6 +109,8 @@ export interface WireEventRouterDeps {
   completePartOrder?: CompletePartOrder;
   /** What the welcome says about the service desk; absent when the integration is off. */
   supportWelcome?: SupportWelcome;
+  /** Offers to attach posted photos and documents to an open request; wired only with passive help on. */
+  offerAttachment?: OfferAttachment;
   listSupportRequests?: ListSupportRequests;
   resolveSupportRequest?: ResolveSupportRequest;
   getIssueStatus?: GetIssueStatus;
@@ -1029,6 +1033,77 @@ export class WireEventRouter extends WireEventsHandler {
   // ─────────────────────────────────────────────────────────────────────────
   // Button actions
   // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * A photo or document posted in the channel (customer demo): with passive help on and an open
+   * support request, the bot offers to attach it. Runs in the channel's message order and
+   * under the same state gate as text. Wire sends a preview before the upload with the same
+   * message ID; only the uploaded event (with download data) counts, once.
+   */
+  async onAssetMessageReceived(wireMessage: AssetMessage): Promise<void> {
+    const channelId = toChannelId(wireMessage.conversationId);
+    const previous = this.handlers.get(channelId) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(() => {
+      const process = () => this.processAssetMessage(wireMessage);
+      return this.deps.replyContext ? this.deps.replyContext.withMessage(wireMessage, process) : process();
+    });
+    this.handlers.set(channelId, current);
+    try { await current; } finally {
+      if (this.handlers.get(channelId) === current) this.handlers.delete(channelId);
+    }
+  }
+
+  private async processAssetMessage(wireMessage: AssetMessage): Promise<void> {
+    const offerAttachment = this.deps.offerAttachment;
+    const sender = wireMessage.sender as QualifiedId | undefined;
+    if (!offerAttachment || !sender || sameQualifiedId(sender, this.deps.botUserId)) return;
+    // No download data yet (the preview), or a self-deleting message, whose timer Wire must be able to keep.
+    if (!wireMessage.remoteData || wireMessage.expiresAfterMillis) return;
+    const fileKind = attachableKind(wireMessage.mimeType);
+    const sizeInBytes = Number(wireMessage.sizeInBytes);
+    if (!fileKind || !Number.isFinite(sizeInBytes) || sizeInBytes <= 0 || sizeInBytes > ATTACHMENT_MAX_BYTES) return;
+    if (!this.firstSightOfAsset(wireMessage.id)) return;
+
+    const convId = wireMessage.conversationId as QualifiedId;
+    const channelId = toChannelId(convId);
+    const log = this.deps.logger.child({ conversationId: convId.id, senderId: sender.id, messageId: wireMessage.id });
+    this.lastActivityByConv.set(channelId, Date.now());
+    if (!this.knownConvs.has(channelId)) {
+      this.knownConvs.add(channelId);
+      await this.hydrateChannelState(convId, channelId, log);
+    }
+    if ((this.channelStateCache.get(channelId) ?? "active") !== "active") {
+      log.debug("Channel not active — file ignored");
+      return;
+    }
+
+    const name = wireMessage.name?.trim() || (fileKind === "photo" ? "photo" : "file");
+    try {
+      const offered = await offerAttachment.execute({
+        conversationId: convId, senderId: sender, messageId: wireMessage.id,
+        file: { ref: { transport: "wire", data: wireMessage.remoteData }, fileKind, name, mimeType: wireMessage.mimeType, sizeInBytes },
+      });
+      log.debug("File received", { fileKind, offered });
+    } catch (err) {
+      log.error("File handler failed", { err: err instanceof Error ? err.name : "UnknownError" });
+      return;
+    }
+    // Context for the next text message, without the file's name or content.
+    const senderName = this.deps.memberCache.getMembers(convId).find((m) => sameQualifiedId(m.userId, sender))?.name ?? "";
+    this.deps.messageBuffer.push(convId, {
+      messageId: wireMessage.id, senderId: sender, senderName, text: fileKind === "photo" ? "(photo)" : "(file)", timestamp: new Date(),
+    });
+  }
+
+  /** Recent file message IDs, so a repeated event is handled once; bounded. */
+  private readonly seenAssets = new Set<string>();
+
+  private firstSightOfAsset(messageId: string): boolean {
+    if (this.seenAssets.has(messageId)) return false;
+    this.seenAssets.add(messageId);
+    if (this.seenAssets.size > 500) this.seenAssets.delete(this.seenAssets.values().next().value!);
+    return true;
+  }
 
   async onTextMessageEdited(_wireMessage: TextEditedMessage): Promise<void> {
     // Edits are intentionally ignored — re-processing an edited message would

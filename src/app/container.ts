@@ -40,6 +40,9 @@ import { ReplyToServiceDesk } from "../application/usecases/jira/ReplyToServiceD
 import { ConfirmOffer } from "../application/usecases/jira/ConfirmOffer";
 import { WatchSupportRequests } from "../application/usecases/jira/WatchSupportRequests";
 import { SupportRequestWrites } from "../application/services/SupportRequestWrites";
+import { AttachFileToRequest } from "../application/usecases/jira/AttachFileToRequest";
+import { OfferAttachment } from "../application/usecases/jira/OfferAttachment";
+import { createWireAssetAdapter } from "../infrastructure/wire/WireAssetAdapter";
 import { startIntervalRunner, type IntervalRunner } from "./intervalRunner";
 import { ListMyActions } from "../application/usecases/actions/ListMyActions";
 import { ListTeamActions } from "../application/usecases/actions/ListTeamActions";
@@ -231,8 +234,15 @@ export function createContainer(config: Config, logger: Logger): Container {
       // The CLI's test conversations (domain "cli.local") have no Wire group to post to, as for reminders.
       { conversations: conversationConfigRepo, writes: supportRequestWrites, skipConversation: (c) => c.domain === "cli.local" })
     : undefined;
+  // Photos and documents to the service desk: offered only with passive help, since a file cannot carry a mention.
+  const attachFileToRequest = issueTracker && supportRequestsRepo
+    ? new AttachFileToRequest(supportRequestsRepo, issueTracker, createWireAssetAdapter(handlerRef), wireOutbound, auditLogRepo, logger)
+    : undefined;
+  const offerAttachment = passiveOn && supportRequestsRepo && pendingOffers
+    ? new OfferAttachment(supportRequestsRepo, pendingOffers, wireOutbound, logger)
+    : undefined;
   const confirmOffer = pendingOffers && raiseSupportRequest && replyToServiceDesk && resolveSupportRequest
-    ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest }, wireOutbound)
+    ? new ConfirmOffer(pendingOffers, { raiseSupportRequest, replyToServiceDesk, resolveSupportRequest, attachFileToRequest }, wireOutbound)
     : undefined;
   const updateActionDeadline = new UpdateActionDeadline(actionsRepo, dateTimeService, wireOutbound, auditLogRepo);
   const listMyActions = new ListMyActions(actionsRepo, wireOutbound);
@@ -327,6 +337,7 @@ export function createContainer(config: Config, logger: Logger): Container {
     catchMeUpCommand,
     raiseSupportRequest,
     completePartOrder,
+    offerAttachment,
     supportWelcome: issueTracker
       ? { projectKey: issueTracker.projectKey, passive: passiveOn, watching: !!watchSupportRequests }
       : undefined,

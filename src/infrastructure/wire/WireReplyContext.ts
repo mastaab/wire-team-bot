@@ -1,4 +1,5 @@
 import { TextMessage } from "@wireapp/wire-apps-js-sdk";
+import type { AssetMessage } from "@wireapp/wire-apps-js-sdk";
 import type { QualifiedId } from "../../domain/ids/QualifiedId";
 
 type Quote = Pick<TextMessage, "quotedMessageId" | "quotedMessageSha256">;
@@ -11,7 +12,7 @@ export class WireReplyContext {
     return JSON.stringify([conversationId.id, conversationId.domain, messageId]);
   }
 
-  async withMessage<T>(source: TextMessage, handle: () => Promise<T>): Promise<T> {
+  async withMessage<T>(source: TextMessage | AssetMessage, handle: () => Promise<T>): Promise<T> {
     // Wire does not allow replies to self-deleting messages. Missing timestamps
     // cannot produce a valid integrity hash; still allow the normal response.
     if (source.expiresAfterMillis || !Number.isFinite(new Date(source.timestamp).getTime())) {
