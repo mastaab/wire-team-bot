@@ -2154,7 +2154,7 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Bot side built (2026-09-28).** `WireOutboundPort.setTyping(conversationId, typing)` (Wire adapter over `sendTypingIndicator`, a no-op without SDK support; the CLI ignores it) and `withTyping` in `src/application/services/typing.ts`: started at once without delaying the work, refreshed every 8 seconds (the operator saw the indicator hold steady with that interval), cleared in a `finally` after "started" has gone out, failures (including synchronous throws) logged once by error name. The router wraps the answer path (mentioned questions and follow-ups to the bot's question), `catch me up` and the support commands (`support:`, `resolve`, `reply to`, `support requests`, `status of`). Extended the same day at the operator's request, since several demo steps work without a mention: a yes to an offer (while the ticket is raised, replied to or resolved), an answer that completes a part order, and passive help for a message the classifier marks as a service request or status question (while the model drafts the offer; the indicator can occasionally appear without a reply when the model then offers nothing). Other confirmations, updates, actions and decisions checked against open requests, capture and the Jira watch show nothing.
 
-### Pause means "mentions only" (planned 2026-09-28)
+### Pause means mentions only (planned 2026-09-28)
 
 **Why (operator).** Pause and secure mode should have distinct roles. Pause stops passive listening and unmentioned commands but still reacts when the bot is mentioned; secure mode stays as it is and hears nothing. Today a mentioned message in a paused channel only gets "I'm currently standing by…", and only `resume` and `secure mode` get through.
 
@@ -2186,7 +2186,7 @@ Committed by the main session before the parallel build. Builders code against t
 
 ### Handover for the next session (2026-09-28, evening)
 
-**Start here.** Read AGENTS.md, then this section 6. The next task is "Pause means \"mentions only\"" above: the behaviour and decisions are confirmed by the operator and nothing of it is built. Build it on a new branch from `demo/typing`. The usual pattern applies: plan or contract commit, implementation with tests (subagents in worktrees only if the change grows), an independent review, CLI checks (scripts grepped for write lines, offers answered no, lines paced like a person), then a live staging check with the operator.
+**Start here.** Read AGENTS.md, then this section 6. The next task is "Pause means mentions only" above: the behaviour and decisions are confirmed by the operator and nothing of it is built. Build it on a new branch from `demo/typing`. The usual pattern applies: plan or contract commit, implementation with tests (subagents in worktrees only if the change grows), an independent review, CLI checks (scripts grepped for write lines, offers answered no, lines paced like a person), then a live staging check with the operator.
 
 **State.**
 - Branches: `demo/jira` is pushed to the fork `mastaab/wire-team-bot` (`fork` remote) and holds the Jira demo up to the agent conversation. `demo/typing` (not pushed) adds the typing indicator and part-order hardening and depends on the sibling SDK checkout through `"@wireapp/wire-apps-js-sdk": "file:../wire-apps-js-sdk"`; it must not be merged into `demo/jira` or upstream with that dependency. `main` equals upstream `adamlow-wire/wire-team-bot` at `3c2d786`; upstream merges are the owner's decision.
@@ -2199,7 +2199,7 @@ Committed by the main session before the parallel build. Builders code against t
 - Staging channels: "Support Team C3" is used for tests (no Wire Cells); DS-26 to DS-30 are open requests from the tests. Jira SLAs in DS run on a 24/7 calendar.
 
 **Next steps (each Jira write needs the operator's approval).**
-1. Build "Pause means \"mentions only\"" (above) on a new branch from `demo/typing`, then check it live with the operator.
+1. Build "Pause means mentions only" (above) on a new branch from `demo/typing`, then check it live with the operator.
 2. Open, not built: German (driver-language) bot texts; for defence customers, a customer-hosted tracker; SLA wording for working-hours calendars.
 3. Once the SDK pull request is merged and released, switch `demo/typing` to the released version and bring the typing indicator to `demo/jira`.
 4. Resolve DS-26 to DS-30 when no longer needed.
