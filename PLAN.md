@@ -2065,6 +2065,15 @@ Committed by the main session before the parallel build. Builders code against t
 
 **Decisions (operator, 2026-09-28).** (1) The target is the open request with the latest bot message about it, else the newest open one. (2) No offer without an open request. (3) Images and documents, with the types listed above.
 
+**Contract (2026-09-28).** Committed as code; builders must not change these signatures without the main session.
+- `OfferCommand` gains `{ kind: "attach"; issueKey; file: InboundFile }` (`PendingOfferPort.ts`); `InboundFile` holds an opaque `InboundAssetRef`, `fileKind` ("photo" or "file"), `name`, `mimeType` and `sizeInBytes`, never bytes. The answer model cannot propose it (`parseOfferMarker` accepts only support, reply and resolve), it is not amendable, and the command line after a dropped attach offer is "To add it, post the file again."
+- `WireAssetPort.download(ref)` (`src/application/ports/WireAssetPort.ts`), implemented by the Wire adapter over the SDK's `downloadAsset`.
+- `IssueTrackerPort.addCustomerAttachment(key, { name, mimeType, data }, comment)`.
+- Rules in `src/application/services/attachments.ts`: `ATTACHMENT_MAX_BYTES` (10 MB), `attachableKind(mimeType)`, `describeFile`, `formatAttachQuestion`, `attachmentComment`.
+- `SupportRequest.lastMessageAt` (migration `20260928090000_add_support_request_last_message_at`); `setLastMessage` stamps it.
+- Use cases `OfferAttachment(requests, offers, wireOutbound, logger?, now?)` with `execute({ conversationId, senderId, messageId, file }): Promise<boolean>`, and `AttachFileToRequest(requests, tracker, assets, wireOutbound, auditLog, logger?)` with `execute({ issueKey, file, conversationId, actorId, senderName?, replyToMessageId? }): Promise<boolean>`; `ConfirmOffer` hands a yes on an attach offer to the latter (`ConfirmOfferHandlers.attachFileToRequest`).
+- Router (main session): `onAssetMessageReceived` applies the channel-state gate, ignores events without upload data, repeats of a message ID, self-deleting messages, files the bot sent, unattachable types and files over the limit, then calls `OfferAttachment` with passive help on. The reply quotes the file (the reply context accepts asset messages).
+
 **Evidence required.** Unit tests with mocked ports; contract tests for asset routing (preview without upload data, repeats, self-deleting, state gates); one approved write check that the gateway accepts the attachment upload on a DS test ticket; a live staging check: desk asks for a photo, the driver posts one, yes attaches it, the desk sees it in Jira, the watch does not echo it; one PDF attached the same way; a self-deleting image gets no offer.
 
 **Work split.** Main session: contract (ports, offer kind, use case signature, router hook), wiring, docs, playbook step. Subagents: (a) the Jira adapter method with tests; (b) the use cases (offer and attach) with tests. Then an independent review, the approved upload check and the live check.

@@ -495,6 +495,8 @@ export class AnswerQuestion {
     const request = await findSupportRequestInConversation(jira.requests, command.issueKey, conversationId, jira.tracker.projectKey);
     if (!request) return null;
     if (command.kind === "reply") return { question: formatReplyQuestion(request.key, request.summary, command.body), requestKey: request.key };
+    // Only code offers attachments; the answer model never proposes one.
+    if (command.kind === "attach") return null;
     // A request last known as done is not dropped: the desk may have reopened it, and the use case checks live.
     return { question: formatResolveQuestion(request.key, request.summary, command.comment), requestKey: request.key };
   }
@@ -527,15 +529,17 @@ function asksForChange(kind: OfferCommand["kind"], question: string, projectKey:
     case "reply":
       return (REPLY_VERB.test(question) || asksToAdd(question))
         && (REPLY_TARGET.test(question) || namedKeys(question, projectKey).length > 0);
+    case "attach":
+      return false;
   }
 }
 
 /**
  * The displaced offer when the requester may amend it: `support`, `reply` and `resolve`, so a
- * plain resolve offer can gain a closing comment.
+ * plain resolve offer can gain a closing comment. An attachment is fixed and cannot be amended.
  */
 function amendableOffer(pending: OfferCommand | undefined): OfferCommand | null {
-  return pending ?? null;
+  return pending && pending.kind !== "attach" ? pending : null;
 }
 
 /**

@@ -62,4 +62,6 @@ export interface SupportRequest {
    * Message ID and integrity hash only, never text.
    */
   lastMessage?: { messageId: string; sha256: string };
+  /** When `lastMessage` was stored; picks the request a posted photo or file most likely belongs to. */
+  lastMessageAt?: Date;
 }

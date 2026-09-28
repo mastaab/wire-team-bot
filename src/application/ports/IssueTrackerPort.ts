@@ -93,6 +93,18 @@ export interface IssueTrackerPort {
    * (the tracker's search works in minutes); callers compare `updated` themselves.
    */
   listChangedSince(keys: readonly string[], since?: Date): Promise<IssueChange[]>;
+  /**
+   * Attaches a file to the issue as part of a customer-facing reply with `comment` (never an
+   * internal note). The bytes are sent and not kept; failures never include the file or body.
+   */
+  addCustomerAttachment(key: string, file: AttachmentFile, comment: string): Promise<void>;
+}
+
+/** A file to attach, held in memory only. */
+export interface AttachmentFile {
+  name: string;
+  mimeType: string;
+  data: Uint8Array;
 }
 
 /** Tracker failure. Messages never include response bodies or credentials. */

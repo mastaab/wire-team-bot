@@ -146,6 +146,7 @@ export function offerCommandLine(command: OfferCommand, projectKey?: string): st
   if (command.kind === "support") return "To raise it, send `@Wire Team Bot support: <problem>`.";
   const key = !projectKey || isKeyInProject(command.issueKey, projectKey) ? command.issueKey : `${projectKey}-N`;
   if (command.kind === "reply") return `To send a reply, use \`@Wire Team Bot reply to ${key}: <text>\`.`;
+  if (command.kind === "attach") return "To add it, post the file again.";
   return command.comment
     ? `To resolve it with a comment, use \`@Wire Team Bot resolve ${key}: <comment>\`.`
     : `To resolve it, use \`@Wire Team Bot resolve ${key}\`.`;

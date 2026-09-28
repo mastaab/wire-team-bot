@@ -33,6 +33,6 @@ export interface SupportRequestRepository {
    * only when it is absent or earlier than `at`, so it never moves back.
    */
   advanceLastSeenReplyAt(key: string, at: Date): Promise<void>;
-  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. */
+  /** Bookkeeping, not audited; leaves `version` and `updatedAt` alone. Also stamps `lastMessageAt` with the current time. */
   setLastMessage(key: string, ref: { messageId: string; sha256: string }): Promise<void>;
 }

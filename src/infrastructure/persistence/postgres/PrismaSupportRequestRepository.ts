@@ -102,7 +102,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
   async setLastMessage(key: string, ref: { messageId: string; sha256: string }): Promise<void> {
     await this.prisma.supportRequest.updateMany({
       where: { key },
-      data: { lastMessageId: ref.messageId, lastMessageSha256: ref.sha256 },
+      data: { lastMessageId: ref.messageId, lastMessageSha256: ref.sha256, lastMessageAt: new Date() },
     });
   }
 
@@ -123,6 +123,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
     lastSeenReplyAt: Date | null;
     lastMessageId: string | null;
     lastMessageSha256: string | null;
+    lastMessageAt: Date | null;
   }): SupportRequest {
     return {
       key: row.key,
@@ -140,6 +141,7 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
       ...(row.lastMessageId && row.lastMessageSha256
         ? { lastMessage: { messageId: row.lastMessageId, sha256: row.lastMessageSha256 } }
         : {}),
+      ...(row.lastMessageAt ? { lastMessageAt: row.lastMessageAt } : {}),
     };
   }
 }

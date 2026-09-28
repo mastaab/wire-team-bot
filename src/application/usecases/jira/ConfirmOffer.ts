@@ -7,6 +7,8 @@ import type { WireOutboundPort } from "../../ports/WireOutboundPort";
 import type { RaiseSupportRequest } from "./RaiseSupportRequest";
 import type { ReplyToServiceDesk } from "./ReplyToServiceDesk";
 import type { ResolveSupportRequest } from "./ResolveSupportRequest";
+import type { AttachFileToRequest } from "./AttachFileToRequest";
+import { describeFile } from "../../services/attachments";
 
 export type Confirmation = "yes" | "no";
 
@@ -15,6 +17,8 @@ export interface ConfirmOfferHandlers {
   raiseSupportRequest: RaiseSupportRequest;
   replyToServiceDesk: ReplyToServiceDesk;
   resolveSupportRequest: ResolveSupportRequest;
+  /** Absent when attachments are not wired; an attach offer is then never made. */
+  attachFileToRequest?: AttachFileToRequest;
 }
 
 export interface ConfirmOfferInput {
@@ -147,6 +151,12 @@ export class ConfirmOffer {
           ...(command.comment ? { comment: command.comment } : {}),
         });
         break;
+      case "attach":
+        await this.handlers.attachFileToRequest?.execute({
+          issueKey: command.issueKey, file: command.file, conversationId, actorId,
+          senderName: input.requesterName, replyToMessageId,
+        });
+        break;
     }
     return true;
   }
@@ -180,5 +190,7 @@ function askAgain(command: OfferCommand): string {
         : `I need a clear yes or no, so I haven't resolved **${command.issueKey}** yet. Shall I resolve it with the service desk (yes or no)?`;
     case "reply":
       return `I need a clear yes or no, so I haven't added this to **${command.issueKey}** yet. Shall I add it (yes or no)?`;
+    case "attach":
+      return `I need a clear yes or no, so I haven't added ${describeFile(command.file)} to **${command.issueKey}** yet. Shall I add it (yes or no)?`;
   }
 }

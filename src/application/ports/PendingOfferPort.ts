@@ -1,5 +1,6 @@
 import type { PartDetails, SupportRequestKind } from "../../domain/entities/SupportRequest";
 import type { QualifiedId } from "../../domain/ids/QualifiedId";
+import type { InboundAssetRef } from "./WireAssetPort";
 
 /**
  * Port for offers made by the answer path and confirmed by the requester. The model only
@@ -15,7 +16,24 @@ export type OfferCommand =
   | { kind: "support"; requestKind: SupportRequestKind; summary: string; description: string; part?: PartDetails }
   | { kind: "reply"; issueKey: string; body: string }
   /** Resolve a request; a `comment` is sent to it as a customer-facing reply first. */
-  | { kind: "resolve"; issueKey: string; comment?: string };
+  | { kind: "resolve"; issueKey: string; comment?: string }
+  /**
+   * Attach a photo or document posted in the channel to a request. Only code makes this offer
+   * (never the answer model), and it cannot be amended: the file is fixed.
+   */
+  | { kind: "attach"; issueKey: string; file: InboundFile };
+
+/** A file posted in Wire, as offered for attaching: the download reference and what it is, never its bytes. */
+export interface InboundFile {
+  /** Opaque download reference from the transport (key material included); held only while the offer lives. */
+  ref: InboundAssetRef;
+  /** "photo" for images, "file" for documents; picks the wording. */
+  fileKind: "photo" | "file";
+  /** File name as posted, used as the attachment name; a generic name when absent. */
+  name: string;
+  mimeType: string;
+  sizeInBytes: number;
+}
 
 export interface PendingOffer {
   command: OfferCommand;

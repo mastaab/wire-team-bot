@@ -12,6 +12,7 @@ import {
   IssueTrackerError,
   type CreateIssueRequest,
   type CreatedIssue,
+  type AttachmentFile,
   type IssueChange,
   type IssueSnapshot,
   type IssueStatusCategory,
@@ -302,6 +303,10 @@ export class JiraServiceManagementAdapter implements IssueTrackerPort {
       if (!nextPageToken || res.data?.isLast === true) break;
     }
     return changes;
+  }
+
+  async addCustomerAttachment(_key: string, _file: AttachmentFile, _comment: string): Promise<void> {
+    throw new Error("JiraServiceManagementAdapter.addCustomerAttachment is not implemented yet");
   }
 
   async listCustomerReplies(key: string, limit: number): Promise<IssueReply[]> {
