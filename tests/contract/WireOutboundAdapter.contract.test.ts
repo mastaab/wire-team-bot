@@ -92,15 +92,28 @@ describe("WireOutboundAdapter contract", () => {
     expect((sendMessage.mock.calls[0]![0] as TextMessage).text).toBe("@Wire Team Bot pause");
   });
 
-  it("setTyping sends started and stopped for the conversation, and does nothing without SDK support", async () => {
-    const sendTypingIndicator = vi.fn().mockResolvedValue(undefined);
-    const withTyping = createWireOutboundAdapter(
-      { current: { manager: { sendMessage: vi.fn(), sendAsset: vi.fn(), getUsers: vi.fn(), sendTypingIndicator } } }, mockLogger,
+  it("withTyping runs the work through the SDK's typing helper for the conversation and returns its result", async () => {
+    const processWithTypingIndicator = vi.fn(async (_conversationId: unknown, process: () => Promise<unknown>) => process());
+    const adapter = createWireOutboundAdapter(
+      { current: { manager: { sendMessage: vi.fn(), sendAsset: vi.fn(), getUsers: vi.fn(), processWithTypingIndicator } } }, mockLogger,
     );
-    await withTyping.setTyping(convId, true);
-    await withTyping.setTyping(convId, false);
-    expect(sendTypingIndicator.mock.calls.map(([c, s]) => [c.id, c.domain, s])).toEqual([["conv-1", "wire.com", "started"], ["conv-1", "wire.com", "stopped"]]);
-    await expect(createWireOutboundAdapter(makeRef(), mockLogger).setTyping(convId, true)).resolves.toBeUndefined();
+    await expect(adapter.withTyping(convId, async () => "answer")).resolves.toBe("answer");
+    expect(processWithTypingIndicator.mock.calls.map(([c]) => [(c as { id: string }).id, (c as { domain: string }).domain])).toEqual([["conv-1", "wire.com"]]);
+  });
+
+  it("withTyping keeps the work's failure", async () => {
+    const processWithTypingIndicator = vi.fn(async (_conversationId: unknown, process: () => Promise<unknown>) => process());
+    const adapter = createWireOutboundAdapter(
+      { current: { manager: { sendMessage: vi.fn(), sendAsset: vi.fn(), getUsers: vi.fn(), processWithTypingIndicator } } }, mockLogger,
+    );
+    await expect(adapter.withTyping(convId, async () => { throw new Error("model down"); })).rejects.toThrow("model down");
+  });
+
+  it("withTyping still runs the work without SDK support or a connection", async () => {
+    const work = vi.fn(async () => "answer");
+    await expect(createWireOutboundAdapter(makeRef(), mockLogger).withTyping(convId, work)).resolves.toBe("answer");
+    await expect(createWireOutboundAdapter({ current: null } as never, mockLogger).withTyping(convId, work)).resolves.toBe("answer");
+    expect(work).toHaveBeenCalledTimes(2);
   });
 
   it("sendPlainText returns undefined without a connection", async () => {

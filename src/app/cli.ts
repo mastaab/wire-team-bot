@@ -135,7 +135,7 @@ function createCliOutbound(): WireOutboundPort {
     },
     async sendFile() {},
     // The CLI has no typing indicator.
-    async setTyping() {},
+    withTyping: (_conversationId, work) => work(),
     async getUserProfile(userId: QualifiedId) {
       const m = MEMBERS.find((mem) => mem.id.id === userId.id);
       return m ? { id: userId, name: m.name } : null;

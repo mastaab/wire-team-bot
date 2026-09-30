@@ -31,7 +31,6 @@ import type { LLMClientFactory } from "../llm/LLMClientFactory";
 import type { Decision } from "../../domain/entities/Decision";
 import type { Action } from "../../domain/entities/Action";
 import type { OfferSupportFromConversationPort } from "../../application/usecases/jira/OfferSupportFromConversation";
-import { withTyping } from "../../application/services/typing";
 
 export interface MessageJob {
   messageId: string;
@@ -107,7 +106,7 @@ export class ProcessingPipeline {
       signal,
     });
     try {
-      return likelyAnswered ? await withTyping(this.deps.wireOutbound, job.conversationId, help, this.deps.logger) : await help();
+      return likelyAnswered ? await this.deps.wireOutbound.withTyping(job.conversationId, help) : await help();
     } catch (err) {
       log.warn("Pipeline: passive service-desk help failed", { err: (err instanceof Error ? err.name : "UnknownError") });
       return false;

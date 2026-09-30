@@ -95,7 +95,7 @@ function makeDeps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
       sendCompositePrompt: vi.fn().mockResolvedValue(undefined),
       sendReaction: vi.fn().mockResolvedValue(undefined),
       sendFile: vi.fn().mockResolvedValue(undefined),
-      setTyping: vi.fn().mockResolvedValue(undefined),
+      withTyping: vi.fn((_conversationId: unknown, work: () => Promise<unknown>) => work()),
     },
     llm: {
       chatCompletion: vi.fn().mockResolvedValue({ content: "no", model: "m", usedFallback: false }),
@@ -534,12 +534,18 @@ describe("passive service-desk help", () => {
   it("shows the app typing while it drafts help for a recognised service-desk matter", async () => {
     const supportHelp = { execute: vi.fn(async () => true) };
     const deps = makeDeps({ supportHelp, channelConfig: activeChannel(), classifier: { classify: vi.fn().mockResolvedValue(serviceRequest) } });
+    let typing = false;
+    vi.mocked(deps.wireOutbound.withTyping).mockImplementation(async (_conversationId, work) => {
+      typing = true;
+      try { return await work(); } finally { typing = false; }
+    });
     supportHelp.execute.mockImplementation(async () => {
-      expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls).toEqual([[convId, true]]);
+      expect(typing).toBe(true);
       return true;
     });
     await new ProcessingPipeline(deps).process(baseJob());
-    await vi.waitFor(() => expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls.at(-1)).toEqual([convId, false]));
+    expect(deps.wireOutbound.withTyping).toHaveBeenCalledWith(convId, expect.any(Function));
+    expect(supportHelp.execute).toHaveBeenCalledOnce();
   });
 
   it("shows nothing for an action or update that is only checked against open requests", async () => {
@@ -547,7 +553,7 @@ describe("passive service-desk help", () => {
     const deps = makeDeps({ supportHelp, classifier: { classify: vi.fn().mockResolvedValue({ ...highSignalResult, categories: ["action", "update"] }) } });
     await new ProcessingPipeline(deps).process(baseJob());
     expect(supportHelp.execute).toHaveBeenCalled();
-    expect(deps.wireOutbound.setTyping).not.toHaveBeenCalled();
+    expect(deps.wireOutbound.withTyping).not.toHaveBeenCalled();
   });
 
   it("runs before extraction for a high-signal message with a service-desk category", async () => {

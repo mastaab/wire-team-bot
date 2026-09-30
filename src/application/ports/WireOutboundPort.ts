@@ -63,10 +63,11 @@ export interface WireOutboundPort {
   ): Promise<void>;
 
   /**
-   * Shows (`true`) or clears (`false`) the app's typing indicator in the conversation. Wire
-   * clients expire a shown indicator after a few seconds, so callers refresh it while working.
+   * Runs `work` while the conversation shows the app as typing, and returns its result. The
+   * indicator never delays, blocks or breaks the work, and it is cleared when the work ends,
+   * however it ends; refreshing and overlapping work are the transport's concern.
    */
-  setTyping(conversationId: QualifiedId, typing: boolean): Promise<void>;
+  withTyping<T>(conversationId: QualifiedId, work: () => Promise<T>): Promise<T>;
 
   sendReaction(
     conversationId: QualifiedId,

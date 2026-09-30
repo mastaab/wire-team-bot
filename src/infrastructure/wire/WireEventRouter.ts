@@ -53,7 +53,6 @@ import { welcomeText, type SupportWelcome } from "./welcomeText";
 import type { OfferAttachment } from "../../application/usecases/jira/OfferAttachment";
 import type { CreatedConversations } from "./CreatedConversations";
 import { ATTACHMENT_MAX_BYTES, attachableKind } from "../../application/services/attachments";
-import { withTyping } from "../../application/services/typing";
 import type { WireReplyContext } from "./WireReplyContext";
 import { classifyConfirmation } from "../../application/usecases/jira/ConfirmOffer";
 
@@ -1245,7 +1244,7 @@ export class WireEventRouter extends WireEventsHandler {
    * shown as the app typing in the conversation while it runs.
    */
   private typing<T>(conversationId: QualifiedId, work: () => Promise<T>): Promise<T> {
-    return withTyping(this.deps.wireOutbound, conversationId, work, this.deps.logger);
+    return this.deps.wireOutbound.withTyping(conversationId, work);
   }
 
   /** Recent file message IDs, so a repeated event is handled once; bounded. */

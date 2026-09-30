@@ -230,20 +230,26 @@ it("passes the actual caller and cleaned question after a custom bot mention", a
   }));
 });
 
-it("shows the app typing while it answers a mentioned question, and clears it afterwards", async () => {
+it("shows the app typing while it answers a mentioned question", async () => {
   const deps = makeDeps();
+  let typing = false;
+  vi.mocked(deps.wireOutbound.withTyping).mockImplementation(async (_conversationId, work) => {
+    typing = true;
+    try { return await work(); } finally { typing = false; }
+  });
   vi.mocked(deps.answerQuestion.execute).mockImplementation(async () => {
-    expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls).toEqual([[convId, true]]);
+    expect(typing).toBe(true);
     return "answer";
   });
   await new WireEventRouter(deps).onTextMessageReceived(customMention("What am I responsible for?"));
-  await vi.waitFor(() => expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls.at(-1)).toEqual([convId, false]));
+  expect(deps.wireOutbound.withTyping).toHaveBeenCalledWith(convId, expect.any(Function));
+  expect(deps.answerQuestion.execute).toHaveBeenCalledOnce();
 });
 
 it("does not show typing for an ordinary message nobody asked the bot about", async () => {
   const deps = makeDeps();
   await new WireEventRouter(deps).onTextMessageReceived(makeMessage("lunch at noon?"));
-  expect(deps.wireOutbound.setTyping).not.toHaveBeenCalled();
+  expect(deps.wireOutbound.withTyping).not.toHaveBeenCalled();
 });
 
 it("routes an action status question to record retrieval, not channel status", async () => {
@@ -323,7 +329,7 @@ function makeDeps(overrides: Partial<WireEventRouterDeps> = {}): WireEventRouter
       sendCompositePrompt: vi.fn().mockResolvedValue(undefined),
       sendReaction: vi.fn().mockResolvedValue(undefined),
       sendFile: vi.fn().mockResolvedValue(undefined),
-      setTyping: vi.fn().mockResolvedValue(undefined),
+      withTyping: vi.fn((_conversationId: unknown, work: () => Promise<unknown>) => work()),
     },
     messageBuffer: { clear: vi.fn(), push: vi.fn(), getLastN: vi.fn().mockReturnValue([]) },
     dateTimeService: { parse: vi.fn().mockReturnValue(null) },
@@ -1289,7 +1295,9 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
       completePartOrder: { execute: vi.fn().mockResolvedValue(true) },
     } as unknown as Partial<WireEventRouterDeps>);
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage("two, deliver to depot north"));
-    await vi.waitFor(() => expect(vi.mocked(deps.wireOutbound.setTyping).mock.calls).toEqual([[convId, true], [convId, false]]));
+    expect(deps.wireOutbound.withTyping).toHaveBeenCalledOnce();
+    expect(deps.wireOutbound.withTyping).toHaveBeenCalledWith(convId, expect.any(Function));
+    expect(deps.completePartOrder!.execute).toHaveBeenCalledOnce();
   });
 
   it.each([["yes", true], ["no", false], ["actually three", false]])("shows typing for the confirmation %j only when it is a yes", async (text, typing) => {
@@ -1301,10 +1309,8 @@ describe("WireEventRouter contract: Jira offers and service-desk replies", () =>
       confirmOffer: { execute: vi.fn().mockResolvedValue(true) },
     } as unknown as Partial<WireEventRouterDeps>);
     await new WireEventRouter(deps).onTextMessageReceived(makeMessage(text));
-    await new Promise((r) => setTimeout(r, 0));
-    const calls = vi.mocked(deps.wireOutbound.setTyping).mock.calls;
-    if (typing) await vi.waitFor(() => expect(calls).toEqual([[convId, true], [convId, false]]));
-    else expect(calls).toEqual([]);
+    expect(vi.mocked(deps.wireOutbound.withTyping).mock.calls.map(([c]) => c)).toEqual(typing ? [convId] : []);
+    expect(deps.confirmOffer!.execute).toHaveBeenCalledOnce();
   });
 
   it("completes a pending part order in code before the answer path", async () => {
