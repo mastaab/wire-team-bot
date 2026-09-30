@@ -699,6 +699,17 @@ describe("WatchSupportRequests: direct conversation with the desk agent", () => 
     expect(open.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("opens for a mapped agent assigned to a request the bot raised before the watch's first check", async () => {
+    // As RaiseSupportRequest stores it: replies and assignee seen at creation, nobody assigned.
+    const raised = makeRequest({ lastSeenReplyAt: SEEN, assigneeSeenAt: SEEN, lastMessage: LAST_MESSAGE });
+    const { watcher, tracker, requests, open } = agentSetup([raised], { assigneeUnseen: true });
+    tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "in_progress", T0, AGENT)]);
+    await watcher.check();
+    expect(open.execute).toHaveBeenCalledTimes(1);
+    expect(open.execute).toHaveBeenCalledWith({ request: expect.objectContaining({ key: "DS-6" }), agentHandle: "petra.desk" });
+    expect(requests.setAssignee).toHaveBeenCalledWith("DS-6", AGENT);
+  });
+
   it("opens when there is no status or reply update, posting nothing else", async () => {
     const { watcher, tracker, open, wire } = agentSetup([watched()]);
     tracker.listChangedSince.mockResolvedValue([withAssignee("DS-6", "todo", T0, AGENT)]);

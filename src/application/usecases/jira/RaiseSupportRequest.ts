@@ -144,6 +144,9 @@ export class RaiseSupportRequest {
         version: 1,
         // A new ticket has no replies yet, so the watch has nothing earlier to announce.
         lastSeenReplyAt: now,
+        // Nor an assignee: an agent assigned before the watch's first check is a change, which
+        // opens the direct conversation, not a baseline that only records it.
+        assigneeSeenAt: now,
       });
     } catch (err) {
       this.logger?.warn("RaiseSupportRequest: storing the support request failed", { key, err: err instanceof Error ? err.name : "UnknownError" });

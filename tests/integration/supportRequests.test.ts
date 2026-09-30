@@ -51,6 +51,15 @@ describe.skipIf(process.env.INTEGRATION_TESTS !== "1")("SupportRequestRepository
     expect(await repo.findByKey(`ZZTEST-${runId}-missing`)).toBeNull();
   });
 
+  it("stores the watch markers given at creation, as RaiseSupportRequest sets them", async () => {
+    const created = request();
+    await repo.create({ ...created, lastSeenReplyAt: created.createdAt, assigneeSeenAt: created.createdAt });
+    const found = await repo.findByKey(created.key);
+    expect(found?.lastSeenReplyAt).toEqual(created.createdAt);
+    expect(found?.assigneeSeenAt).toEqual(created.createdAt);
+    expect(found?.assigneeAccountId).toBeUndefined();
+  });
+
   it("keeps a non-default kind through create, a status update and reading back", async () => {
     const part = await repo.create(request({ kind: "part" }));
     await repo.updateStatusCategory(part.key, "in_progress", new Date());

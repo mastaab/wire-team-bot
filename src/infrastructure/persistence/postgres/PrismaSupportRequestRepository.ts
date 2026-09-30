@@ -36,6 +36,8 @@ export class PrismaSupportRequestRepository implements SupportRequestRepository 
         lastSeenReplyAt: request.lastSeenReplyAt ?? null,
         lastMessageId: request.lastMessage?.messageId ?? null,
         lastMessageSha256: request.lastMessage?.sha256 ?? null,
+        assigneeAccountId: request.assigneeAccountId ?? null,
+        assigneeSeenAt: request.assigneeSeenAt ?? null,
       },
     });
     return request;

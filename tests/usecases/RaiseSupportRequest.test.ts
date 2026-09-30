@@ -342,6 +342,17 @@ describe("RaiseSupportRequest: watch markers", () => {
     expect(stored.lastSeenReplyAt!.getTime()).toBe(stored.createdAt.getTime());
   });
 
+  it("creates the record as seen unassigned, so a quick assignment is a change for the watch", async () => {
+    const { requests, useCase } = setup();
+
+    await useCase.execute(base);
+
+    const stored = requests.create.mock.calls[0]![0];
+    expect(stored.assigneeSeenAt).toBeInstanceOf(Date);
+    expect(stored.assigneeSeenAt!.getTime()).toBe(stored.createdAt.getTime());
+    expect(stored.assigneeAccountId).toBeUndefined();
+  });
+
   it("stores the reference of the Raised confirmation as the request's last message", async () => {
     const { requests, useCase } = setup();
 
